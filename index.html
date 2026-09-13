@@ -360,6 +360,10 @@ function TebakCariKataGame({ onBack }) {
   const lastAppliedRoundRef = useRef(null);
   const appliedGroupsRef = useRef(new Set());
   const [buzzOrder, setBuzzOrder] = useState([]); // urutan kelompok yang angkat tangan di soal ini: [{group}]
+  const activeGroupRef = useRef(null);
+  const buzzOrderRef = useRef([]);
+  const triedSetRef = useRef(new Set());
+  const openToAllRef = useRef(false);
 
   const babak = {
     label: SEED_BABAK[babakId].label, sub: SEED_BABAK[babakId].sub, point: SEED_BABAK[babakId].point,
@@ -379,6 +383,14 @@ function TebakCariKataGame({ onBack }) {
 
   const audioRef = useRef(null);
   const retryTimerRef = useRef(null);
+
+  // Ref-ref ini selalu disinkron ke state terbaru, supaya listener Firestore
+  // (yang closure-nya bisa "basi"/stale) tetap membaca nilai yang benar saat ada
+  // beberapa kelompok angkat tangan hampir bersamaan.
+  useEffect(() => { activeGroupRef.current = activeGroup; }, [activeGroup]);
+  useEffect(() => { buzzOrderRef.current = buzzOrder; }, [buzzOrder]);
+  useEffect(() => { triedSetRef.current = triedSet; }, [triedSet]);
+  useEffect(() => { openToAllRef.current = openToAll; }, [openToAll]);
 
   function clearRetryTimer() { if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null; } }
 
@@ -455,6 +467,7 @@ function TebakCariKataGame({ onBack }) {
     setFoundMap({}); setClueRevealed(false); setActiveGroup(null); setSelStart(null);
     setTriedSet(new Set()); setOpenToAll(false); clearRetryTimer();
     setBuzzOrder([]);
+    activeGroupRef.current = null; buzzOrderRef.current = []; triedSetRef.current = new Set(); openToAllRef.current = false;
     if (audioRef.current) audioRef.current.pause();
     setSpeaking(false);
   }
@@ -539,13 +552,16 @@ function TebakCariKataGame({ onBack }) {
     el.src = currentWord.audioUrl; el.currentTime = 0; el.play(); setSpeaking(true);
   }
 
-  function isEligible(g) { if (!triedSet.has(g)) return true; return babakId !== 1 && openToAll; }
+  function isEligible(g) { if (!triedSetRef.current.has(g)) return true; return babakId !== 1 && openToAllRef.current; }
 
   function buzz(group) {
     if (!currentWord || !isEligible(group)) return;
-    if (buzzOrder.some((o) => o.group === group)) return; // sudah pernah angkat tangan di soal ini
-    setBuzzOrder((order) => [...order, { group }]);
-    if (activeGroup === null) {
+    if (buzzOrderRef.current.some((o) => o.group === group)) return; // sudah pernah angkat tangan di soal ini
+    const newOrder = [...buzzOrderRef.current, { group }];
+    buzzOrderRef.current = newOrder;
+    setBuzzOrder(newOrder);
+    if (activeGroupRef.current === null) {
+      activeGroupRef.current = group;
       clearRetryTimer();
       if (audioRef.current) audioRef.current.pause();
       setSpeaking(false);
@@ -553,13 +569,14 @@ function TebakCariKataGame({ onBack }) {
     }
   }
 
-  function releaseTurn() { setActiveGroup(null); setSelStart(null); }
+  function releaseTurn() { activeGroupRef.current = null; setActiveGroup(null); setSelStart(null); }
 
   function nextQuestion() {
     setQueue((q) => q.slice(1));
     setClueRevealed(false); setTriedSet(new Set()); setOpenToAll(false);
     clearRetryTimer(); releaseTurn(); setSpeaking(false);
     setBuzzOrder([]);
+    buzzOrderRef.current = []; triedSetRef.current = new Set(); openToAllRef.current = false;
     if (audioRef.current) audioRef.current.pause();
   }
   function skipWord() { if (currentWord) nextQuestion(); }
@@ -584,7 +601,7 @@ function TebakCariKataGame({ onBack }) {
     } else {
       const wrongGroup = activeGroup;
       const updatedTried = new Set(triedSet); updatedTried.add(wrongGroup);
-      setTriedSet(updatedTried);
+      setTriedSet(updatedTried); triedSetRef.current = updatedTried;
       setFlash({ type: "wrong", group: wrongGroup }); setTimeout(() => setFlash(null), 900);
       // kalau ada kelompok lain yang sudah antre di urutan angkat tangan, langsung lanjut ke giliran mereka
       const next = buzzOrder.find((o) => o.group !== wrongGroup && !updatedTried.has(o.group));
@@ -592,6 +609,7 @@ function TebakCariKataGame({ onBack }) {
         clearRetryTimer();
         if (audioRef.current) audioRef.current.pause();
         setSpeaking(false);
+        activeGroupRef.current = next.group;
         setActiveGroup(next.group);
       } else {
         releaseTurn(); scheduleRetry();
@@ -916,29 +934,32 @@ function TebakCariKataGame({ onBack }) {
         </div>
       )}
 
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 16, marginBottom: 22 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 16, marginBottom: 14 }}>
         <div>
           <div className="sgt" style={{ fontSize: 30, fontWeight: 700, letterSpacing: -0.5 }}>Tebak &amp; Cari Kata</div>
           <div style={{ fontSize: 14, color: t.dim, marginTop: 2 }}>{babak.label} · {babak.sub} · {babak.point} poin / soal</div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-          <button onClick={onBack} style={{ background: t.panel, border: "none", color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}>← Pilih Game</button>
           <button onClick={() => setStage("setup")} style={{ background: t.panel, border: "none", color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}>← Persiapan</button>
           <div style={{ display: "flex", gap: 6, background: t.panel, padding: 4, borderRadius: 10 }}>
             {[1, 2, 3].map((id) => (
               <button key={id} onClick={() => switchBabak(id)} style={{ padding: "8px 16px", borderRadius: 7, border: "none", cursor: "pointer", background: babakId === id ? "#F4B740" : "transparent", color: babakId === id ? "#101B34" : t.text, fontWeight: 600, fontSize: 14 }}>Babak {id}</button>
             ))}
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, background: t.panel, padding: "6px 8px", borderRadius: 10 }}>
-            <span style={{ fontSize: 16, lineHeight: 1, color: t.dim }}>🔳</span><span style={{ fontSize: 13, color: t.dim }}>Kode Room</span>
-            <span className="sgt" style={{ fontSize: 16, fontWeight: 700, letterSpacing: 2 }}>{roomCode}</span>
-          </div>
-          <button onClick={() => setQrOpen(true)} style={{ display: "flex", alignItems: "center", gap: 6, background: "#3FBFAD", border: "none", color: "#0D1730", padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>📷</span> QR Gabung</button>
-          <button onClick={() => resetRound(babakId)} title="Acak ulang papan" style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: "none", color: t.text, padding: "10px 12px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>🔄</span> Papan baru</button>
-          <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")} style={{ background: t.panel, border: "none", color: t.text, padding: 10, borderRadius: 10, cursor: "pointer" }}>{theme === "dark" ? <span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>☀</span> : <span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>🌙</span>}</button>
-          <button onClick={() => setProjectorMode(true)} style={{ display: "flex", alignItems: "center", gap: 6, background: "#F4B740", border: "none", color: "#101B34", padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>⤢</span> Mode Proyektor</button>
-          <button onClick={endGame} style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: "1px solid #EF5B5B", color: "#EF5B5B", padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>⏹</span> Akhiri Permainan</button>
         </div>
+      </div>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 22 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, background: t.panel, padding: "6px 8px", borderRadius: 10 }}>
+          <span style={{ fontSize: 16, lineHeight: 1, color: t.dim }}>🔳</span><span style={{ fontSize: 13, color: t.dim }}>Kode Room</span>
+          <span className="sgt" style={{ fontSize: 16, fontWeight: 700, letterSpacing: 2 }}>{roomCode}</span>
+        </div>
+        <button onClick={() => setQrOpen(true)} style={{ display: "flex", alignItems: "center", gap: 6, background: "#3FBFAD", border: "none", color: "#0D1730", padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>📷</span> QR Gabung</button>
+        <button onClick={() => resetRound(babakId)} title="Acak ulang papan" style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: "none", color: t.text, padding: "10px 12px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>🔄</span> Papan baru</button>
+        <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")} style={{ background: t.panel, border: "none", color: t.text, padding: 10, borderRadius: 10, cursor: "pointer" }}>{theme === "dark" ? <span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>☀</span> : <span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>🌙</span>}</button>
+        <button onClick={() => setProjectorMode(true)} style={{ display: "flex", alignItems: "center", gap: 6, background: "#F4B740", border: "none", color: "#101B34", padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>⤢</span> Mode Proyektor</button>
+        <div style={{ flex: "1 0 auto" }} />
+        <button onClick={endGame} style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: "1px solid #EF5B5B", color: "#EF5B5B", padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>⏹</span> Akhiri Permainan</button>
       </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
@@ -1174,7 +1195,6 @@ function BukaKotakGame({ onBack }) {
           <div style={{ fontSize: 14, color: t.dim, marginTop: 2 }}>{selectedMateri} · {openedCount}/{items.length} kotak sudah dibuka · individu, tanpa skor</div>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
-          <button onClick={onBack} style={{ background: t.panel, border: "none", color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}>← Pilih Game</button>
           <button onClick={() => setStage("setup")} style={{ background: t.panel, border: "none", color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}>← Persiapan</button>
           <button onClick={resetBoard} style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: "none", color: t.text, padding: "10px 12px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>🔄</span> Reset papan</button>
           <button onClick={endGame} style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: "1px solid #EF5B5B", color: "#EF5B5B", padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>⏹</span> Akhiri Permainan</button>
