@@ -815,11 +815,19 @@ function TebakCariKataGame({ onBack }) {
 
   /* ---------------- STAGE: SETUP (Persiapan) ---------------- */
   if (stage === "setup") {
+    const SectionLabel = ({ n, children, hint }) => (
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+        <span style={{ width: 22, height: 22, borderRadius: "50%", background: "#F4B740", color: "#101B34", fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{n}</span>
+        <span style={{ fontSize: 14, fontWeight: 700 }}>{children}</span>
+        {hint && <span style={{ fontSize: 12, color: t.faint }}>{hint}</span>}
+      </div>
+    );
+    const fieldLabelStyle = { fontSize: 10.5, color: t.faint, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.4 };
     return (
       <div style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: t.bg, color: t.text, minHeight: "100%", padding: 28, boxSizing: "border-box" }}>
         <style>{fontImport}</style>
 
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 22, flexWrap: "wrap", gap: 12 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 26, flexWrap: "wrap", gap: 12 }}>
           <div>
             <div className="sgt" style={{ fontSize: 28, fontWeight: 700 }}>Persiapan Permainan</div>
             <div style={{ fontSize: 14, color: t.dim, marginTop: 2 }}>Susun materi & kosakata sebelum mulai bermain bersama siswa.</div>
@@ -828,18 +836,20 @@ function TebakCariKataGame({ onBack }) {
             <button onClick={onBack} style={{ background: t.panel, border: "none", color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}>← Pilih Game</button>
             <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")} style={{ background: t.panel, border: "none", color: t.text, padding: 10, borderRadius: 10, cursor: "pointer" }}>{theme === "dark" ? <span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>☀</span> : <span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>🌙</span>}</button>
           </div>
-        </div>        <div style={{ marginBottom: 20 }}>
-          <div style={{ fontSize: 13, color: t.dim, marginBottom: 8 }}>1. Pilih materi <span style={{ color: t.faint }}>(sesuai Prota Bahasa Jepang kelas XI Fase F)</span></div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 8 }}>
+        </div>
+
+        <div style={{ background: t.panel, borderRadius: 16, padding: "18px 20px", marginBottom: 20 }}>
+          <SectionLabel n={1} hint="(sesuai Prota Bahasa Jepang kelas XI Fase F)">Pilih materi</SectionLabel>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 10 }}>
             {MATERI_LIST.map((m) => {
               const isSelected = selectedMateri === m.name;
               return (
                 <button key={m.name} onClick={() => { if (!m.available) return; setSelectedMateri(m.name); setDataByMateri((prev) => ensureMateri(prev, m.name)); setBabakId(1); }} disabled={!m.available} style={{
-                  textAlign: "left", display: "flex", alignItems: "center", gap: 10, background: t.panel,
-                  border: isSelected ? "2px solid #F4B740" : `2px solid ${t.panel}`, borderRadius: 12, padding: "12px 14px",
+                  textAlign: "left", display: "flex", alignItems: "center", gap: 10, background: t.panel2,
+                  border: isSelected ? "2px solid #F4B740" : "2px solid transparent", borderRadius: 12, padding: "12px 14px",
                   cursor: m.available ? "pointer" : "default", opacity: m.available ? 1 : 0.45,
                 }}>
-                  <span style={{ width: 10, height: 10, borderRadius: 4, background: isSelected ? "#F4B740" : t.panel2, flexShrink: 0 }} />
+                  <span style={{ width: 10, height: 10, borderRadius: 4, background: isSelected ? "#F4B740" : t.panel, flexShrink: 0 }} />
                   <div>
                     <div style={{ fontWeight: 700, fontSize: 13.5 }}>{m.name}</div>
                     <div style={{ fontSize: 11.5, color: t.dim }}>{m.desc}{!m.available ? " · segera" : ""}</div>
@@ -850,33 +860,43 @@ function TebakCariKataGame({ onBack }) {
           </div>
         </div>
 
-        <div style={{ marginBottom: 12, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <div style={{ fontSize: 13, color: t.dim }}>2. Kosakata per babak — edit, hapus, tambah, unggah audio</div>
-          <div style={{ display: "flex", gap: 6, background: t.panel, padding: 4, borderRadius: 10 }}>
-            {[1, 2, 3].map((id) => (
-              <button key={id} onClick={() => setBabakId(id)} style={{ padding: "7px 14px", borderRadius: 7, border: "none", cursor: "pointer", background: babakId === id ? "#F4B740" : "transparent", color: babakId === id ? "#101B34" : t.text, fontWeight: 600, fontSize: 13 }}>Babak {id}</button>
-            ))}
+        <div style={{ background: t.panel, borderRadius: 16, padding: "18px 20px", marginBottom: 20 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
+            <SectionLabel n={2} hint="— edit, hapus, tambah, unggah audio">Kosakata per babak</SectionLabel>
+            <div style={{ display: "flex", gap: 6, background: t.panel2, padding: 4, borderRadius: 10 }}>
+              {[1, 2, 3].map((id) => (
+                <button key={id} onClick={() => setBabakId(id)} style={{ padding: "7px 14px", borderRadius: 7, border: "none", cursor: "pointer", background: babakId === id ? "#F4B740" : "transparent", color: babakId === id ? "#101B34" : t.text, fontWeight: 600, fontSize: 13 }}>Babak {id}</button>
+              ))}
+            </div>
           </div>
-        </div>
 
-        <div style={{ background: t.panel, borderRadius: 14, padding: 16, marginBottom: 20 }}>
           <div style={{ fontSize: 12.5, color: t.faint, marginBottom: 12 }}>{babak.sub} · {babak.point} poin / soal{babak.words.length === 0 ? " · belum ada kosakata" : ""}</div>
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            {babak.words.map((w) => (
-              <div key={w.id} style={{ display: "flex", gap: 8, alignItems: "flex-start", background: t.panel2, borderRadius: 10, padding: 10, flexWrap: "wrap" }}>
-                <input value={w.letters} onChange={(e) => updateWord(babakId, w.id, "letters", e.target.value)} placeholder="kata (jawaban)"
-                  style={{ width: 140, padding: "8px 10px", borderRadius: 7, border: "none", background: t.panel, color: t.text, fontSize: 13 }} />
-                <textarea value={w.clue} onChange={(e) => updateWord(babakId, w.id, "clue", e.target.value)} placeholder="petunjuk (Bahasa Indonesia)" rows={2}
-                  style={{ flex: 1, minWidth: 200, padding: "8px 10px", borderRadius: 7, border: "none", background: t.panel, color: t.text, fontSize: 13, resize: "vertical", fontFamily: "inherit" }} />
-                <label title={w.audioUrl ? "Audio sudah diunggah" : "Unggah audio"} style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 34, height: 34, background: t.panel, borderRadius: 7, color: w.audioUrl ? "#3FBFAD" : t.dim, cursor: "pointer", flexShrink: 0 }}>
-                  {w.audioUrl ? <span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>🎵</span> : <span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>⬆</span>}
-                  <input type="file" accept="audio/*" onChange={(e) => uploadAudio(babakId, w.id, e.target.files[0])} style={{ display: "none" }} />
-                </label>
-                <button onClick={() => removeWord(babakId, w.id)} style={{ background: "transparent", border: "none", color: "#EF5B5B", cursor: "pointer", padding: 8 }}><span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>🗑</span></button>
+            {babak.words.map((w, idx) => (
+              <div key={w.id} style={{ display: "flex", gap: 12, alignItems: "flex-start", background: t.panel2, borderRadius: 12, padding: "12px 14px", flexWrap: "wrap" }}>
+                <div style={{ width: 24, height: 24, borderRadius: "50%", background: t.panel, color: t.faint, fontSize: 11.5, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, marginTop: 16 }}>{idx + 1}</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 5, width: 160 }}>
+                  <label style={fieldLabelStyle}>Kata (jawaban)</label>
+                  <input value={w.letters} onChange={(e) => updateWord(babakId, w.id, "letters", e.target.value)} placeholder="mis. BOTORU"
+                    style={{ padding: "9px 10px", borderRadius: 8, border: "none", background: t.panel, color: t.text, fontSize: 13 }} />
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 5, flex: 1, minWidth: 220 }}>
+                  <label style={fieldLabelStyle}>Petunjuk (Bahasa Indonesia)</label>
+                  <textarea value={w.clue} onChange={(e) => updateWord(babakId, w.id, "clue", e.target.value)} placeholder="Jelaskan kata ini dengan bahasa Indonesia" rows={2}
+                    style={{ padding: "9px 10px", borderRadius: 8, border: "none", background: t.panel, color: t.text, fontSize: 13, resize: "vertical", fontFamily: "inherit" }} />
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 5, alignItems: "center" }}>
+                  <label style={fieldLabelStyle}>Audio</label>
+                  <label title={w.audioUrl ? "Audio sudah diunggah" : "Unggah audio"} style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 36, height: 36, background: t.panel, borderRadius: 8, color: w.audioUrl ? "#3FBFAD" : t.dim, cursor: "pointer", flexShrink: 0 }}>
+                    {w.audioUrl ? <span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>🎵</span> : <span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>⬆</span>}
+                    <input type="file" accept="audio/*" onChange={(e) => uploadAudio(babakId, w.id, e.target.files[0])} style={{ display: "none" }} />
+                  </label>
+                </div>
+                <button onClick={() => removeWord(babakId, w.id)} title="Hapus kosakata ini" style={{ background: "transparent", border: "none", color: "#EF5B5B", cursor: "pointer", padding: 8, marginTop: 16 }}><span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>🗑</span></button>
               </div>
             ))}
           </div>
-          <button onClick={() => addWord(babakId)} style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 6, background: t.panel2, border: "none", color: t.text, borderRadius: 8, padding: "9px 14px", cursor: "pointer", fontSize: 13 }}><span style={{ fontSize: 14, lineHeight: 1, color: 'inherit' }}>➕</span> Tambah Kosakata</button>
+          <button onClick={() => addWord(babakId)} style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 6, background: t.panel2, border: "none", color: t.text, borderRadius: 8, padding: "9px 14px", cursor: "pointer", fontSize: 13 }}><span style={{ fontSize: 14, lineHeight: 1, color: 'inherit' }}>➕</span> Tambah Kosakata</button>
         </div>
 
         <button onClick={startGame} disabled={!canStart} style={{
