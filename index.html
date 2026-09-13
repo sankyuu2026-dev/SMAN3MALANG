@@ -364,6 +364,7 @@ function TebakCariKataGame({ onBack }) {
   const buzzOrderRef = useRef([]);
   const triedSetRef = useRef(new Set());
   const openToAllRef = useRef(false);
+  const clueRevealedRef = useRef(false);
 
   const babak = {
     label: SEED_BABAK[babakId].label, sub: SEED_BABAK[babakId].sub, point: SEED_BABAK[babakId].point,
@@ -391,6 +392,7 @@ function TebakCariKataGame({ onBack }) {
   useEffect(() => { buzzOrderRef.current = buzzOrder; }, [buzzOrder]);
   useEffect(() => { triedSetRef.current = triedSet; }, [triedSet]);
   useEffect(() => { openToAllRef.current = openToAll; }, [openToAll]);
+  useEffect(() => { clueRevealedRef.current = clueRevealed; }, [clueRevealed]);
 
   function clearRetryTimer() { if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null; } }
 
@@ -489,17 +491,18 @@ function TebakCariKataGame({ onBack }) {
   const totalWords = queue.length + Object.keys(foundMap).length;
   const foundCount = Object.keys(foundMap).length;
 
-  // Sinkronkan status ronde ke Firestore supaya siswa yang join via QR tahu kapan boleh angkat tangan
+  // Sinkronkan status ronde ke Firestore — roundId baru aktif (siswa boleh angkat tangan)
+  // setelah guru menampilkan/memutar petunjuk, supaya tidak ada yang buzz duluan sebelum soal dibacakan.
   useEffect(() => {
     if (stage !== "play") return;
-    const roundId = currentWord ? currentWord.id : null;
+    const roundId = currentWord && clueRevealed ? currentWord.id : null;
     db.collection("rooms").doc(roomCode).set({
       mode: "tck", materi: selectedMateri, babakId, roundId,
       buzzOrder: [],
       buzz: firebase.firestore.FieldValue.delete(),
       updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
     }, { merge: true }).catch(() => {});
-  }, [stage, roomCode, currentWord?.id, selectedMateri, babakId]);
+  }, [stage, roomCode, currentWord?.id, selectedMateri, babakId, clueRevealed]);
 
   // Dengarkan kelompok yang join & angkat tangan dari HP siswa, tambahkan ke urutan lokal
   useEffect(() => {
@@ -555,7 +558,7 @@ function TebakCariKataGame({ onBack }) {
   function isEligible(g) { if (!triedSetRef.current.has(g)) return true; return babakId !== 1 && openToAllRef.current; }
 
   function buzz(group) {
-    if (!currentWord || !isEligible(group)) return;
+    if (!currentWord || !clueRevealedRef.current || !isEligible(group)) return;
     if (buzzOrderRef.current.some((o) => o.group === group)) return; // sudah pernah angkat tangan di soal ini
     const newOrder = [...buzzOrderRef.current, { group }];
     buzzOrderRef.current = newOrder;
@@ -725,13 +728,16 @@ function TebakCariKataGame({ onBack }) {
 
       <div style={{ background: t.panel, borderRadius: 14, padding: 18 }}>
         <div style={{ fontSize: 13, color: t.dim, marginBottom: 10 }}>{mode === "digital" ? "Buzzer kelompok" : "Tunjuk kelompok penjawab"}</div>
+        {currentWord && !clueRevealed && (
+          <div style={{ marginBottom: 10, fontSize: 12, color: "#F4B740", background: "rgba(244,183,64,.12)", borderRadius: 8, padding: "8px 10px" }}>Tombol masih terkunci — klik "{audioMode === "guru" && currentWord.audioUrl ? "Putar Petunjuk" : "Tampilkan teks"}" di panel kanan dulu supaya kelompok bisa angkat tangan.</div>
+        )}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
           {GROUP_NAMES.map((g) => {
             const isActive = activeGroup === g;
             const eligible = isEligible(g);
             const buzzPos = buzzOrder.findIndex((o) => o.group === g);
             const alreadyBuzzed = buzzPos >= 0;
-            const locked = !currentWord || !eligible || (mode === "digital" ? alreadyBuzzed : (activeGroup !== null && !isActive));
+            const locked = !currentWord || !clueRevealed || !eligible || (mode === "digital" ? alreadyBuzzed : (activeGroup !== null && !isActive));
             return (
               <button key={g} className="grp-btn" onClick={() => (mode === "digital" ? buzz(g) : (eligible && setActiveGroup(g)))} disabled={locked}
                 style={{ position: "relative", padding: "12px 0", borderRadius: 10, border: "none", cursor: locked ? "default" : "pointer", background: isActive ? GROUP_COLORS[g - 1] : t.panel2, color: isActive ? "#0D1730" : t.text, fontWeight: 700, fontSize: 14, opacity: locked && !isActive ? 0.4 : 1, boxShadow: isActive ? `0 0 0 2px ${GROUP_COLORS[g - 1]}` : "none" }}>
@@ -777,7 +783,8 @@ function TebakCariKataGame({ onBack }) {
     let title = "Menunggu ronde berikutnya…";
     let sub = "Dengarkan petunjuk dari gurumu.";
     let btnDisabled = true;
-    if (currentWord) {
+    if (currentWord && !clueRevealed) { title = "Menunggu petunjuk…"; sub = "Guru belum menampilkan soal ini."; }
+    else if (currentWord) {
       if (mode === "manual") { title = "Angkat tanganmu langsung"; sub = "Guru menilai kelompok mana yang paling cepat."; }
       else if (won) { title = "Giliranmu!"; sub = "Maju ke depan, tunjuk & bacakan katanya."; }
       else if (lost) { title = `Kamu urutan ke-${myPos + 1}`; sub = "Tunggu giliranmu kalau yang di depan salah."; }
