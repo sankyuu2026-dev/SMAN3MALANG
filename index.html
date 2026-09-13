@@ -1,0 +1,920 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Web Interaktif Siswa SMA — Gakkou no Seikatsu</title>
+</head>
+<body style="margin:0;">
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<script type="text/babel" data-presets="react">
+const { useState, useMemo, useRef, useCallback, useEffect } = React;
+
+
+/* ---------------------------------------------------------
+   DATA AWAL (bisa diedit guru di tahap Persiapan)
+   Babak 1: katakana ditulis romaji. Babak 2 & 3: hiragana asli.
+--------------------------------------------------------- */
+const uid = () => Math.random().toString(36).slice(2, 9);
+
+const SEED_BABAK = {
+  1: {
+    label: "Babak 1", sub: "Katakana (romaji)", point: 1,
+    words: [
+      { letters: "HOWAITOBOODO", clue: "Media tulis berpermukaan putih licin tempat menulis dengan spidol" },
+      { letters: "EAKON", clue: "Mesin elektronik pengatur suhu ruangan agar tetap dingin dan sejuk" },
+      { letters: "BUNKA", clue: "Pola hidup, tradisi, adat istiadat, dan kesenian yang berkembang di suatu masyarakat" },
+      { letters: "SHAAPUPENSHIRU", clue: "Alat tulis isi ulang berbentuk tabung dengan mata pensil grafit tipis mekanik" },
+      { letters: "BOTORU", clue: "Wadah tempat menyimpan air minum yang bisa dibawa bepergian" },
+      { letters: "PASOKON", clue: "Gawai elektronik berlayar dan berpapan ketik yang bisa dilipat untuk tugas sekolah" },
+      { letters: "JIKAN", clue: "Durasi, kesempatan, atau rentang tempo yang diukur dalam satuan jam dan menit" },
+      { letters: "NOOTO", clue: "Lembaran kertas kosong yang dijilid untuk menulis ringkasan pelajaran" },
+      { letters: "IYAHON", clue: "Perangkat audio berukuran kecil yang disematkan langsung ke lubang telinga" },
+      { letters: "GAIKOKU", clue: "Wilayah kedaulatan atau negeri lain di luar negeri asal sendiri" },
+      { letters: "BOODOMAAKAA", clue: "Alat penanda berujung serat tebal bertinta basah yang mudah dihapus di permukaan licin" },
+      { letters: "TABURETTO", clue: "Perangkat elektronik layar sentuh tanpa papan ketik, layarnya lebih besar dari ponsel" },
+    ],
+  },
+  2: {
+    label: "Babak 2", sub: "Hiragana", point: 2,
+    words: [
+      { letters: "ほん", clue: "Kumpulan lembaran kertas bertuliskan teks atau gambar yang dijilid rapi untuk dibaca" },
+      { letters: "かみ", clue: "Lembaran tipis berbahan olahan bubur kayu untuk menulis, melipat, atau mencetak" },
+      { letters: "ふでばこ", clue: "Wadah berpenutup khusus untuk menyimpan dan merapikan berbagai alat tulis" },
+      { letters: "ものさし", clue: "Alat pengukur panjang berbentuk batang lurus berpola garis angka" },
+      { letters: "はさみ", clue: "Alat pemotong manual dengan dua bilah logam tajam yang digerakkan dengan jari" },
+      { letters: "えんぴつけずり", clue: "Perkakas kecil berbilah pisau yang diputar untuk mempertajam ujung pensil" },
+      { letters: "かばん", clue: "Tempat penyimpanan bertali jinjing untuk membawa buku dan perlengkapan bepergian" },
+      { letters: "つくえ", clue: "Perabot ruangan berkaki dengan bidang datar di atas, alas untuk belajar" },
+      { letters: "いす", clue: "Perabot tempat duduk dengan tumpuan kaki dan sandaran punggung" },
+      { letters: "まど", clue: "Bukaan berdaun kaca pada dinding, tempat masuknya udara dan cahaya alami" },
+      { letters: "とけい", clue: "Alat pengukur dan penunjuk waktu di dinding atau meja" },
+      { letters: "さいふ", clue: "Wadah kecil yang dapat dilipat untuk menyimpan uang kertas dan kartu identitas" },
+    ],
+  },
+  3: {
+    label: "Babak 3", sub: "Hiragana + konsonan ganda/youon", point: 2,
+    words: [
+      { letters: "へいや", clue: "Bentang alam daratan luas yang permukaannya datar dan relatif rendah tanpa banyak perbukitan" },
+      { letters: "がっき", clue: "Perangkat atau benda yang dirancang khusus untuk menghasilkan alunan nada, irama, dan musik" },
+      { letters: "おかあさん", clue: "Sebutan atau panggilan penghormatan untuk orang tua perempuan yang melahirkan dan merawat anak" },
+      { letters: "くき", clue: "Bagian pokok tumbuhan yang tumbuh ke atas dan menjadi tempat bertumpunya daun, bunga, serta buah" },
+      { letters: "きっぷ", clue: "Kertas kecil berstempel atau bertanda khusus sebagai bukti pembayaran sah untuk masuk acara atau menaiki angkutan umum" },
+      { letters: "おじさん", clue: "Saudara laki-laki dari ayah atau ibu, atau sebutan untuk pria dewasa seumuran orang tua" },
+      { letters: "えいが", clue: "Karya seni gambar bergerak yang memiliki jalan cerita dan biasanya ditayangkan di bioskop atau layar kaca" },
+      { letters: "こうこう", clue: "Jenjang pendidikan menengah atas formal tingkat lanjutan sebelum melanjutkan ke perguruan tinggi" },
+      { letters: "くうき", clue: "Campuran gas tak kasatmata di sekitar permukaan bumi yang dihirup makhluk hidup untuk bernapas" },
+      { letters: "きっさてん", clue: "Kedai bergaya klasik yang menyediakan aneka seduhan kopi, teh, dan kudapan ringan untuk bersantai" },
+      { letters: "おばあさん", clue: "Orang tua perempuan dari ayah atau ibu, atau sebutan hormat untuk wanita yang sudah lanjut usia" },
+      { letters: "おとうと", clue: "Saudara kandung berjenis kelamin laki-laki yang usianya lebih muda" },
+      { letters: "へや", clue: "Bagian petak dalam bangunan yang dibatasi dinding dan pintu untuk tempat beristirahat atau beraktivitas pribadi" },
+      { letters: "あさって", clue: "Keterangan waktu untuk menyebut hari setelah besok atau dua hari dari sekarang" },
+      { letters: "おばさん", clue: "Saudara perempuan dari ayah atau ibu, atau sebutan untuk wanita dewasa seumuran orang tua" },
+      { letters: "ここ", clue: "Kata penunjuk lokasi yang mengacu pada posisi atau tempat pembicara berada saat ini" },
+      { letters: "おじいさん", clue: "Orang tua laki-laki dari ayah atau ibu, atau sebutan hormat untuk pria yang sudah lanjut usia" },
+      { letters: "ざっし", clue: "Terbitan berkala berisi kumpulan artikel, foto, dan informasi dengan topik tertentu yang terbit mingguan atau bulanan" },
+      { letters: "いもうと", clue: "Saudara kandung berjenis kelamin perempuan yang usianya lebih muda" },
+      { letters: "がっこう", clue: "Lembaga atau tempat formal yang digunakan untuk proses belajar, mengajar, dan menuntut ilmu" },
+    ],
+  },
+};
+
+function seedWithIds() {
+  const out = {};
+  for (const id of [1, 2, 3]) {
+    out[id] = { ...SEED_BABAK[id], words: SEED_BABAK[id].words.map((w) => ({ id: uid(), audioUrl: null, ...w })) };
+  }
+  return out;
+}
+
+function initialDataByMateri() {
+  const seeded = seedWithIds();
+  return { "Gakkou no Seikatsu": { 1: seeded[1].words, 2: seeded[2].words, 3: seeded[3].words } };
+}
+function ensureMateri(data, materi) {
+  if (data[materi]) return data;
+  return { ...data, [materi]: { 1: [], 2: [], 3: [] } };
+}
+
+const MATERI_LIST = [
+  { name: "Aisatsu", desc: "Salam sapaan", available: true },
+  { name: "Jikoshoukai", desc: "Perkenalan diri", available: true },
+  { name: "Gakkou no Seikatsu", desc: "Kehidupan sekolah", available: true },
+  { name: "Jikan", desc: "Waktu", available: true },
+  { name: "Dekiru Koto", desc: "Kemampuan", available: true },
+  { name: "Kazoku", desc: "Keluarga", available: true },
+  { name: "Mainichi no Seikatsu", desc: "Kehidupan sehari-hari", available: true },
+  { name: "Uchi", desc: "Rumah", available: true },
+  { name: "Shumi to Himana Toki", desc: "Hobi dan waktu luang", available: true },
+];
+
+const GROUP_COLORS = ["#F4B740", "#EF5B5B", "#3FBFAD", "#F2879E", "#5DA9E9", "#8FBF6B"];
+const GROUP_NAMES = [1, 2, 3, 4, 5, 6];
+const ROMAJI_FILL = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+const HIRAGANA_FILL = Array.from(
+  "あいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわをんがぎぐげござじずぜぞだぢづでどばびぶべぼぱぴぷぺぽ"
+);
+const DIRECTIONS = [[0,1],[1,0],[1,1],[1,-1],[0,-1],[-1,0],[-1,-1],[-1,1]];
+
+function isKanaWord(letters) { return /[぀-ヿ]/.test(letters); }
+
+function buildPuzzle(words) {
+  const valid = words.filter((w) => w.letters && w.letters.trim().length > 0);
+  if (valid.length === 0) return null;
+  const fillAlphabet = isKanaWord(valid[0].letters) ? HIRAGANA_FILL : ROMAJI_FILL;
+  const lens = valid.map((w) => w.letters.length);
+  const longest = Math.max(...lens);
+  const totalLen = lens.reduce((a, l) => a + l, 0);
+  let size = Math.max(longest + 2, Math.ceil(Math.sqrt(totalLen * 2.6)));
+  size = Math.min(Math.max(size, 10), 22);
+
+  for (let sizeTry = 0; sizeTry < 8; sizeTry++) {
+    const grid = Array.from({ length: size }, () => Array(size).fill(null));
+    const placements = {};
+    const sorted = [...valid].sort((a, b) => b.letters.length - a.letters.length);
+    let ok = true;
+    for (const w of sorted) {
+      let placed = false;
+      for (let attempt = 0; attempt < 600 && !placed; attempt++) {
+        const dir = DIRECTIONS[Math.floor(Math.random() * DIRECTIONS.length)];
+        const startR = Math.floor(Math.random() * size);
+        const startC = Math.floor(Math.random() * size);
+        const endR = startR + dir[0] * (w.letters.length - 1);
+        const endC = startC + dir[1] * (w.letters.length - 1);
+        if (endR < 0 || endR >= size || endC < 0 || endC >= size) continue;
+        const cells = [];
+        let fits = true;
+        for (let i = 0; i < w.letters.length; i++) {
+          const r = startR + dir[0] * i, c = startC + dir[1] * i;
+          const existing = grid[r][c];
+          if (existing && existing !== w.letters[i]) { fits = false; break; }
+          cells.push([r, c]);
+        }
+        if (fits) { cells.forEach(([r, c], i) => { grid[r][c] = w.letters[i]; }); placements[w.id] = cells; placed = true; }
+      }
+      if (!placed) { ok = false; break; }
+    }
+    if (ok) {
+      for (let r = 0; r < size; r++) for (let c = 0; c < size; c++)
+        if (!grid[r][c]) grid[r][c] = fillAlphabet[Math.floor(Math.random() * fillAlphabet.length)];
+      return { grid, size, placements };
+    }
+    size++;
+  }
+  return null;
+}
+
+function cellKey(r, c) { return `${r}-${c}`; }
+function makeRoomCode() {
+  const letters = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  return Array.from({ length: 5 }, () => letters[Math.floor(Math.random() * letters.length)]).join("");
+}
+
+const THEMES = {
+  dark: { bg: "linear-gradient(180deg,#0D1730,#101B34 40%)", panel: "#17244A", panel2: "#1F2E58", text: "#F4F1E8", dim: "#A9B4D0", faint: "#6E7A9A", cellText: "#E7E9F2", modalBg: "#0D1730" },
+  light: { bg: "linear-gradient(180deg,#FBF9F4,#F1EEE4 60%)", panel: "#FFFFFF", panel2: "#F1EEE4", text: "#1E2233", dim: "#5B6272", faint: "#8A90A0", cellText: "#1E2233", modalBg: "#FBF9F4" },
+};
+
+const fontImport = `
+  @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Work+Sans:wght@400;500;600&display=swap');
+  .sgt { font-family: 'Space Grotesk', system-ui, sans-serif; }
+  .cell-btn { transition: transform .08s ease, background .12s ease; }
+  .cell-btn:hover { transform: scale(1.06); }
+  .grp-btn { transition: transform .1s ease, opacity .15s ease, box-shadow .15s ease; }
+  .grp-btn:active { transform: scale(.96); }
+  @keyframes pulseFlash { 0%{opacity:0;} 15%{opacity:1;} 100%{opacity:0;} }
+  @keyframes wonPulse { 0%{transform:scale(1);} 30%{transform:scale(1.06);} 60%{transform:scale(0.99);} 100%{transform:scale(1);} }
+`;
+
+function TebakCariKataGame({ onBack }) {
+  const [theme, setTheme] = useState("light");
+  const t = THEMES[theme];
+
+  const [stage, setStage] = useState("setup"); // 'setup' | 'play'
+  const [selectedMateri, setSelectedMateri] = useState("Gakkou no Seikatsu");
+  const [dataByMateri, setDataByMateri] = useState(initialDataByMateri);
+  const [loaded, setLoaded] = useState(false);
+  const [babakId, setBabakId] = useState(1);
+  const [mode, setMode] = useState("digital");
+  const [audioMode, setAudioMode] = useState("guru");
+  const [scores, setScores] = useState({ 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 });
+  const [roomCode] = useState(makeRoomCode());
+  const [projectorMode, setProjectorMode] = useState(false);
+  const [controlsOpen, setControlsOpen] = useState(true);
+  const [phonePreview, setPhonePreview] = useState(null); // group number or null
+
+  const babak = {
+    label: SEED_BABAK[babakId].label, sub: SEED_BABAK[babakId].sub, point: SEED_BABAK[babakId].point,
+    words: dataByMateri[selectedMateri]?.[babakId] || [],
+  };
+  const [puzzle, setPuzzle] = useState(null);
+  const [queue, setQueue] = useState([]);
+  const [foundMap, setFoundMap] = useState({});
+  const [clueRevealed, setClueRevealed] = useState(false);
+  const [activeGroup, setActiveGroup] = useState(null);
+  const [selStart, setSelStart] = useState(null);
+  const [flash, setFlash] = useState(null);
+  const [speaking, setSpeaking] = useState(false);
+  const [triedSet, setTriedSet] = useState(new Set());
+  const [openToAll, setOpenToAll] = useState(false);
+  const [justWonPulse, setJustWonPulse] = useState(false);
+
+  const audioRef = useRef(null);
+  const retryTimerRef = useRef(null);
+
+  function clearRetryTimer() { if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null; } }
+
+  // Muat editan tersimpan (kalau ada) saat pertama dibuka
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("tck-setup-data");
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed.dataByMateri) setDataByMateri(parsed.dataByMateri);
+        if (parsed.selectedMateri) setSelectedMateri(parsed.selectedMateri);
+        if (parsed.theme) setTheme(parsed.theme);
+      }
+    } catch (e) { /* belum ada data tersimpan, atau data korup */ }
+    setLoaded(true);
+  }, []);
+
+  // Simpan editan setiap kali berubah (setelah data awal selesai dimuat)
+  useEffect(() => {
+    if (!loaded) return;
+    const tm = setTimeout(() => {
+      try {
+        localStorage.setItem("tck-setup-data", JSON.stringify({ dataByMateri, selectedMateri, theme }));
+      } catch (e) { /* kemungkinan kuota localStorage penuh (audio terlalu besar) */ }
+    }, 500);
+    return () => clearTimeout(tm);
+  }, [dataByMateri, selectedMateri, theme, loaded]);
+
+  function resetRound(id) {
+    const w = dataByMateri[selectedMateri]?.[id] || [];
+    setPuzzle(buildPuzzle(w));
+    setQueue(w.filter((x) => x.letters.trim()).map((x) => x.id));
+    setFoundMap({}); setClueRevealed(false); setActiveGroup(null); setSelStart(null);
+    setTriedSet(new Set()); setOpenToAll(false); clearRetryTimer();
+    if (audioRef.current) audioRef.current.pause();
+    setSpeaking(false);
+  }
+
+  function switchBabak(id) { setBabakId(id); resetRound(id); }
+  function startGame() { resetRound(babakId); setStage("play"); }
+
+  useEffect(() => () => clearRetryTimer(), []);
+  useEffect(() => {
+    if (activeGroup && activeGroup === phonePreview) {
+      setJustWonPulse(true);
+      if (typeof navigator !== "undefined" && navigator.vibrate) navigator.vibrate(200);
+      const tm = setTimeout(() => setJustWonPulse(false), 900);
+      return () => clearTimeout(tm);
+    }
+  }, [activeGroup, phonePreview]);
+
+  const currentWord = queue.length > 0 ? babak.words.find((w) => w.id === queue[0]) : null;
+  const totalWords = queue.length + Object.keys(foundMap).length;
+  const foundCount = Object.keys(foundMap).length;
+
+  function scheduleRetry() {
+    clearRetryTimer();
+    if (audioMode !== "guru") return;
+    retryTimerRef.current = setTimeout(() => {
+      if (activeGroup !== null) return;
+      const src = currentWord?.audioUrl;
+      if (src && audioRef.current) { audioRef.current.currentTime = 0; audioRef.current.play(); setSpeaking(true); }
+      if (babakId !== 1) setOpenToAll(true);
+    }, 5000);
+  }
+
+  function playClue() {
+    if (!currentWord) return;
+    if (audioMode === "off" || !currentWord.audioUrl) { setClueRevealed(true); return; }
+    setClueRevealed(true);
+    const el = audioRef.current;
+    el.src = currentWord.audioUrl; el.currentTime = 0; el.play(); setSpeaking(true);
+  }
+
+  function isEligible(g) { if (!triedSet.has(g)) return true; return babakId !== 1 && openToAll; }
+
+  function buzz(group) {
+    if (!currentWord || !isEligible(group)) return;
+    if (mode === "digital" && activeGroup !== null) return;
+    clearRetryTimer();
+    if (audioRef.current) audioRef.current.pause();
+    setSpeaking(false);
+    setActiveGroup(group);
+  }
+
+  function releaseTurn() { setActiveGroup(null); setSelStart(null); }
+
+  function nextQuestion() {
+    setQueue((q) => q.slice(1));
+    setClueRevealed(false); setTriedSet(new Set()); setOpenToAll(false);
+    clearRetryTimer(); releaseTurn(); setSpeaking(false);
+    if (audioRef.current) audioRef.current.pause();
+  }
+  function skipWord() { if (currentWord) nextQuestion(); }
+
+  function handleCellClick(r, c) {
+    if (!currentWord || activeGroup === null || !puzzle) return;
+    if (!selStart) { setSelStart([r, c]); return; }
+    const [sr, sc] = selStart;
+    const dr = Math.sign(r - sr), dc = Math.sign(c - sc);
+    const len = Math.max(Math.abs(r - sr), Math.abs(c - sc)) + 1;
+    const validLine = (dr === 0 && dc !== 0 && r === sr) || (dc === 0 && dr !== 0 && c === sc) || (dr !== 0 && dc !== 0 && Math.abs(r - sr) === Math.abs(c - sc));
+    if (!validLine) { setSelStart([r, c]); return; }
+    const cells = Array.from({ length: len }, (_, i) => [sr + dr * i, sc + dc * i]);
+    const str = cells.map(([rr, cc]) => puzzle.grid[rr][cc]).join("");
+    const reversed = str.split("").reverse().join("");
+    const match = str === currentWord.letters || reversed === currentWord.letters;
+    if (match) {
+      setFoundMap((f) => ({ ...f, [currentWord.id]: { cells, color: GROUP_COLORS[activeGroup - 1] } }));
+      setScores((s) => ({ ...s, [activeGroup]: s[activeGroup] + babak.point }));
+      setFlash({ type: "correct", group: activeGroup }); setTimeout(() => setFlash(null), 1400);
+      nextQuestion();
+    } else {
+      setTriedSet((prev) => new Set(prev).add(activeGroup));
+      setFlash({ type: "wrong", group: activeGroup }); setTimeout(() => setFlash(null), 900);
+      releaseTurn(); scheduleRetry();
+    }
+    setSelStart(null);
+  }
+
+  const foundCellColor = {};
+  if (puzzle) Object.values(foundMap).forEach(({ cells, color }) => cells.forEach(([r, c]) => { foundCellColor[cellKey(r, c)] = color; }));
+  const leaderScore = Math.max(...Object.values(scores));
+  const sortedGroups = [...GROUP_NAMES].sort((a, b) => scores[b] - scores[a]);
+  const cellFont = babakId === 1 ? (puzzle && puzzle.size > 16 ? 11 : 13) : (puzzle && puzzle.size > 16 ? 13 : 16);
+
+  /* ---------- editing helpers (tahap persiapan) ---------- */
+  function updateWord(id, wordId, field, value) {
+    setDataByMateri((prev) => {
+      const materiData = prev[selectedMateri] || { 1: [], 2: [], 3: [] };
+      return { ...prev, [selectedMateri]: { ...materiData, [id]: materiData[id].map((w) => w.id === wordId ? { ...w, [field]: value } : w) } };
+    });
+  }
+  function removeWord(id, wordId) {
+    setDataByMateri((prev) => {
+      const materiData = prev[selectedMateri] || { 1: [], 2: [], 3: [] };
+      return { ...prev, [selectedMateri]: { ...materiData, [id]: materiData[id].filter((w) => w.id !== wordId) } };
+    });
+  }
+  function addWord(id) {
+    setDataByMateri((prev) => {
+      const materiData = prev[selectedMateri] || { 1: [], 2: [], 3: [] };
+      return { ...prev, [selectedMateri]: { ...materiData, [id]: [...materiData[id], { id: uid(), letters: "", clue: "", audioUrl: null }] } };
+    });
+  }
+  function uploadAudio(id, wordId, file) {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => updateWord(id, wordId, "audioUrl", reader.result);
+    reader.readAsDataURL(file);
+  }
+
+  const canStart = (dataByMateri[selectedMateri]?.[1] || []).some((w) => w.letters.trim()) && (dataByMateri[selectedMateri]?.[2] || []).some((w) => w.letters.trim());
+
+  /* ---------------- Reusable game bits ---------------- */
+  const Grid = ({ big }) => !puzzle ? (
+    <div style={{ padding: 24, color: t.dim, fontSize: 14 }}>Belum ada kosakata untuk babak ini.</div>
+  ) : (
+    <div style={{ display: "grid", gridTemplateColumns: `repeat(${puzzle.size}, 1fr)`, gap: big ? 4 : 3, background: t.panel, padding: 10, borderRadius: 14, maxWidth: big ? 760 : 620, margin: big ? "0 auto" : undefined }}>
+      {puzzle.grid.map((row, r) => row.map((letter, c) => {
+        const key = cellKey(r, c);
+        const found = foundCellColor[key];
+        const isSelStart = selStart && selStart[0] === r && selStart[1] === c;
+        return (
+          <button key={key} className="cell-btn" onClick={() => handleCellClick(r, c)} disabled={!currentWord || activeGroup === null}
+            style={{
+              aspectRatio: "1 / 1", border: "none", borderRadius: 5, cursor: currentWord && activeGroup !== null ? "pointer" : "default",
+              background: found ? found : isSelStart ? "#F4B740" : t.panel2, color: found || isSelStart ? "#101B34" : t.cellText,
+              fontWeight: 700, fontSize: big ? cellFont + 3 : cellFont, display: "flex", alignItems: "center", justifyContent: "center",
+              opacity: currentWord && activeGroup === null ? 0.55 : 1,
+            }}>{letter}</button>
+        );
+      }))}
+    </div>
+  );
+
+  const Scoreboard = ({ big, compact, highlight }) => (
+    <div style={{ background: compact ? "transparent" : t.panel, borderRadius: 14, padding: compact ? 0 : big ? 22 : 18 }}>
+      {!compact && <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: big ? 15 : 13, color: t.dim, marginBottom: 10 }}><span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>🏆</span> Papan Skor</div>}
+      <div style={{ display: "flex", flexDirection: big ? "row" : "column", gap: big ? 12 : 6, flexWrap: "wrap" }}>
+        {sortedGroups.map((g) => (
+          <div key={g} style={{
+            display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
+            background: g === highlight ? GROUP_COLORS[g - 1] : t.panel2, borderRadius: 10, padding: big ? "14px 20px" : compact ? "6px 10px" : "8px 12px",
+            flex: big ? "1 1 140px" : undefined, boxShadow: activeGroup === g && !compact ? `0 0 0 2px ${GROUP_COLORS[g - 1]}` : "none",
+          }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ width: compact ? 9 : 12, height: compact ? 9 : 12, borderRadius: 4, background: GROUP_COLORS[g - 1], display: "inline-block" }} />
+              <span style={{ fontSize: big ? 16 : compact ? 12.5 : 14, fontWeight: 600, color: g === highlight ? "#101B34" : t.text }}>Kelompok {g}</span>
+              {scores[g] === leaderScore && leaderScore > 0 && <span style={{ fontSize: 16, lineHeight: 1, color: g === highlight ? "#101B34" : "#F4B740" }}>👑</span>}
+            </div>
+            <span className="sgt" style={{ fontWeight: 700, fontSize: big ? 22 : compact ? 13 : 15, color: g === highlight ? "#101B34" : t.text }}>{scores[g]}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+
+  const BuzzIndicator = ({ big }) => (
+    <div style={{ textAlign: "center", padding: big ? "18px 0" : "10px 0", borderRadius: 14, background: activeGroup ? GROUP_COLORS[activeGroup - 1] : t.panel, color: activeGroup ? "#101B34" : t.dim, fontWeight: 700, fontSize: big ? 22 : 14, transition: "background .2s ease" }}>
+      {activeGroup ? `Kelompok ${activeGroup} mengangkat tangan duluan!` : "Menunggu ada yang mengangkat tangan…"}
+    </div>
+  );
+
+  const ControlPanel = () => (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <div style={{ background: t.panel, borderRadius: 14, padding: 18 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+          <div style={{ fontSize: 13, color: t.dim }}>Petunjuk soal</div>
+          <div style={{ display: "flex", background: t.panel2, borderRadius: 8, padding: 3 }}>
+            <button onClick={() => setAudioMode("guru")} style={{ display: "flex", alignItems: "center", gap: 5, padding: "5px 9px", borderRadius: 6, border: "none", cursor: "pointer", background: audioMode === "guru" ? "#3FBFAD" : "transparent", color: audioMode === "guru" ? "#0D1730" : t.text, fontSize: 11.5, fontWeight: 600 }}><span style={{ fontSize: 12, lineHeight: 1, color: 'inherit' }}>🔊</span> Audio</button>
+            <button onClick={() => setAudioMode("off")} style={{ display: "flex", alignItems: "center", gap: 5, padding: "5px 9px", borderRadius: 6, border: "none", cursor: "pointer", background: audioMode === "off" ? "#3FBFAD" : "transparent", color: audioMode === "off" ? "#0D1730" : t.text, fontSize: 11.5, fontWeight: 600 }}><span style={{ fontSize: 12, lineHeight: 1, color: 'inherit' }}>🔇</span> Nonaktif</button>
+          </div>
+        </div>
+
+        {currentWord && (
+          <button onClick={playClue} className="grp-btn" style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", background: "#F4B740", color: "#101B34", border: "none", borderRadius: 10, padding: "12px 16px", fontWeight: 700, fontSize: 15, cursor: "pointer" }}>
+            {audioMode === "guru" && currentWord.audioUrl ? <span style={{ fontSize: 18, lineHeight: 1, color: 'inherit' }}>🔊</span> : <span style={{ fontSize: 18, lineHeight: 1, color: 'inherit' }}>🔇</span>}
+            {audioMode === "guru" && currentWord.audioUrl ? (speaking ? "Memutar…" : "Putar Petunjuk") : "Tampilkan teks (dibacakan guru)"}
+          </button>
+        )}
+        {clueRevealed && currentWord && <div style={{ marginTop: 12, fontSize: 14, lineHeight: 1.5, color: t.text }}>"{currentWord.clue}"</div>}
+        {audioMode === "guru" && <div style={{ marginTop: 10, fontSize: 11.5, color: t.faint }}>Kalau tidak ada yang angkat tangan 5 detik setelah audio selesai, audio diputar ulang otomatis.</div>}
+      </div>
+
+      <div style={{ background: t.panel, borderRadius: 14, padding: 18 }}>
+        <div style={{ fontSize: 13, color: t.dim, marginBottom: 10 }}>{mode === "digital" ? "Buzzer kelompok" : "Tunjuk kelompok penjawab"}</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
+          {GROUP_NAMES.map((g) => {
+            const isActive = activeGroup === g;
+            const eligible = isEligible(g);
+            const locked = !currentWord || (mode === "digital" && activeGroup !== null && !isActive) || (!eligible && activeGroup === null);
+            return (
+              <button key={g} className="grp-btn" onClick={() => (mode === "digital" ? buzz(g) : (eligible && setActiveGroup(g)))} disabled={locked}
+                style={{ padding: "12px 0", borderRadius: 10, border: "none", cursor: locked ? "default" : "pointer", background: isActive ? GROUP_COLORS[g - 1] : t.panel2, color: isActive ? "#0D1730" : t.text, fontWeight: 700, fontSize: 14, opacity: locked ? 0.4 : 1, boxShadow: isActive ? `0 0 0 2px ${GROUP_COLORS[g - 1]}` : "none" }}>K{g}</button>
+            );
+          })}
+        </div>
+        {activeGroup && <div style={{ marginTop: 10, fontSize: 13, color: t.dim }}>Kelompok {activeGroup} pegang giliran — klik huruf awal &amp; akhir kata di papan.</div>}
+        <div style={{ marginTop: 10, fontSize: 11.5, color: t.faint }}>{babakId === 1 ? "Babak 1: kelompok yang sudah mencoba tidak bisa menjawab lagi untuk soal ini." : "Kelompok yang sudah mencoba boleh menjawab lagi kalau tidak ada kelompok lain yang mengangkat tangan."}</div>
+        {currentWord && <button onClick={skipWord} style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 6, background: "transparent", border: `1px solid ${t.panel2}`, color: t.dim, borderRadius: 8, padding: "8px 12px", fontSize: 13, cursor: "pointer", width: "100%", justifyContent: "center" }}><span style={{ fontSize: 14, lineHeight: 1, color: 'inherit' }}>⏭</span> Lewati soal ini</button>}
+      </div>
+
+      <Scoreboard />
+
+      <button onClick={() => setPhonePreview(1)} style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "center", background: t.panel, border: "none", color: t.text, borderRadius: 10, padding: "10px 12px", cursor: "pointer", fontSize: 13 }}>
+        <span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>📱</span> Pratinjau HP Siswa
+      </button>
+    </div>
+  );
+
+  /* ---------------- Phone preview modal ---------------- */
+  const PhonePreview = () => {
+    const g = phonePreview;
+    const eligible = isEligible(g);
+    const won = activeGroup === g;
+    const lost = activeGroup !== null && !won;
+    let title = "Menunggu ronde berikutnya…";
+    let sub = "Dengarkan petunjuk dari gurumu.";
+    let btnDisabled = true;
+    if (currentWord) {
+      if (mode === "manual") { title = "Angkat tanganmu langsung"; sub = "Guru menilai kelompok mana yang paling cepat."; }
+      else if (won) { title = "Giliranmu!"; sub = "Maju ke depan, tunjuk & bacakan katanya."; }
+      else if (lost) { title = `Kelompok ${activeGroup} duluan`; sub = "Tunggu ronde berikutnya."; }
+      else if (!eligible) { title = "Kelompokmu sudah mencoba"; sub = "Tunggu kelompok lain dulu."; }
+      else { title = "Ronde berjalan"; sub = "Sudah tahu jawabannya? Angkat tangan sekarang!"; btnDisabled = false; }
+    }
+    return (
+      <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50 }} onClick={() => setPhonePreview(null)}>
+        <div onClick={(e) => e.stopPropagation()} style={{ width: 300, background: t.modalBg, borderRadius: 32, padding: "20px 16px", boxShadow: "0 20px 60px rgba(0,0,0,.5)", position: "relative", transform: justWonPulse ? "scale(1.03)" : "scale(1)", transition: "transform .2s ease" }}>
+          <button onClick={() => setPhonePreview(null)} style={{ position: "absolute", top: 10, right: 12, background: "none", border: "none", color: t.dim, cursor: "pointer" }}><span style={{ fontSize: 18, lineHeight: 1, color: 'inherit' }}>✕</span></button>
+          <div style={{ display: "flex", justifyContent: "center", gap: 6, marginBottom: 14 }}>
+            {GROUP_NAMES.map((n) => (
+              <button key={n} onClick={() => setPhonePreview(n)} style={{ width: 26, height: 26, borderRadius: 7, border: "none", cursor: "pointer", background: n === g ? GROUP_COLORS[n - 1] : t.panel2, color: n === g ? "#101B34" : t.text, fontSize: 11, fontWeight: 700 }}>{n}</button>
+            ))}
+          </div>
+          <div style={{ textAlign: "center", fontSize: 12, color: t.dim, marginBottom: 2 }}>Layar HP — Kelompok {g}</div>
+          <div style={{ background: t.panel, borderRadius: 20, padding: 22, minHeight: 260, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 14, animation: justWonPulse ? "wonPulse .6s ease" : "none" }}>
+            <div style={{ width: 14, height: 14, borderRadius: 5, background: GROUP_COLORS[g - 1] }} />
+            <div className="sgt" style={{ fontSize: 18, fontWeight: 700, textAlign: "center", color: won ? GROUP_COLORS[g - 1] : t.text }}>{title}</div>
+            <div style={{ fontSize: 12.5, color: t.dim, textAlign: "center" }}>{sub}</div>
+            {mode === "digital" && (
+              <button disabled={btnDisabled} onClick={() => buzz(g)} style={{
+                width: 140, height: 140, borderRadius: "50%", border: "none", cursor: btnDisabled ? "default" : "pointer",
+                background: won ? GROUP_COLORS[g - 1] : btnDisabled ? t.panel2 : GROUP_COLORS[g - 1],
+                color: "#101B34", fontWeight: 700, fontSize: 15, opacity: btnDisabled && !won ? 0.35 : 1,
+                display: "flex", alignItems: "center", justifyContent: "center", textAlign: "center",
+              }}>{won ? <span style={{ fontSize: 40, lineHeight: 1, color: 'inherit' }}>✅</span> : "ANGKAT\nTANGAN"}</button>
+            )}
+          </div>
+          <div style={{ marginTop: 12 }}><Scoreboard compact highlight={g} /></div>
+        </div>
+      </div>
+    );
+  };
+
+  /* ---------------- STAGE: SETUP (Persiapan) ---------------- */
+  if (stage === "setup") {
+    return (
+      <div style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: t.bg, color: t.text, minHeight: "100%", padding: 28, boxSizing: "border-box" }}>
+        <style>{fontImport}</style>
+
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 22, flexWrap: "wrap", gap: 12 }}>
+          <div>
+            <div className="sgt" style={{ fontSize: 28, fontWeight: 700 }}>Persiapan Permainan</div>
+            <div style={{ fontSize: 14, color: t.dim, marginTop: 2 }}>Susun materi & kosakata sebelum mulai bermain bersama siswa.</div>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={onBack} style={{ background: t.panel, border: "none", color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}>← Pilih Game</button>
+            <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")} style={{ background: t.panel, border: "none", color: t.text, padding: 10, borderRadius: 10, cursor: "pointer" }}>{theme === "dark" ? <span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>☀</span> : <span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>🌙</span>}</button>
+          </div>
+        </div>        <div style={{ marginBottom: 20 }}>
+          <div style={{ fontSize: 13, color: t.dim, marginBottom: 8 }}>1. Pilih materi <span style={{ color: t.faint }}>(sesuai Prota Bahasa Jepang kelas XI Fase F)</span></div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 8 }}>
+            {MATERI_LIST.map((m) => {
+              const isSelected = selectedMateri === m.name;
+              return (
+                <button key={m.name} onClick={() => { if (!m.available) return; setSelectedMateri(m.name); setDataByMateri((prev) => ensureMateri(prev, m.name)); setBabakId(1); }} disabled={!m.available} style={{
+                  textAlign: "left", display: "flex", alignItems: "center", gap: 10, background: t.panel,
+                  border: isSelected ? "2px solid #F4B740" : `2px solid ${t.panel}`, borderRadius: 12, padding: "12px 14px",
+                  cursor: m.available ? "pointer" : "default", opacity: m.available ? 1 : 0.45,
+                }}>
+                  <span style={{ width: 10, height: 10, borderRadius: 4, background: isSelected ? "#F4B740" : t.panel2, flexShrink: 0 }} />
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: 13.5 }}>{m.name}</div>
+                    <div style={{ fontSize: 11.5, color: t.dim }}>{m.desc}{!m.available ? " · segera" : ""}</div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div style={{ marginBottom: 12, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div style={{ fontSize: 13, color: t.dim }}>2. Kosakata per babak — edit, hapus, tambah, unggah audio</div>
+          <div style={{ display: "flex", gap: 6, background: t.panel, padding: 4, borderRadius: 10 }}>
+            {[1, 2, 3].map((id) => (
+              <button key={id} onClick={() => setBabakId(id)} style={{ padding: "7px 14px", borderRadius: 7, border: "none", cursor: "pointer", background: babakId === id ? "#F4B740" : "transparent", color: babakId === id ? "#101B34" : t.text, fontWeight: 600, fontSize: 13 }}>Babak {id}</button>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ background: t.panel, borderRadius: 14, padding: 16, marginBottom: 20 }}>
+          <div style={{ fontSize: 12.5, color: t.faint, marginBottom: 12 }}>{babak.sub} · {babak.point} poin / soal{babak.words.length === 0 ? " · belum ada kosakata" : ""}</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {babak.words.map((w) => (
+              <div key={w.id} style={{ display: "flex", gap: 8, alignItems: "flex-start", background: t.panel2, borderRadius: 10, padding: 10, flexWrap: "wrap" }}>
+                <input value={w.letters} onChange={(e) => updateWord(babakId, w.id, "letters", e.target.value)} placeholder="kata (jawaban)"
+                  style={{ width: 140, padding: "8px 10px", borderRadius: 7, border: "none", background: t.panel, color: t.text, fontSize: 13 }} />
+                <textarea value={w.clue} onChange={(e) => updateWord(babakId, w.id, "clue", e.target.value)} placeholder="petunjuk (Bahasa Indonesia)" rows={2}
+                  style={{ flex: 1, minWidth: 200, padding: "8px 10px", borderRadius: 7, border: "none", background: t.panel, color: t.text, fontSize: 13, resize: "vertical", fontFamily: "inherit" }} />
+                <label title={w.audioUrl ? "Audio sudah diunggah" : "Unggah audio"} style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 34, height: 34, background: t.panel, borderRadius: 7, color: w.audioUrl ? "#3FBFAD" : t.dim, cursor: "pointer", flexShrink: 0 }}>
+                  {w.audioUrl ? <span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>🎵</span> : <span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>⬆</span>}
+                  <input type="file" accept="audio/*" onChange={(e) => uploadAudio(babakId, w.id, e.target.files[0])} style={{ display: "none" }} />
+                </label>
+                <button onClick={() => removeWord(babakId, w.id)} style={{ background: "transparent", border: "none", color: "#EF5B5B", cursor: "pointer", padding: 8 }}><span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>🗑</span></button>
+              </div>
+            ))}
+          </div>
+          <button onClick={() => addWord(babakId)} style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 6, background: t.panel2, border: "none", color: t.text, borderRadius: 8, padding: "9px 14px", cursor: "pointer", fontSize: 13 }}><span style={{ fontSize: 14, lineHeight: 1, color: 'inherit' }}>➕</span> Tambah Kosakata</button>
+        </div>
+
+        <button onClick={startGame} disabled={!canStart} style={{
+          display: "flex", alignItems: "center", gap: 8, background: canStart ? "#F4B740" : t.panel2, color: canStart ? "#101B34" : t.faint,
+          border: "none", borderRadius: 12, padding: "14px 22px", fontWeight: 700, fontSize: 15, cursor: canStart ? "pointer" : "default",
+        }}>Mulai Permainan <span style={{ fontSize: 17, lineHeight: 1, color: 'inherit' }}>➡</span></button>
+        {!canStart && <div style={{ marginTop: 8, fontSize: 12.5, color: t.faint }}>Isi minimal satu kosakata di Babak 1 dan Babak 2 untuk mulai.</div>}
+      </div>
+    );
+  }
+
+  /* ---------------- STAGE: PLAY — Projector view ---------------- */
+  if (projectorMode) {
+    return (
+      <div style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: t.bg, color: t.text, minHeight: "100%", padding: 28, boxSizing: "border-box", position: "relative" }}>
+        <style>{fontImport}</style>
+        <audio ref={audioRef} style={{ display: "none" }} />
+        {phonePreview && <PhonePreview />}
+        <button onClick={() => setProjectorMode(false)} title="Keluar mode proyektor" style={{ position: "absolute", top: 16, right: 16, background: t.panel, border: "none", color: t.text, padding: 10, borderRadius: 10, cursor: "pointer", zIndex: 10 }}><span style={{ fontSize: 18, lineHeight: 1, color: 'inherit' }}>⤡</span></button>
+        <div className="sgt" style={{ fontSize: 24, fontWeight: 700, textAlign: "center", marginBottom: 16 }}>Tebak &amp; Cari Kata — {babak.label}</div>
+        <div style={{ marginBottom: 18 }}><BuzzIndicator big /></div>
+        <div style={{ marginBottom: 18 }}><Grid big /></div>
+        <Scoreboard big />
+        <button onClick={() => setControlsOpen((o) => !o)} style={{ position: "fixed", bottom: 16, right: 16, display: "flex", alignItems: "center", gap: 6, background: t.panel, color: t.text, border: "none", borderRadius: 10, padding: "10px 14px", cursor: "pointer", zIndex: 20 }}><span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>⚙</span> Panel Guru</button>
+        {controlsOpen && <div style={{ position: "fixed", bottom: 64, right: 16, width: 320, maxHeight: "70vh", overflowY: "auto", background: t.modalBg, padding: 14, borderRadius: 14, boxShadow: "0 8px 30px rgba(0,0,0,.35)", zIndex: 20 }}><ControlPanel /></div>}
+      </div>
+    );
+  }
+
+  /* ---------------- STAGE: PLAY — Control view ---------------- */
+  return (
+    <div style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: t.bg, color: t.text, minHeight: "100%", padding: 28, boxSizing: "border-box" }}>
+      <style>{fontImport}</style>
+      <audio ref={audioRef} style={{ display: "none" }} />
+      {phonePreview && <PhonePreview />}
+
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 16, marginBottom: 22 }}>
+        <div>
+          <div className="sgt" style={{ fontSize: 30, fontWeight: 700, letterSpacing: -0.5 }}>Tebak &amp; Cari Kata</div>
+          <div style={{ fontSize: 14, color: t.dim, marginTop: 2 }}>{babak.label} · {babak.sub} · {babak.point} poin / soal</div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <button onClick={onBack} style={{ background: t.panel, border: "none", color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}>← Pilih Game</button>
+          <button onClick={() => setStage("setup")} style={{ background: t.panel, border: "none", color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}>← Persiapan</button>
+          <div style={{ display: "flex", gap: 6, background: t.panel, padding: 4, borderRadius: 10 }}>
+            {[1, 2, 3].map((id) => (
+              <button key={id} onClick={() => switchBabak(id)} style={{ padding: "8px 16px", borderRadius: 7, border: "none", cursor: "pointer", background: babakId === id ? "#F4B740" : "transparent", color: babakId === id ? "#101B34" : t.text, fontWeight: 600, fontSize: 14 }}>Babak {id}</button>
+            ))}
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, background: t.panel, padding: "6px 8px", borderRadius: 10 }}>
+            <span style={{ fontSize: 16, lineHeight: 1, color: t.dim }}>🔳</span><span style={{ fontSize: 13, color: t.dim }}>Kode Room</span>
+            <span className="sgt" style={{ fontSize: 16, fontWeight: 700, letterSpacing: 2 }}>{roomCode}</span>
+          </div>
+          <button onClick={() => resetRound(babakId)} title="Acak ulang papan" style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: "none", color: t.text, padding: "10px 12px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>🔄</span> Papan baru</button>
+          <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")} style={{ background: t.panel, border: "none", color: t.text, padding: 10, borderRadius: 10, cursor: "pointer" }}>{theme === "dark" ? <span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>☀</span> : <span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>🌙</span>}</button>
+          <button onClick={() => setProjectorMode(true)} style={{ display: "flex", alignItems: "center", gap: 6, background: "#F4B740", border: "none", color: "#101B34", padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>⤢</span> Mode Proyektor</button>
+        </div>
+      </div>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
+        <span style={{ fontSize: 13, color: t.dim }}>Mode angkat tangan:</span>
+        <div style={{ display: "flex", background: t.panel, borderRadius: 10, padding: 4 }}>
+          <button onClick={() => { setMode("digital"); releaseTurn(); }} style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 14px", borderRadius: 7, border: "none", cursor: "pointer", background: mode === "digital" ? "#3FBFAD" : "transparent", color: mode === "digital" ? "#0D1730" : t.text, fontWeight: 600, fontSize: 13 }}><span style={{ fontSize: 14, lineHeight: 1, color: 'inherit' }}>📻</span> Digital</button>
+          <button onClick={() => { setMode("manual"); releaseTurn(); }} style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 14px", borderRadius: 7, border: "none", cursor: "pointer", background: mode === "manual" ? "#3FBFAD" : "transparent", color: mode === "manual" ? "#0D1730" : t.text, fontWeight: 600, fontSize: 13 }}><span style={{ fontSize: 14, lineHeight: 1, color: 'inherit' }}>✋</span> Manual</button>
+        </div>
+        <span style={{ fontSize: 12.5, color: t.faint }}>{mode === "digital" ? "Kelompok pencet tombol duluan untuk mengunci giliran." : "Guru menunjuk kelompok yang dinilai duluan mengangkat tangan."}</span>
+      </div>
+
+      <div style={{ display: "flex", gap: 22, flexWrap: "wrap", alignItems: "flex-start" }}>
+        <div style={{ flex: "1 1 520px", position: "relative" }}>
+          <div style={{ fontSize: 13, color: t.dim, marginBottom: 10 }}>
+            {puzzle ? (currentWord ? `Soal ${foundCount + 1} dari ${totalWords}` : "Semua soal selesai 🎉") : ""}
+            {selStart && currentWord && <span style={{ color: "#F4B740" }}> — klik huruf terakhir kata</span>}
+          </div>
+          {flash && (
+            <div style={{ position: "absolute", top: 34, left: "50%", transform: "translateX(-50%)", zIndex: 5, padding: "8px 18px", borderRadius: 10, fontWeight: 700, fontSize: 14, background: flash.type === "correct" ? "#3FBFAD" : "#EF5B5B", color: "#0D1730", animation: "pulseFlash 1.2s ease forwards" }}>
+              {flash.type === "correct" ? `Benar! Kelompok ${flash.group} +${babak.point} poin` : `Belum tepat — giliran dibuka lagi`}
+            </div>
+          )}
+          <Grid />
+          {puzzle && !currentWord && <div style={{ marginTop: 16, fontSize: 14, color: t.dim }}>Semua kosakata di babak ini sudah ditemukan. Ganti babak atau tekan "Papan baru" untuk main ulang.</div>}
+        </div>
+        <div style={{ flex: "1 1 280px" }}><ControlPanel /></div>
+      </div>
+    </div>
+  );
+}
+
+/* ===========================================================
+   GAME 2 — BUKA KOTAK (gaya Wordwall: pilih nomor, kerjakan perintah)
+   Individu, tanpa batas waktu, tanpa skor — murni latihan.
+=========================================================== */
+const BOX_COLORS = ["#F4B740", "#EF5B5B", "#3FBFAD", "#F2879E", "#5DA9E9", "#8FBF6B"];
+
+const SEED_INSTRUCTIONS = [
+  "Tuliskan 3 kosakata benda yang berhubungan dengan alat elektronik.",
+  "Sebutkan 6 kosakata perlengkapan alat tulis yang ada di atas meja belajarmu.",
+  "Sebutkan 5 nama benda yang biasa dibawa siswa di dalam tas sekolah!",
+  "Tuliskan 3 nama ruangan di sekolah yang memiliki akhiran -shitsu beserta artinya!",
+  "Sebutkan 4 nama fasilitas atau tempat umum di sekolah selain ruang kelas!",
+  "Sebutkan 3 nama benda di dalam kelas yang letaknya biasanya menempel di dinding!",
+  "Sebutkan 3 kosakata benda di kelas yang biasa terbuat dari kayu!",
+  "Buat 2 kalimat tunjuk benda yang letaknya dekat dengan pembicara dan jauh dari keduanya",
+  "Buat 2 kalimat pernyataan kepemilikan barang",
+  "Buat 1 kalimat penyangkalan kepemilikan barang",
+  "Buat 2 kalimat untuk menyatakan nama benda ke dalam bahasa Jepang",
+  "Buat 1 kalimat tanya kepemilikan barang menggunakan kata tanya dare",
+  "Buat 1 kalimat tanya untuk memastikan benda di dekat lawan bicara, beserta contoh jawaban penyangkalannya!",
+  "Terjemahkan ke dalam bahasa Jepang: \"Ini adalah buku catatan milik guru\"!",
+  "Terjemahkan ke dalam bahasa Jepang: \"Itu (jauh) bukan kamus milik Tono\"!",
+  "Buat 2 kalimat letak benda yang menggunakan posisi ue dan shita!",
+  "Buat 1 kalimat yang menyatakan bahwa suatu benda berada di dalam tempat lain!",
+  "Buat 2 kalimat penunjuk lokasi ruangan sekolah menggunakan kata tunjuk tempat koko dan asoko!",
+  "Buat 1 kalimat tanya untuk menanyakan lokasi suatu ruangan di sekolah menggunakan kata tanya doko!",
+  "Buat 1 kalimat yang menjelaskan posisi ruang kepala sekolah berada di samping ruangan lain!",
+  "Buat 1 kalimat yang menjelaskan letak toilet (toire) berada di depan (mae) ruangan lain!",
+  "Terjemahkan ke dalam bahasa Jepang: \"Tempat sampah ada di bawah meja\"!",
+  "Terjemahkan ke dalam bahasa Jepang: \"Ruang UKS ada di sebelah ruang TU\"!",
+  "Buat 1 kalimat tanya untuk menanyakan benda apa yang ada di atas meja!",
+  "Buat 1 kalimat yang menyebutkan seluruh isi kotak pensil secara pasti!",
+  "Buat 1 kalimat yang menyebutkan beberapa contoh perwakilan isi tas!",
+  "Buat 1 contoh kalimat menggunakan partikel to dan 1 contoh kalimat menggunakan ya ... nado",
+  "Terjemahkan ke dalam bahasa Jepang: \"Di dalam kelas ada meja dan kursi\"!",
+  "Terjemahkan ke dalam bahasa Jepang: \"Di atas meja ada pensil, buku, dan lain-lain\"!",
+  "Buat 2 kalimat pertanyaan yang berbeda (1 menanyakan letak benda, 1 menanyakan apa yang ada di suatu tempat)!",
+  "Tuliskan 3 kosakata benda kelas yang mengandung tanda Tenten menggunakan huruf Hiragana!",
+  "Tuliskan 2 kosakata yang mengandung tanda Maru menggunakan huruf Hiragana!",
+  "Tuliskan 3 kosakata bahasa Jepang yang memiliki bunyi vokal panjang (Chôon) menggunakan huruf Hiragana!",
+  "Tuliskan 2 kosakata yang memiliki konsonan rangkap (tsu kecil) menggunakan huruf Hiragana!",
+  "Tuliskan 3 kosakata yang mengandung huruf kombinasi Yôon (kya, shu, cho, dsb.) menggunakan huruf Hiragana!",
+  "Tuliskan kata \"tsukue\", \"fudebako\", dan \"gakkô\" ke dalam huruf Hiragana dengan tepat!",
+  "Tuliskan kata \"shashin\", \"kabin\", dan \"gomibako\" ke dalam huruf Hiragana dengan tepat!",
+  "Selamat, kamu bebas giliran! Tunjuk satu teman sekelasmu untuk menyebutkan 3 nama ruangan di sekolah beserta artinya.",
+  "Tunjuk satu temanmu untuk maju ke papan tulis! Sebutkan 2 kata benda kelas secara lisan, dan minta teman yang kamu tunjuk untuk menuliskannya dalam huruf Hiragana.",
+  "Kamu bebas dari giliran ini! Pilih satu teman sekelasmu yang sedang terlihat santai untuk maju ke papan tulis dan menuliskan kata 'enpitsu', 'kyôshitsu', dan 'oneesan' dalam huruf Hiragana!",
+];
+
+function initialBoxDataByMateri() {
+  return { "Gakkou no Seikatsu": SEED_INSTRUCTIONS.map((text) => ({ id: uid(), text })) };
+}
+function ensureBoxMateri(data, materi) {
+  if (data[materi]) return data;
+  return { ...data, [materi]: [] };
+}
+
+function BukaKotakGame({ onBack }) {
+  const [theme, setTheme] = useState("light");
+  const t = THEMES[theme];
+  const [stage, setStage] = useState("setup"); // 'setup' | 'play'
+  const [selectedMateri, setSelectedMateri] = useState("Gakkou no Seikatsu");
+  const [dataByMateri, setDataByMateri] = useState(initialBoxDataByMateri);
+  const [loaded, setLoaded] = useState(false);
+  const [opened, setOpened] = useState({}); // id -> true
+  const [activeBox, setActiveBox] = useState(null); // instruction object or null
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("bk-setup-data");
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed.dataByMateri) setDataByMateri(parsed.dataByMateri);
+        if (parsed.selectedMateri) setSelectedMateri(parsed.selectedMateri);
+        if (parsed.theme) setTheme(parsed.theme);
+      }
+    } catch (e) { /* belum ada data tersimpan, atau data korup */ }
+    setLoaded(true);
+  }, []);
+  useEffect(() => {
+    if (!loaded) return;
+    const tm = setTimeout(() => {
+      try {
+        localStorage.setItem("bk-setup-data", JSON.stringify({ dataByMateri, selectedMateri, theme }));
+      } catch (e) { /* kemungkinan kuota localStorage penuh */ }
+    }, 500);
+    return () => clearTimeout(tm);
+  }, [dataByMateri, selectedMateri, theme, loaded]);
+
+  const items = dataByMateri[selectedMateri] || [];
+  const canStart = items.some((it) => it.text.trim());
+
+  function updateItem(id, value) {
+    setDataByMateri((prev) => ({ ...prev, [selectedMateri]: (prev[selectedMateri] || []).map((it) => it.id === id ? { ...it, text: value } : it) }));
+  }
+  function removeItem(id) {
+    setDataByMateri((prev) => ({ ...prev, [selectedMateri]: (prev[selectedMateri] || []).filter((it) => it.id !== id) }));
+  }
+  function addItem() {
+    setDataByMateri((prev) => ({ ...prev, [selectedMateri]: [...(prev[selectedMateri] || []), { id: uid(), text: "" }] }));
+  }
+  function startGame() { setOpened({}); setActiveBox(null); setStage("play"); }
+  function openBox(item) { setActiveBox(item); setOpened((o) => ({ ...o, [item.id]: true })); }
+  function resetBoard() { setOpened({}); setActiveBox(null); }
+
+  if (stage === "setup") {
+    return (
+      <div style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: t.bg, color: t.text, minHeight: "100%", padding: 28, boxSizing: "border-box" }}>
+        <style>{fontImport}</style>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 22, flexWrap: "wrap", gap: 12 }}>
+          <div>
+            <div className="sgt" style={{ fontSize: 28, fontWeight: 700 }}>Persiapan — Buka Kotak</div>
+            <div style={{ fontSize: 14, color: t.dim, marginTop: 2 }}>Susun daftar perintah sebelum dimainkan. Individu, tanpa waktu, tanpa skor.</div>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={onBack} style={{ background: t.panel, border: "none", color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}>← Pilih Game</button>
+            <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")} style={{ background: t.panel, border: "none", color: t.text, padding: 10, borderRadius: 10, cursor: "pointer" }}>{theme === "dark" ? <span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>☀</span> : <span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>🌙</span>}</button>
+          </div>
+        </div>
+
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ fontSize: 13, color: t.dim, marginBottom: 8 }}>1. Pilih materi</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 8 }}>
+            {MATERI_LIST.map((m) => {
+              const isSelected = selectedMateri === m.name;
+              return (
+                <button key={m.name} onClick={() => { setSelectedMateri(m.name); setDataByMateri((prev) => ensureBoxMateri(prev, m.name)); }} style={{
+                  textAlign: "left", display: "flex", alignItems: "center", gap: 10, background: t.panel,
+                  border: isSelected ? "2px solid #F4B740" : `2px solid ${t.panel}`, borderRadius: 12, padding: "12px 14px", cursor: "pointer",
+                }}>
+                  <span style={{ width: 10, height: 10, borderRadius: 4, background: isSelected ? "#F4B740" : t.panel2, flexShrink: 0 }} />
+                  <div><div style={{ fontWeight: 700, fontSize: 13.5 }}>{m.name}</div><div style={{ fontSize: 11.5, color: t.dim }}>{m.desc}</div></div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div style={{ fontSize: 13, color: t.dim, marginBottom: 8 }}>2. Daftar perintah ({items.length} kotak)</div>
+        <div style={{ background: t.panel, borderRadius: 14, padding: 16, marginBottom: 20 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {items.map((it, i) => (
+              <div key={it.id} style={{ display: "flex", gap: 8, alignItems: "flex-start", background: t.panel2, borderRadius: 10, padding: 10 }}>
+                <span style={{ width: 26, height: 26, borderRadius: 7, background: BOX_COLORS[i % BOX_COLORS.length], color: "#101B34", fontWeight: 700, fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{i + 1}</span>
+                <textarea value={it.text} onChange={(e) => updateItem(it.id, e.target.value)} rows={2} placeholder="Tulis perintah/instruksi…"
+                  style={{ flex: 1, padding: "8px 10px", borderRadius: 7, border: "none", background: t.panel, color: t.text, fontSize: 13, resize: "vertical", fontFamily: "inherit" }} />
+                <button onClick={() => removeItem(it.id)} style={{ background: "transparent", border: "none", color: "#EF5B5B", cursor: "pointer", padding: 8 }}><span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>🗑</span></button>
+              </div>
+            ))}
+          </div>
+          <button onClick={addItem} style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 6, background: t.panel2, border: "none", color: t.text, borderRadius: 8, padding: "9px 14px", cursor: "pointer", fontSize: 13 }}><span style={{ fontSize: 14, lineHeight: 1, color: 'inherit' }}>➕</span> Tambah Perintah</button>
+        </div>
+
+        <button onClick={startGame} disabled={!canStart} style={{ display: "flex", alignItems: "center", gap: 8, background: canStart ? "#F4B740" : t.panel2, color: canStart ? "#101B34" : t.faint, border: "none", borderRadius: 12, padding: "14px 22px", fontWeight: 700, fontSize: 15, cursor: canStart ? "pointer" : "default" }}>Mulai Permainan <span style={{ fontSize: 17, lineHeight: 1, color: 'inherit' }}>➡</span></button>
+        {!canStart && <div style={{ marginTop: 8, fontSize: 12.5, color: t.faint }}>Isi minimal satu perintah untuk mulai.</div>}
+      </div>
+    );
+  }
+
+  const openedCount = Object.keys(opened).length;
+
+  return (
+    <div style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: t.bg, color: t.text, minHeight: "100%", padding: 28, boxSizing: "border-box", position: "relative" }}>
+      <style>{fontImport}</style>
+
+      {activeBox && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50 }} onClick={() => setActiveBox(null)}>
+          <div onClick={(e) => e.stopPropagation()} style={{ width: "min(520px, 90vw)", background: "#F2879E", borderRadius: 20, padding: "36px 30px", boxShadow: "0 20px 60px rgba(0,0,0,.4)", position: "relative" }}>
+            <button onClick={() => setActiveBox(null)} style={{ position: "absolute", top: 12, right: 14, background: "none", border: "none", color: "#101B34", cursor: "pointer" }}><span style={{ fontSize: 20, lineHeight: 1, color: 'inherit' }}>✕</span></button>
+            <div className="sgt" style={{ fontSize: 20, fontWeight: 700, color: "#101B34", textAlign: "center", lineHeight: 1.5 }}>{activeBox.text}</div>
+          </div>
+        </div>
+      )}
+
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 16, marginBottom: 22 }}>
+        <div>
+          <div className="sgt" style={{ fontSize: 30, fontWeight: 700, letterSpacing: -0.5 }}>Buka Kotak</div>
+          <div style={{ fontSize: 14, color: t.dim, marginTop: 2 }}>{selectedMateri} · {openedCount}/{items.length} kotak sudah dibuka · individu, tanpa skor</div>
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={onBack} style={{ background: t.panel, border: "none", color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}>← Pilih Game</button>
+          <button onClick={() => setStage("setup")} style={{ background: t.panel, border: "none", color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}>← Persiapan</button>
+          <button onClick={resetBoard} style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: "none", color: t.text, padding: "10px 12px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>🔄</span> Reset papan</button>
+          <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")} style={{ background: t.panel, border: "none", color: t.text, padding: 10, borderRadius: 10, cursor: "pointer" }}>{theme === "dark" ? <span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>☀</span> : <span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>🌙</span>}</button>
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(90px, 1fr))", gap: 10, maxWidth: 900 }}>
+        {items.map((it, i) => {
+          const isOpen = opened[it.id];
+          return (
+            <button key={it.id} onClick={() => openBox(it)} style={{
+              aspectRatio: "1 / 1", borderRadius: 12, cursor: "pointer",
+              border: `3px solid ${BOX_COLORS[i % BOX_COLORS.length]}`,
+              background: isOpen ? t.panel2 : t.panel, color: isOpen ? t.faint : t.text,
+              fontWeight: 700, fontSize: 20, display: "flex", alignItems: "center", justifyContent: "center", opacity: isOpen ? 0.55 : 1,
+            }} className="sgt">{i + 1}</button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ===========================================================
+   PEMILIH GAME (layar paling awal)
+=========================================================== */
+const GAMES = [
+  { id: "g1", name: "Tebak & Cari Kata", desc: "Word search kelompok dengan petunjuk audio & buzzer", available: true },
+  { id: "g2", name: "Buka Kotak", desc: "Pilih nomor, kerjakan perintahnya — individu, tanpa skor", available: true },
+  { id: "g3", name: "Game 3", desc: "Konsepnya belum ditentukan", available: false },
+];
+
+function App() {
+  const [activeGame, setActiveGame] = useState(null);
+
+  if (activeGame === "g1") return <TebakCariKataGame onBack={() => setActiveGame(null)} />;
+  if (activeGame === "g2") return <BukaKotakGame onBack={() => setActiveGame(null)} />;
+
+  return (
+    <div style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: THEMES.light.bg, color: THEMES.light.text, minHeight: "100%", padding: 28, boxSizing: "border-box" }}>
+      <style>{fontImport}</style>
+      <div className="sgt" style={{ fontSize: 30, fontWeight: 700, marginBottom: 4 }}>Pilih Game</div>
+      <div style={{ fontSize: 14, color: THEMES.light.dim, marginBottom: 24 }}>Web interaktif siswa SMA — pilih salah satu permainan untuk mulai.</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 14, maxWidth: 760 }}>
+        {GAMES.map((g) => (
+          <button key={g.id} onClick={() => g.available && setActiveGame(g.id)} disabled={!g.available} style={{
+            textAlign: "left", background: "#FFFFFF", border: "none", borderRadius: 16, padding: 20, cursor: g.available ? "pointer" : "default",
+            opacity: g.available ? 1 : 0.45, boxShadow: "0 2px 10px rgba(0,0,0,.06)",
+          }}>
+            <div className="sgt" style={{ fontSize: 17, fontWeight: 700, marginBottom: 6 }}>{g.name}</div>
+            <div style={{ fontSize: 12.5, color: THEMES.light.dim }}>{g.desc}{!g.available ? " · segera" : ""}</div>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
