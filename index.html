@@ -11,9 +11,40 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js" crossorigin></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js" crossorigin></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.24.7/babel.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 
 <script type="text/babel" data-presets="react">
 const { useState, useMemo, useRef, useCallback, useEffect } = React;
+
+/* ---------------------------------------------------------
+   FIREBASE — dipakai untuk fitur join siswa via QR code
+   (room = kode 5 karakter, disimpan di koleksi "rooms")
+--------------------------------------------------------- */
+const firebaseConfig = {
+  apiKey: "AIzaSyAxmzOoyG3vn94qjThXqqfZwdNlbLD20Zc",
+  authDomain: "sankyuu-132d2.firebaseapp.com",
+  projectId: "sankyuu-132d2",
+  storageBucket: "sankyuu-132d2.firebasestorage.app",
+  messagingSenderId: "376887287210",
+  appId: "1:376887287210:web:3901f0d6a6416b9eed3d13",
+  measurementId: "G-04NNYZ39R8",
+};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
+
+function getJoinCodeFromUrl() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const j = params.get("join");
+    return j ? j.toUpperCase() : null;
+  } catch (e) { return null; }
+}
+function getJoinUrl(roomCode) {
+  const base = window.location.origin + window.location.pathname;
+  return `${base}?join=${roomCode}`;
+}
 
 
 /* ---------------------------------------------------------
@@ -191,6 +222,120 @@ const fontImport = `
   @keyframes wonPulse { 0%{transform:scale(1);} 30%{transform:scale(1.06);} 60%{transform:scale(0.99);} 100%{transform:scale(1);} }
 `;
 
+/* ===========================================================
+   LAYAR SISWA — dibuka lewat scan QR (?join=KODEROOM)
+   Siswa daftarkan kelompoknya lalu dapat tombol "angkat tangan"
+   yang tersinkron real-time lewat Firestore.
+=========================================================== */
+function StudentJoinScreen({ roomCode }) {
+  const [theme] = useState("light");
+  const t = THEMES[theme];
+  const [room, setRoom] = useState(undefined); // undefined = loading, null = tidak ada
+  const [myGroup, setMyGroup] = useState(() => {
+    try { return Number(sessionStorage.getItem(`join-group-${roomCode}`)) || null; } catch (e) { return null; }
+  });
+  const [nameInput, setNameInput] = useState("");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    const ref = db.collection("rooms").doc(roomCode);
+    const unsub = ref.onSnapshot(
+      (snap) => setRoom(snap.exists ? snap.data() : null),
+      () => setRoom(null)
+    );
+    return () => unsub();
+  }, [roomCode]);
+
+  function joinGroup(g) {
+    if (!room) return;
+    setErr(""); setBusy(true);
+    const ref = db.collection("rooms").doc(roomCode);
+    ref.set({ groups: { [g]: { name: nameInput.trim() || `Kelompok ${g}`, joinedAt: firebase.firestore.FieldValue.serverTimestamp() } } }, { merge: true })
+      .then(() => {
+        setMyGroup(g);
+        try { sessionStorage.setItem(`join-group-${roomCode}`, String(g)); } catch (e) {}
+      })
+      .catch(() => setErr("Gagal gabung, coba lagi."))
+      .finally(() => setBusy(false));
+  }
+
+  function pressBuzz() {
+    if (!room || !myGroup || busy) return;
+    const roundId = room.roundId || null;
+    if (!roundId) return;
+    setBusy(true);
+    const ref = db.collection("rooms").doc(roomCode);
+    db.runTransaction((tx) => tx.get(ref).then((snap) => {
+      const data = snap.data() || {};
+      if (data.roundId !== roundId) throw new Error("ronde-berubah");
+      if (data.buzz && data.buzz.roundId === roundId) throw new Error("sudah-ada-yang-duluan");
+      tx.set(ref, { buzz: { roundId, group: myGroup, name: (data.groups && data.groups[myGroup] && data.groups[myGroup].name) || `Kelompok ${myGroup}`, at: firebase.firestore.FieldValue.serverTimestamp() } }, { merge: true });
+    })).catch(() => { /* biarkan diam — status ditentukan lewat snapshot room.buzz */ }).finally(() => setBusy(false));
+  }
+
+  const wrap = { minHeight: "100%", background: t.bg, color: t.text, fontFamily: "'Work Sans', system-ui, sans-serif", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 24, boxSizing: "border-box", textAlign: "center" };
+
+  if (room === undefined) return <div style={wrap}><style>{fontImport}</style>Menghubungkan ke room…</div>;
+  if (room === null) return (
+    <div style={wrap}><style>{fontImport}</style>
+      <div className="sgt" style={{ fontSize: 20, fontWeight: 700, marginBottom: 8 }}>Room "{roomCode}" tidak ditemukan</div>
+      <div style={{ fontSize: 13.5, color: t.dim }}>Minta gurumu memulai permainan dulu, lalu scan ulang QR-nya.</div>
+    </div>
+  );
+
+  if (!myGroup) {
+    const taken = room.groups || {};
+    return (
+      <div style={wrap}>
+        <style>{fontImport}</style>
+        <div className="sgt" style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>Gabung ke Room {roomCode}</div>
+        <div style={{ fontSize: 13.5, color: t.dim, marginBottom: 18 }}>Pilih nomor kelompokmu</div>
+        <input value={nameInput} onChange={(e) => setNameInput(e.target.value)} placeholder="Nama kelompok (opsional)"
+          style={{ width: 240, padding: "10px 12px", borderRadius: 8, border: "none", background: t.panel, color: t.text, fontSize: 13, marginBottom: 14 }} />
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, maxWidth: 300 }}>
+          {GROUP_NAMES.map((g) => {
+            const isTaken = !!taken[g];
+            return (
+              <button key={g} disabled={isTaken || busy} onClick={() => joinGroup(g)} style={{
+                padding: "16px 0", borderRadius: 12, border: "none", cursor: isTaken ? "default" : "pointer",
+                background: isTaken ? t.panel2 : GROUP_COLORS[g - 1], color: isTaken ? t.faint : "#101B34", fontWeight: 700, fontSize: 16, opacity: isTaken ? 0.55 : 1,
+              }}>K{g}{isTaken ? " ✓" : ""}</button>
+            );
+          })}
+        </div>
+        {err && <div style={{ marginTop: 12, fontSize: 12.5, color: "#EF5B5B" }}>{err}</div>}
+      </div>
+    );
+  }
+
+  const roundId = room.roundId || null;
+  const buzz = room.buzz;
+  const won = buzz && roundId && buzz.roundId === roundId && buzz.group === myGroup;
+  const lost = buzz && roundId && buzz.roundId === roundId && buzz.group !== myGroup;
+  const canBuzz = !!roundId && !lost && !won;
+
+  let title = "Menunggu soal dari guru…";
+  let sub = "Dengarkan petunjuknya dulu.";
+  if (won) { title = "Kamu paling cepat! 🎉"; sub = "Maju ke depan, jawab pertanyaannya."; }
+  else if (lost) { title = `Kelompok ${buzz.group} duluan`; sub = "Tunggu soal berikutnya."; }
+  else if (roundId) { title = "Soal aktif — siap?"; sub = "Tekan tombol kalau sudah tahu jawabannya."; }
+
+  return (
+    <div style={wrap}>
+      <style>{fontImport}</style>
+      <div style={{ fontSize: 12.5, color: t.dim, marginBottom: 4 }}>Room {roomCode} · Kelompok {myGroup}</div>
+      <div className="sgt" style={{ fontSize: 20, fontWeight: 700, marginBottom: 4, color: won ? "#3FBFAD" : t.text }}>{title}</div>
+      <div style={{ fontSize: 13, color: t.dim, marginBottom: 24 }}>{sub}</div>
+      <button onClick={pressBuzz} disabled={!canBuzz || busy} style={{
+        width: 180, height: 180, borderRadius: "50%", border: "none", cursor: canBuzz ? "pointer" : "default",
+        background: won ? "#3FBFAD" : canBuzz ? GROUP_COLORS[myGroup - 1] : t.panel2, color: "#101B34",
+        fontWeight: 700, fontSize: 16, opacity: canBuzz || won ? 1 : 0.45,
+      }}>{won ? <span style={{ fontSize: 46, lineHeight: 1, color: "inherit" }}>✅</span> : "ANGKAT\nTANGAN"}</button>
+    </div>
+  );
+}
+
 function TebakCariKataGame({ onBack }) {
   const [theme, setTheme] = useState("light");
   const t = THEMES[theme];
@@ -207,6 +352,10 @@ function TebakCariKataGame({ onBack }) {
   const [projectorMode, setProjectorMode] = useState(false);
   const [controlsOpen, setControlsOpen] = useState(true);
   const [phonePreview, setPhonePreview] = useState(null); // group number or null
+  const [qrOpen, setQrOpen] = useState(false);
+  const [joinedGroups, setJoinedGroups] = useState({});
+  const qrBoxRef = useRef(null);
+  const lastAppliedBuzzRef = useRef(null);
 
   const babak = {
     label: SEED_BABAK[babakId].label, sub: SEED_BABAK[babakId].sub, point: SEED_BABAK[babakId].point,
@@ -280,6 +429,46 @@ function TebakCariKataGame({ onBack }) {
   const currentWord = queue.length > 0 ? babak.words.find((w) => w.id === queue[0]) : null;
   const totalWords = queue.length + Object.keys(foundMap).length;
   const foundCount = Object.keys(foundMap).length;
+
+  // Sinkronkan status ronde ke Firestore supaya siswa yang join via QR tahu kapan boleh angkat tangan
+  useEffect(() => {
+    if (stage !== "play") return;
+    const roundId = currentWord ? currentWord.id : null;
+    db.collection("rooms").doc(roomCode).set({
+      mode: "tck", materi: selectedMateri, babakId, roundId,
+      buzz: firebase.firestore.FieldValue.delete(),
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true }).catch(() => {});
+  }, [stage, roomCode, currentWord?.id, selectedMateri, babakId]);
+
+  // Dengarkan kelompok yang join & buzz dari HP siswa
+  useEffect(() => {
+    if (stage !== "play") return;
+    const ref = db.collection("rooms").doc(roomCode);
+    const unsub = ref.onSnapshot((snap) => {
+      const data = snap.data();
+      if (!data) return;
+      setJoinedGroups(data.groups || {});
+      const b = data.buzz;
+      const roundId = currentWord ? currentWord.id : null;
+      if (b && roundId && b.roundId === roundId) {
+        const key = `${roundId}:${b.group}`;
+        if (lastAppliedBuzzRef.current !== key) {
+          lastAppliedBuzzRef.current = key;
+          if (mode === "digital") buzz(b.group);
+        }
+      }
+    });
+    return () => unsub();
+  }, [stage, roomCode, currentWord?.id, mode]);
+
+  // Render QR code ke dalam modal saat dibuka
+  useEffect(() => {
+    if (qrOpen && qrBoxRef.current) {
+      qrBoxRef.current.innerHTML = "";
+      new QRCode(qrBoxRef.current, { text: getJoinUrl(roomCode), width: 200, height: 200 });
+    }
+  }, [qrOpen, roomCode]);
 
   function scheduleRetry() {
     clearRetryTimer();
@@ -460,7 +649,10 @@ function TebakCariKataGame({ onBack }) {
             const locked = !currentWord || (mode === "digital" && activeGroup !== null && !isActive) || (!eligible && activeGroup === null);
             return (
               <button key={g} className="grp-btn" onClick={() => (mode === "digital" ? buzz(g) : (eligible && setActiveGroup(g)))} disabled={locked}
-                style={{ padding: "12px 0", borderRadius: 10, border: "none", cursor: locked ? "default" : "pointer", background: isActive ? GROUP_COLORS[g - 1] : t.panel2, color: isActive ? "#0D1730" : t.text, fontWeight: 700, fontSize: 14, opacity: locked ? 0.4 : 1, boxShadow: isActive ? `0 0 0 2px ${GROUP_COLORS[g - 1]}` : "none" }}>K{g}</button>
+                style={{ position: "relative", padding: "12px 0", borderRadius: 10, border: "none", cursor: locked ? "default" : "pointer", background: isActive ? GROUP_COLORS[g - 1] : t.panel2, color: isActive ? "#0D1730" : t.text, fontWeight: 700, fontSize: 14, opacity: locked ? 0.4 : 1, boxShadow: isActive ? `0 0 0 2px ${GROUP_COLORS[g - 1]}` : "none" }}>
+                K{g}
+                {joinedGroups[g] && <span title="Sudah join lewat QR" style={{ position: "absolute", top: 4, right: 4, width: 7, height: 7, borderRadius: "50%", background: "#3FBFAD" }} />}
+              </button>
             );
           })}
         </div>
@@ -621,6 +813,16 @@ function TebakCariKataGame({ onBack }) {
       <style>{fontImport}</style>
       <audio ref={audioRef} style={{ display: "none" }} />
       {phonePreview && <PhonePreview />}
+      {qrOpen && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 60 }} onClick={() => setQrOpen(false)}>
+          <div onClick={(e) => e.stopPropagation()} style={{ background: "#FFFFFF", borderRadius: 20, padding: 28, textAlign: "center", boxShadow: "0 20px 60px rgba(0,0,0,.4)" }}>
+            <div className="sgt" style={{ fontSize: 17, fontWeight: 700, color: "#101B34", marginBottom: 4 }}>Scan untuk gabung</div>
+            <div style={{ fontSize: 13, color: "#5B6272", marginBottom: 14 }}>Kode Room: <b>{roomCode}</b> · {Object.keys(joinedGroups).length} kelompok sudah join</div>
+            <div ref={qrBoxRef} style={{ display: "flex", justifyContent: "center" }} />
+            <button onClick={() => setQrOpen(false)} style={{ marginTop: 14, background: "#F1EEE4", border: "none", color: "#101B34", padding: "8px 16px", borderRadius: 8, cursor: "pointer", fontSize: 13 }}>Tutup</button>
+          </div>
+        </div>
+      )}
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 16, marginBottom: 22 }}>
         <div>
@@ -639,6 +841,7 @@ function TebakCariKataGame({ onBack }) {
             <span style={{ fontSize: 16, lineHeight: 1, color: t.dim }}>🔳</span><span style={{ fontSize: 13, color: t.dim }}>Kode Room</span>
             <span className="sgt" style={{ fontSize: 16, fontWeight: 700, letterSpacing: 2 }}>{roomCode}</span>
           </div>
+          <button onClick={() => setQrOpen(true)} style={{ display: "flex", alignItems: "center", gap: 6, background: "#3FBFAD", border: "none", color: "#0D1730", padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>📷</span> QR Gabung</button>
           <button onClick={() => resetRound(babakId)} title="Acak ulang papan" style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: "none", color: t.text, padding: "10px 12px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>🔄</span> Papan baru</button>
           <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")} style={{ background: t.panel, border: "none", color: t.text, padding: 10, borderRadius: 10, cursor: "pointer" }}>{theme === "dark" ? <span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>☀</span> : <span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>🌙</span>}</button>
           <button onClick={() => setProjectorMode(true)} style={{ display: "flex", alignItems: "center", gap: 6, background: "#F4B740", border: "none", color: "#101B34", padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>⤢</span> Mode Proyektor</button>
@@ -889,7 +1092,9 @@ const GAMES = [
 
 function App() {
   const [activeGame, setActiveGame] = useState(null);
+  const joinCode = getJoinCodeFromUrl();
 
+  if (joinCode) return <StudentJoinScreen roomCode={joinCode} />;
   if (activeGame === "g1") return <TebakCariKataGame onBack={() => setActiveGame(null)} />;
   if (activeGame === "g2") return <BukaKotakGame onBack={() => setActiveGame(null)} />;
 
