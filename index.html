@@ -659,7 +659,7 @@ function TebakCariKataGame({ onBack }) {
   const Grid = ({ big }) => !puzzle ? (
     <div style={{ padding: 24, color: t.dim, fontSize: 14 }}>Belum ada kosakata untuk babak ini.</div>
   ) : (
-    <div style={{ display: "grid", gridTemplateColumns: `repeat(${puzzle.size}, 1fr)`, gap: big ? 4 : 3, background: t.panel, padding: 10, borderRadius: 14, maxWidth: big ? 760 : 620, margin: big ? "0 auto" : undefined }}>
+    <div style={{ display: "grid", gridTemplateColumns: `repeat(${puzzle.size}, minmax(0, 1fr))`, gap: big ? 4 : 3, background: t.panel, padding: 10, borderRadius: 14, maxWidth: big ? 760 : 620, width: "100%", margin: big ? "0 auto" : undefined, boxSizing: "border-box" }}>
       {puzzle.grid.map((row, r) => row.map((letter, c) => {
         const key = cellKey(r, c);
         const found = foundCellColor[key];
@@ -670,7 +670,7 @@ function TebakCariKataGame({ onBack }) {
               aspectRatio: "1 / 1", border: "none", borderRadius: 5, cursor: currentWord && activeGroup !== null ? "pointer" : "default",
               background: found ? found : isSelStart ? "#F4B740" : t.panel2, color: found || isSelStart ? "#101B34" : t.cellText,
               fontWeight: 700, fontSize: big ? cellFont + 3 : cellFont, display: "flex", alignItems: "center", justifyContent: "center",
-              opacity: currentWord && activeGroup === null ? 0.55 : 1,
+              opacity: currentWord && activeGroup === null ? 0.55 : 1, minWidth: 0, width: "100%", padding: 0,
             }}>{letter}</button>
         );
       }))}
@@ -918,28 +918,37 @@ function TebakCariKataGame({ onBack }) {
   /* ---------------- STAGE: PLAY — Projector view ---------------- */
   if (projectorMode) {
     return (
-      <div style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: t.bg, color: t.text, minHeight: "100%", padding: 28, boxSizing: "border-box", position: "relative" }}>
+      <div style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: t.bg, color: t.text, minHeight: "100%", boxSizing: "border-box", position: "relative", overflowX: "hidden" }}>
         <style>{fontImport}</style>
         <audio ref={audioRef} style={{ display: "none" }} />
         {phonePreview && <PhonePreview />}
-        <button onClick={() => setProjectorMode(false)} title="Keluar mode proyektor" style={{ position: "absolute", top: 16, right: 16, background: t.panel, border: "none", color: t.text, padding: 10, borderRadius: 10, cursor: "pointer", zIndex: 10 }}><span style={{ fontSize: 18, lineHeight: 1, color: 'inherit' }}>⤡</span></button>
-        <button onClick={endGame} title="Akhiri permainan" style={{ position: "absolute", top: 16, left: 16, display: "flex", alignItems: "center", gap: 6, background: "transparent", border: "1px solid #EF5B5B", color: "#EF5B5B", padding: "10px 12px", borderRadius: 10, cursor: "pointer", zIndex: 10, fontSize: 13, fontWeight: 700 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>⏹</span> Akhiri</button>
-        <div className="sgt" style={{ fontSize: 24, fontWeight: 700, textAlign: "center", marginBottom: 16 }}>Tebak &amp; Cari Kata — {babak.label}</div>
-        <div style={{ marginBottom: 18 }}><BuzzIndicator big /></div>
-        {mode === "digital" && buzzOrder.length > 1 && (
-          <div style={{ display: "flex", justifyContent: "center", gap: 10, flexWrap: "wrap", marginBottom: 18 }}>
-            {buzzOrder.map((o, i) => (
-              <div key={o.group} style={{ display: "flex", alignItems: "center", gap: 8, background: t.panel, borderRadius: 10, padding: "8px 14px" }}>
-                <span style={{ width: 22, height: 22, borderRadius: "50%", background: GROUP_COLORS[o.group - 1], color: "#101B34", fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>{i + 1}</span>
-                <span className="sgt" style={{ fontWeight: 700, fontSize: 14 }}>Kelompok {o.group}</span>
-              </div>
-            ))}
+        <button onClick={() => setProjectorMode(false)} title="Keluar mode proyektor" style={{ position: "fixed", top: 16, right: 16, background: t.panel, border: "none", color: t.text, padding: 10, borderRadius: 10, cursor: "pointer", zIndex: 30 }}><span style={{ fontSize: 18, lineHeight: 1, color: 'inherit' }}>⤡</span></button>
+        <button onClick={endGame} title="Akhiri permainan" style={{ position: "fixed", top: 16, left: 16, display: "flex", alignItems: "center", gap: 6, background: t.bg, border: "1px solid #EF5B5B", color: "#EF5B5B", padding: "10px 12px", borderRadius: 10, cursor: "pointer", zIndex: 30, fontSize: 13, fontWeight: 700 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>⏹</span> Akhiri</button>
+
+        <div style={{ maxWidth: controlsOpen ? "calc(100% - 356px)" : 900, margin: "0 auto", padding: "28px 28px 100px", boxSizing: "border-box", transition: "max-width .2s ease" }}>
+          <div className="sgt" style={{ fontSize: 24, fontWeight: 700, textAlign: "center", marginBottom: 16 }}>Tebak &amp; Cari Kata — {babak.label}</div>
+          <div style={{ marginBottom: 18 }}><BuzzIndicator big /></div>
+          {mode === "digital" && buzzOrder.length > 1 && (
+            <div style={{ display: "flex", justifyContent: "center", gap: 10, flexWrap: "wrap", marginBottom: 18 }}>
+              {buzzOrder.map((o, i) => (
+                <div key={o.group} style={{ display: "flex", alignItems: "center", gap: 8, background: t.panel, borderRadius: 10, padding: "8px 14px" }}>
+                  <span style={{ width: 22, height: 22, borderRadius: "50%", background: GROUP_COLORS[o.group - 1], color: "#101B34", fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>{i + 1}</span>
+                  <span className="sgt" style={{ fontWeight: 700, fontSize: 14 }}>Kelompok {o.group}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          <div style={{ marginBottom: 18 }}><Grid big /></div>
+          <Scoreboard big />
+        </div>
+
+        <button onClick={() => setControlsOpen((o) => !o)} style={{ position: "fixed", bottom: 16, right: 16, display: "flex", alignItems: "center", gap: 6, background: "#F4B740", color: "#101B34", border: "none", borderRadius: 10, padding: "10px 14px", cursor: "pointer", zIndex: 30, fontWeight: 700, fontSize: 13, boxShadow: "0 4px 16px rgba(0,0,0,.25)" }}><span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>⚙</span> {controlsOpen ? "Sembunyikan Panel" : "Panel Guru"}</button>
+        {controlsOpen && (
+          <div style={{ position: "fixed", top: 0, right: 0, bottom: 0, width: 336, padding: "16px 16px 76px", overflowY: "auto", background: t.modalBg, boxShadow: "-8px 0 30px rgba(0,0,0,.3)", zIndex: 25, boxSizing: "border-box" }}>
+            <div style={{ fontSize: 12, color: t.faint, marginBottom: 10, textAlign: "center" }}>Panel ini hanya guru yang lihat</div>
+            <ControlPanel />
           </div>
         )}
-        <div style={{ marginBottom: 18 }}><Grid big /></div>
-        <Scoreboard big />
-        <button onClick={() => setControlsOpen((o) => !o)} style={{ position: "fixed", bottom: 16, right: 16, display: "flex", alignItems: "center", gap: 6, background: t.panel, color: t.text, border: "none", borderRadius: 10, padding: "10px 14px", cursor: "pointer", zIndex: 20 }}><span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>⚙</span> Panel Guru</button>
-        {controlsOpen && <div style={{ position: "fixed", bottom: 64, right: 16, width: 320, maxHeight: "70vh", overflowY: "auto", background: t.modalBg, padding: 14, borderRadius: 14, boxShadow: "0 8px 30px rgba(0,0,0,.35)", zIndex: 20 }}><ControlPanel /></div>}
       </div>
     );
   }
