@@ -269,9 +269,11 @@ function StudentJoinScreen({ roomCode }) {
     db.runTransaction((tx) => tx.get(ref).then((snap) => {
       const data = snap.data() || {};
       if (data.roundId !== roundId) throw new Error("ronde-berubah");
-      if (data.buzz && data.buzz.roundId === roundId) throw new Error("sudah-ada-yang-duluan");
-      tx.set(ref, { buzz: { roundId, group: myGroup, name: (data.groups && data.groups[myGroup] && data.groups[myGroup].name) || `Kelompok ${myGroup}`, at: firebase.firestore.FieldValue.serverTimestamp() } }, { merge: true });
-    })).catch(() => { /* biarkan diam — status ditentukan lewat snapshot room.buzz */ }).finally(() => setBusy(false));
+      const order = Array.isArray(data.buzzOrder) ? data.buzzOrder : [];
+      if (order.some((o) => o.group === myGroup)) return; // sudah pernah angkat tangan di soal ini
+      const name = (data.groups && data.groups[myGroup] && data.groups[myGroup].name) || `Kelompok ${myGroup}`;
+      tx.set(ref, { buzzOrder: [...order, { group: myGroup, name }] }, { merge: true });
+    })).catch(() => { /* biarkan diam — status ditentukan lewat snapshot room.buzzOrder */ }).finally(() => setBusy(false));
   }
 
   const wrap = { minHeight: "100%", background: t.bg, color: t.text, fontFamily: "'Work Sans', system-ui, sans-serif", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 24, boxSizing: "border-box", textAlign: "center" };
@@ -310,28 +312,28 @@ function StudentJoinScreen({ roomCode }) {
   }
 
   const roundId = room.roundId || null;
-  const buzz = room.buzz;
-  const won = buzz && roundId && buzz.roundId === roundId && buzz.group === myGroup;
-  const lost = buzz && roundId && buzz.roundId === roundId && buzz.group !== myGroup;
-  const canBuzz = !!roundId && !lost && !won;
+  const order = Array.isArray(room.buzzOrder) ? room.buzzOrder : [];
+  const myIndex = order.findIndex((o) => o.group === myGroup);
+  const myPosition = myIndex >= 0 ? myIndex + 1 : null;
+  const canBuzz = !!roundId && myPosition === null;
 
   let title = "Menunggu soal dari guru…";
   let sub = "Dengarkan petunjuknya dulu.";
-  if (won) { title = "Kamu paling cepat! 🎉"; sub = "Maju ke depan, jawab pertanyaannya."; }
-  else if (lost) { title = `Kelompok ${buzz.group} duluan`; sub = "Tunggu soal berikutnya."; }
+  if (myPosition === 1) { title = "Kamu paling cepat! 🎉"; sub = "Maju ke depan, jawab pertanyaannya."; }
+  else if (myPosition) { title = `Kamu urutan ke-${myPosition}`; sub = "Tunggu giliranmu kalau yang di depan salah."; }
   else if (roundId) { title = "Soal aktif — siap?"; sub = "Tekan tombol kalau sudah tahu jawabannya."; }
 
   return (
     <div style={wrap}>
       <style>{fontImport}</style>
       <div style={{ fontSize: 12.5, color: t.dim, marginBottom: 4 }}>Room {roomCode} · Kelompok {myGroup}</div>
-      <div className="sgt" style={{ fontSize: 20, fontWeight: 700, marginBottom: 4, color: won ? "#3FBFAD" : t.text }}>{title}</div>
+      <div className="sgt" style={{ fontSize: 20, fontWeight: 700, marginBottom: 4, color: myPosition === 1 ? "#3FBFAD" : t.text }}>{title}</div>
       <div style={{ fontSize: 13, color: t.dim, marginBottom: 24 }}>{sub}</div>
       <button onClick={pressBuzz} disabled={!canBuzz || busy} style={{
         width: 180, height: 180, borderRadius: "50%", border: "none", cursor: canBuzz ? "pointer" : "default",
-        background: won ? "#3FBFAD" : canBuzz ? GROUP_COLORS[myGroup - 1] : t.panel2, color: "#101B34",
-        fontWeight: 700, fontSize: 16, opacity: canBuzz || won ? 1 : 0.45,
-      }}>{won ? <span style={{ fontSize: 46, lineHeight: 1, color: "inherit" }}>✅</span> : "ANGKAT\nTANGAN"}</button>
+        background: myPosition === 1 ? "#3FBFAD" : canBuzz ? GROUP_COLORS[myGroup - 1] : t.panel2, color: "#101B34",
+        fontWeight: 700, fontSize: 16, opacity: canBuzz || myPosition ? 1 : 0.45,
+      }}>{myPosition === 1 ? <span style={{ fontSize: 46, lineHeight: 1, color: "inherit" }}>✅</span> : myPosition ? `#${myPosition}` : "ANGKAT\nTANGAN"}</button>
     </div>
   );
 }
@@ -348,14 +350,16 @@ function TebakCariKataGame({ onBack }) {
   const [mode, setMode] = useState("digital");
   const [audioMode, setAudioMode] = useState("guru");
   const [scores, setScores] = useState({ 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 });
-  const [roomCode] = useState(makeRoomCode());
+  const [roomCode, setRoomCode] = useState(makeRoomCode());
   const [projectorMode, setProjectorMode] = useState(false);
   const [controlsOpen, setControlsOpen] = useState(true);
   const [phonePreview, setPhonePreview] = useState(null); // group number or null
   const [qrOpen, setQrOpen] = useState(false);
   const [joinedGroups, setJoinedGroups] = useState({});
   const qrBoxRef = useRef(null);
-  const lastAppliedBuzzRef = useRef(null);
+  const lastAppliedRoundRef = useRef(null);
+  const appliedGroupsRef = useRef(new Set());
+  const [buzzOrder, setBuzzOrder] = useState([]); // urutan kelompok yang angkat tangan di soal ini: [{group}]
 
   const babak = {
     label: SEED_BABAK[babakId].label, sub: SEED_BABAK[babakId].sub, point: SEED_BABAK[babakId].point,
@@ -389,8 +393,49 @@ function TebakCariKataGame({ onBack }) {
         if (parsed.theme) setTheme(parsed.theme);
       }
     } catch (e) { /* belum ada data tersimpan, atau data korup */ }
+    // Muat progres permainan yang sedang berjalan (kalau ada), supaya refresh tidak mengulang dari awal
+    try {
+      const rawP = localStorage.getItem("tck-progress");
+      if (rawP) {
+        const p = JSON.parse(rawP);
+        if (p.stage) setStage(p.stage);
+        if (p.babakId) setBabakId(p.babakId);
+        if (p.mode) setMode(p.mode);
+        if (p.audioMode) setAudioMode(p.audioMode);
+        if (p.scores) setScores(p.scores);
+        if (p.roomCode) setRoomCode(p.roomCode);
+        if (p.queue) setQueue(p.queue);
+        if (p.foundMap) setFoundMap(p.foundMap);
+        if (p.triedSet) setTriedSet(new Set(p.triedSet));
+        if (p.puzzle) setPuzzle(p.puzzle);
+      }
+    } catch (e) { /* belum ada progres tersimpan, atau data korup */ }
     setLoaded(true);
   }, []);
+
+  // Simpan progres permainan setiap kali berubah, supaya refresh browser tidak mereset ke awal
+  useEffect(() => {
+    if (!loaded) return;
+    const tm = setTimeout(() => {
+      try {
+        localStorage.setItem("tck-progress", JSON.stringify({
+          stage, babakId, mode, audioMode, scores, roomCode, queue, foundMap,
+          triedSet: Array.from(triedSet), puzzle,
+        }));
+      } catch (e) { /* kemungkinan kuota localStorage penuh */ }
+    }, 500);
+    return () => clearTimeout(tm);
+  }, [stage, babakId, mode, audioMode, scores, roomCode, queue, foundMap, triedSet, puzzle, loaded]);
+
+  function endGame() {
+    if (!window.confirm("Akhiri permainan ini? Skor & progres babak yang sedang berjalan akan dihapus.")) return;
+    try { localStorage.removeItem("tck-progress"); } catch (e) {}
+    db.collection("rooms").doc(roomCode).delete().catch(() => {});
+    setScores({ 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 });
+    setFoundMap({}); setQueue([]); setTriedSet(new Set()); setPuzzle(null);
+    setStage("setup"); setProjectorMode(false);
+    onBack();
+  }
 
   // Simpan editan setiap kali berubah (setelah data awal selesai dimuat)
   useEffect(() => {
@@ -409,6 +454,7 @@ function TebakCariKataGame({ onBack }) {
     setQueue(w.filter((x) => x.letters.trim()).map((x) => x.id));
     setFoundMap({}); setClueRevealed(false); setActiveGroup(null); setSelStart(null);
     setTriedSet(new Set()); setOpenToAll(false); clearRetryTimer();
+    setBuzzOrder([]);
     if (audioRef.current) audioRef.current.pause();
     setSpeaking(false);
   }
@@ -436,12 +482,13 @@ function TebakCariKataGame({ onBack }) {
     const roundId = currentWord ? currentWord.id : null;
     db.collection("rooms").doc(roomCode).set({
       mode: "tck", materi: selectedMateri, babakId, roundId,
+      buzzOrder: [],
       buzz: firebase.firestore.FieldValue.delete(),
       updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
     }, { merge: true }).catch(() => {});
   }, [stage, roomCode, currentWord?.id, selectedMateri, babakId]);
 
-  // Dengarkan kelompok yang join & buzz dari HP siswa
+  // Dengarkan kelompok yang join & angkat tangan dari HP siswa, tambahkan ke urutan lokal
   useEffect(() => {
     if (stage !== "play") return;
     const ref = db.collection("rooms").doc(roomCode);
@@ -449,18 +496,21 @@ function TebakCariKataGame({ onBack }) {
       const data = snap.data();
       if (!data) return;
       setJoinedGroups(data.groups || {});
-      const b = data.buzz;
       const roundId = currentWord ? currentWord.id : null;
-      if (b && roundId && b.roundId === roundId) {
-        const key = `${roundId}:${b.group}`;
-        if (lastAppliedBuzzRef.current !== key) {
-          lastAppliedBuzzRef.current = key;
-          if (mode === "digital") buzz(b.group);
-        }
+      if (!roundId || data.roundId !== roundId || !Array.isArray(data.buzzOrder)) return;
+      if (lastAppliedRoundRef.current !== roundId) {
+        lastAppliedRoundRef.current = roundId;
+        appliedGroupsRef.current = new Set();
       }
+      data.buzzOrder.forEach((entry) => {
+        if (!appliedGroupsRef.current.has(entry.group)) {
+          appliedGroupsRef.current.add(entry.group);
+          buzz(entry.group);
+        }
+      });
     });
     return () => unsub();
-  }, [stage, roomCode, currentWord?.id, mode]);
+  }, [stage, roomCode, currentWord?.id]);
 
   // Render QR code ke dalam modal saat dibuka
   useEffect(() => {
@@ -493,11 +543,14 @@ function TebakCariKataGame({ onBack }) {
 
   function buzz(group) {
     if (!currentWord || !isEligible(group)) return;
-    if (mode === "digital" && activeGroup !== null) return;
-    clearRetryTimer();
-    if (audioRef.current) audioRef.current.pause();
-    setSpeaking(false);
-    setActiveGroup(group);
+    if (buzzOrder.some((o) => o.group === group)) return; // sudah pernah angkat tangan di soal ini
+    setBuzzOrder((order) => [...order, { group }]);
+    if (activeGroup === null) {
+      clearRetryTimer();
+      if (audioRef.current) audioRef.current.pause();
+      setSpeaking(false);
+      setActiveGroup(group);
+    }
   }
 
   function releaseTurn() { setActiveGroup(null); setSelStart(null); }
@@ -506,6 +559,7 @@ function TebakCariKataGame({ onBack }) {
     setQueue((q) => q.slice(1));
     setClueRevealed(false); setTriedSet(new Set()); setOpenToAll(false);
     clearRetryTimer(); releaseTurn(); setSpeaking(false);
+    setBuzzOrder([]);
     if (audioRef.current) audioRef.current.pause();
   }
   function skipWord() { if (currentWord) nextQuestion(); }
@@ -528,9 +582,20 @@ function TebakCariKataGame({ onBack }) {
       setFlash({ type: "correct", group: activeGroup }); setTimeout(() => setFlash(null), 1400);
       nextQuestion();
     } else {
-      setTriedSet((prev) => new Set(prev).add(activeGroup));
-      setFlash({ type: "wrong", group: activeGroup }); setTimeout(() => setFlash(null), 900);
-      releaseTurn(); scheduleRetry();
+      const wrongGroup = activeGroup;
+      const updatedTried = new Set(triedSet); updatedTried.add(wrongGroup);
+      setTriedSet(updatedTried);
+      setFlash({ type: "wrong", group: wrongGroup }); setTimeout(() => setFlash(null), 900);
+      // kalau ada kelompok lain yang sudah antre di urutan angkat tangan, langsung lanjut ke giliran mereka
+      const next = buzzOrder.find((o) => o.group !== wrongGroup && !updatedTried.has(o.group));
+      if (next) {
+        clearRetryTimer();
+        if (audioRef.current) audioRef.current.pause();
+        setSpeaking(false);
+        setActiveGroup(next.group);
+      } else {
+        releaseTurn(); scheduleRetry();
+      }
     }
     setSelStart(null);
   }
@@ -646,16 +711,30 @@ function TebakCariKataGame({ onBack }) {
           {GROUP_NAMES.map((g) => {
             const isActive = activeGroup === g;
             const eligible = isEligible(g);
-            const locked = !currentWord || (mode === "digital" && activeGroup !== null && !isActive) || (!eligible && activeGroup === null);
+            const buzzPos = buzzOrder.findIndex((o) => o.group === g);
+            const alreadyBuzzed = buzzPos >= 0;
+            const locked = !currentWord || !eligible || (mode === "digital" ? alreadyBuzzed : (activeGroup !== null && !isActive));
             return (
               <button key={g} className="grp-btn" onClick={() => (mode === "digital" ? buzz(g) : (eligible && setActiveGroup(g)))} disabled={locked}
-                style={{ position: "relative", padding: "12px 0", borderRadius: 10, border: "none", cursor: locked ? "default" : "pointer", background: isActive ? GROUP_COLORS[g - 1] : t.panel2, color: isActive ? "#0D1730" : t.text, fontWeight: 700, fontSize: 14, opacity: locked ? 0.4 : 1, boxShadow: isActive ? `0 0 0 2px ${GROUP_COLORS[g - 1]}` : "none" }}>
+                style={{ position: "relative", padding: "12px 0", borderRadius: 10, border: "none", cursor: locked ? "default" : "pointer", background: isActive ? GROUP_COLORS[g - 1] : t.panel2, color: isActive ? "#0D1730" : t.text, fontWeight: 700, fontSize: 14, opacity: locked && !isActive ? 0.4 : 1, boxShadow: isActive ? `0 0 0 2px ${GROUP_COLORS[g - 1]}` : "none" }}>
                 K{g}
                 {joinedGroups[g] && <span title="Sudah join lewat QR" style={{ position: "absolute", top: 4, right: 4, width: 7, height: 7, borderRadius: "50%", background: "#3FBFAD" }} />}
+                {mode === "digital" && alreadyBuzzed && <span style={{ position: "absolute", top: -6, left: -6, width: 18, height: 18, borderRadius: "50%", background: "#101B34", color: "#F4B740", fontSize: 10, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>{buzzPos + 1}</span>}
               </button>
             );
           })}
         </div>
+        {mode === "digital" && buzzOrder.length > 0 && (
+          <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 4 }}>
+            <div style={{ fontSize: 11.5, color: t.faint }}>Urutan angkat tangan:</div>
+            {buzzOrder.map((o, i) => (
+              <div key={o.group} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+                <span style={{ width: 18, height: 18, borderRadius: "50%", background: GROUP_COLORS[o.group - 1], color: "#101B34", fontSize: 10, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>{i + 1}</span>
+                <span style={{ color: t.text }}>Kelompok {o.group}{o.group === activeGroup ? " — sedang menjawab" : ""}</span>
+              </div>
+            ))}
+          </div>
+        )}
         {activeGroup && <div style={{ marginTop: 10, fontSize: 13, color: t.dim }}>Kelompok {activeGroup} pegang giliran — klik huruf awal &amp; akhir kata di papan.</div>}
         <div style={{ marginTop: 10, fontSize: 11.5, color: t.faint }}>{babakId === 1 ? "Babak 1: kelompok yang sudah mencoba tidak bisa menjawab lagi untuk soal ini." : "Kelompok yang sudah mencoba boleh menjawab lagi kalau tidak ada kelompok lain yang mengangkat tangan."}</div>
         {currentWord && <button onClick={skipWord} style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 6, background: "transparent", border: `1px solid ${t.panel2}`, color: t.dim, borderRadius: 8, padding: "8px 12px", fontSize: 13, cursor: "pointer", width: "100%", justifyContent: "center" }}><span style={{ fontSize: 14, lineHeight: 1, color: 'inherit' }}>⏭</span> Lewati soal ini</button>}
@@ -674,14 +753,16 @@ function TebakCariKataGame({ onBack }) {
     const g = phonePreview;
     const eligible = isEligible(g);
     const won = activeGroup === g;
-    const lost = activeGroup !== null && !won;
+    const myPos = buzzOrder.findIndex((o) => o.group === g);
+    const alreadyBuzzed = myPos >= 0;
+    const lost = alreadyBuzzed && !won;
     let title = "Menunggu ronde berikutnya…";
     let sub = "Dengarkan petunjuk dari gurumu.";
     let btnDisabled = true;
     if (currentWord) {
       if (mode === "manual") { title = "Angkat tanganmu langsung"; sub = "Guru menilai kelompok mana yang paling cepat."; }
       else if (won) { title = "Giliranmu!"; sub = "Maju ke depan, tunjuk & bacakan katanya."; }
-      else if (lost) { title = `Kelompok ${activeGroup} duluan`; sub = "Tunggu ronde berikutnya."; }
+      else if (lost) { title = `Kamu urutan ke-${myPos + 1}`; sub = "Tunggu giliranmu kalau yang di depan salah."; }
       else if (!eligible) { title = "Kelompokmu sudah mencoba"; sub = "Tunggu kelompok lain dulu."; }
       else { title = "Ronde berjalan"; sub = "Sudah tahu jawabannya? Angkat tangan sekarang!"; btnDisabled = false; }
     }
@@ -700,12 +781,12 @@ function TebakCariKataGame({ onBack }) {
             <div className="sgt" style={{ fontSize: 18, fontWeight: 700, textAlign: "center", color: won ? GROUP_COLORS[g - 1] : t.text }}>{title}</div>
             <div style={{ fontSize: 12.5, color: t.dim, textAlign: "center" }}>{sub}</div>
             {mode === "digital" && (
-              <button disabled={btnDisabled} onClick={() => buzz(g)} style={{
-                width: 140, height: 140, borderRadius: "50%", border: "none", cursor: btnDisabled ? "default" : "pointer",
-                background: won ? GROUP_COLORS[g - 1] : btnDisabled ? t.panel2 : GROUP_COLORS[g - 1],
-                color: "#101B34", fontWeight: 700, fontSize: 15, opacity: btnDisabled && !won ? 0.35 : 1,
+              <button disabled={btnDisabled || alreadyBuzzed} onClick={() => buzz(g)} style={{
+                width: 140, height: 140, borderRadius: "50%", border: "none", cursor: (btnDisabled || alreadyBuzzed) ? "default" : "pointer",
+                background: won ? GROUP_COLORS[g - 1] : (btnDisabled || alreadyBuzzed) ? t.panel2 : GROUP_COLORS[g - 1],
+                color: "#101B34", fontWeight: 700, fontSize: 15, opacity: (btnDisabled || alreadyBuzzed) && !won ? 0.35 : 1,
                 display: "flex", alignItems: "center", justifyContent: "center", textAlign: "center",
-              }}>{won ? <span style={{ fontSize: 40, lineHeight: 1, color: 'inherit' }}>✅</span> : "ANGKAT\nTANGAN"}</button>
+              }}>{won ? <span style={{ fontSize: 40, lineHeight: 1, color: 'inherit' }}>✅</span> : alreadyBuzzed ? `#${myPos + 1}` : "ANGKAT\nTANGAN"}</button>
             )}
           </div>
           <div style={{ marginTop: 12 }}><Scoreboard compact highlight={g} /></div>
@@ -797,8 +878,19 @@ function TebakCariKataGame({ onBack }) {
         <audio ref={audioRef} style={{ display: "none" }} />
         {phonePreview && <PhonePreview />}
         <button onClick={() => setProjectorMode(false)} title="Keluar mode proyektor" style={{ position: "absolute", top: 16, right: 16, background: t.panel, border: "none", color: t.text, padding: 10, borderRadius: 10, cursor: "pointer", zIndex: 10 }}><span style={{ fontSize: 18, lineHeight: 1, color: 'inherit' }}>⤡</span></button>
+        <button onClick={endGame} title="Akhiri permainan" style={{ position: "absolute", top: 16, left: 16, display: "flex", alignItems: "center", gap: 6, background: "transparent", border: "1px solid #EF5B5B", color: "#EF5B5B", padding: "10px 12px", borderRadius: 10, cursor: "pointer", zIndex: 10, fontSize: 13, fontWeight: 700 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>⏹</span> Akhiri</button>
         <div className="sgt" style={{ fontSize: 24, fontWeight: 700, textAlign: "center", marginBottom: 16 }}>Tebak &amp; Cari Kata — {babak.label}</div>
         <div style={{ marginBottom: 18 }}><BuzzIndicator big /></div>
+        {mode === "digital" && buzzOrder.length > 1 && (
+          <div style={{ display: "flex", justifyContent: "center", gap: 10, flexWrap: "wrap", marginBottom: 18 }}>
+            {buzzOrder.map((o, i) => (
+              <div key={o.group} style={{ display: "flex", alignItems: "center", gap: 8, background: t.panel, borderRadius: 10, padding: "8px 14px" }}>
+                <span style={{ width: 22, height: 22, borderRadius: "50%", background: GROUP_COLORS[o.group - 1], color: "#101B34", fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>{i + 1}</span>
+                <span className="sgt" style={{ fontWeight: 700, fontSize: 14 }}>Kelompok {o.group}</span>
+              </div>
+            ))}
+          </div>
+        )}
         <div style={{ marginBottom: 18 }}><Grid big /></div>
         <Scoreboard big />
         <button onClick={() => setControlsOpen((o) => !o)} style={{ position: "fixed", bottom: 16, right: 16, display: "flex", alignItems: "center", gap: 6, background: t.panel, color: t.text, border: "none", borderRadius: 10, padding: "10px 14px", cursor: "pointer", zIndex: 20 }}><span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>⚙</span> Panel Guru</button>
@@ -845,6 +937,7 @@ function TebakCariKataGame({ onBack }) {
           <button onClick={() => resetRound(babakId)} title="Acak ulang papan" style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: "none", color: t.text, padding: "10px 12px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>🔄</span> Papan baru</button>
           <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")} style={{ background: t.panel, border: "none", color: t.text, padding: 10, borderRadius: 10, cursor: "pointer" }}>{theme === "dark" ? <span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>☀</span> : <span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>🌙</span>}</button>
           <button onClick={() => setProjectorMode(true)} style={{ display: "flex", alignItems: "center", gap: 6, background: "#F4B740", border: "none", color: "#101B34", padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>⤢</span> Mode Proyektor</button>
+          <button onClick={endGame} style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: "1px solid #EF5B5B", color: "#EF5B5B", padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>⏹</span> Akhiri Permainan</button>
         </div>
       </div>
 
@@ -954,6 +1047,14 @@ function BukaKotakGame({ onBack }) {
         if (parsed.theme) setTheme(parsed.theme);
       }
     } catch (e) { /* belum ada data tersimpan, atau data korup */ }
+    try {
+      const rawP = localStorage.getItem("bk-progress");
+      if (rawP) {
+        const p = JSON.parse(rawP);
+        if (p.stage) setStage(p.stage);
+        if (p.opened) setOpened(p.opened);
+      }
+    } catch (e) { /* belum ada progres tersimpan, atau data korup */ }
     setLoaded(true);
   }, []);
   useEffect(() => {
@@ -965,6 +1066,22 @@ function BukaKotakGame({ onBack }) {
     }, 500);
     return () => clearTimeout(tm);
   }, [dataByMateri, selectedMateri, theme, loaded]);
+  useEffect(() => {
+    if (!loaded) return;
+    const tm = setTimeout(() => {
+      try {
+        localStorage.setItem("bk-progress", JSON.stringify({ stage, opened }));
+      } catch (e) { /* kemungkinan kuota localStorage penuh */ }
+    }, 500);
+    return () => clearTimeout(tm);
+  }, [stage, opened, loaded]);
+
+  function endGame() {
+    if (!window.confirm("Akhiri permainan ini? Progres kotak yang sudah dibuka akan dihapus.")) return;
+    try { localStorage.removeItem("bk-progress"); } catch (e) {}
+    setOpened({}); setActiveBox(null); setStage("setup");
+    onBack();
+  }
 
   const items = dataByMateri[selectedMateri] || [];
   const canStart = items.some((it) => it.text.trim());
@@ -1060,6 +1177,7 @@ function BukaKotakGame({ onBack }) {
           <button onClick={onBack} style={{ background: t.panel, border: "none", color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}>← Pilih Game</button>
           <button onClick={() => setStage("setup")} style={{ background: t.panel, border: "none", color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}>← Persiapan</button>
           <button onClick={resetBoard} style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: "none", color: t.text, padding: "10px 12px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>🔄</span> Reset papan</button>
+          <button onClick={endGame} style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: "1px solid #EF5B5B", color: "#EF5B5B", padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>⏹</span> Akhiri Permainan</button>
           <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")} style={{ background: t.panel, border: "none", color: t.text, padding: 10, borderRadius: 10, cursor: "pointer" }}>{theme === "dark" ? <span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>☀</span> : <span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>🌙</span>}</button>
         </div>
       </div>
@@ -1091,8 +1209,17 @@ const GAMES = [
 ];
 
 function App() {
-  const [activeGame, setActiveGame] = useState(null);
+  const [activeGame, setActiveGame] = useState(() => {
+    try { return localStorage.getItem("app-active-game") || null; } catch (e) { return null; }
+  });
   const joinCode = getJoinCodeFromUrl();
+
+  useEffect(() => {
+    try {
+      if (activeGame) localStorage.setItem("app-active-game", activeGame);
+      else localStorage.removeItem("app-active-game");
+    } catch (e) {}
+  }, [activeGame]);
 
   if (joinCode) return <StudentJoinScreen roomCode={joinCode} />;
   if (activeGame === "g1") return <TebakCariKataGame onBack={() => setActiveGame(null)} />;
