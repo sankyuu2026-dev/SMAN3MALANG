@@ -482,6 +482,33 @@ function StudentJoinScreen({ roomCode }) {
         background: isMyTurn ? "#3FBFAD" : canBuzz ? GROUP_COLORS[myGroup - 1] : t.panel2, color: "#101B34",
         fontWeight: 700, fontSize: 16, opacity: canBuzz || myPosition ? 1 : 0.45,
       }}>{isMyTurn ? <span style={{ fontSize: 46, lineHeight: 1, color: "inherit" }}>✅</span> : myPosition ? `#${myPosition}` : "ANGKAT\nTANGAN"}</button>
+
+      {/* FIX: dulu papan skor cuma muncul di "Pratinjau HP Siswa" milik guru (karena modal itu
+          dirender di komponen guru yang punya akses langsung ke state skor). Di HP asli, skor
+          diambil dari room.scores yang sekarang disiarkan lewat Firestore. */}
+      <div style={{ width: "100%", maxWidth: 280, marginTop: 28 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: t.dim, marginBottom: 8, justifyContent: "center" }}>🏆 Papan Skor</div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {(() => {
+            const scores = room.scores || {};
+            const leaderScore = Math.max(0, ...GROUP_NAMES.map((g) => scores[g] || 0));
+            const sorted = [...GROUP_NAMES].sort((a, b) => (scores[b] || 0) - (scores[a] || 0));
+            return sorted.map((g) => (
+              <div key={g} style={{
+                display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
+                background: g === myGroup ? GROUP_COLORS[g - 1] : t.panel2, borderRadius: 10, padding: "8px 12px",
+              }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ width: 10, height: 10, borderRadius: 4, background: GROUP_COLORS[g - 1] }} />
+                  <span style={{ fontSize: 13, fontWeight: 600, color: g === myGroup ? "#101B34" : t.text }}>{(room.groups && room.groups[g] && room.groups[g].name) || `Kelompok ${g}`}</span>
+                  {(scores[g] || 0) === leaderScore && leaderScore > 0 && <span style={{ fontSize: 14, lineHeight: 1 }}>👑</span>}
+                </div>
+                <span className="sgt" style={{ fontWeight: 700, fontSize: 14, color: g === myGroup ? "#101B34" : t.text }}>{scores[g] || 0}</span>
+              </div>
+            ));
+          })()}
+        </div>
+      </div>
     </div>
   );
 }
@@ -679,6 +706,9 @@ function TebakCariKataGame({ onBack, teacher }) {
   const buzzOrderRef = useRef([]);
   const triedSetRef = useRef(new Set());
   const openToAllRef = useRef(false);
+  // Snapshot progres tiap babak (queue, foundMap, dst) supaya tidak hilang saat guru
+  // gonta-ganti babak dalam satu permainan yang sama — lihat switchBabak().
+  const babakSnapshotsRef = useRef({});
   const clueRevealedRef = useRef(false);
 
   const babak = {
@@ -780,6 +810,7 @@ function TebakCariKataGame({ onBack, teacher }) {
     db.collection("rooms").doc(roomCode).delete().catch(() => {});
     setScores({ 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 });
     setFoundMap({}); setQueue([]); setTriedSet(new Set()); setPuzzle(null);
+    babakSnapshotsRef.current = {};
     setStage("setup"); setProjectorMode(false);
     onBack();
   }
@@ -835,7 +866,14 @@ function TebakCariKataGame({ onBack, teacher }) {
     const cached = puzzleByBabak[id];
     const p = (cached && cached.signature === sig) ? cached.puzzle : buildPuzzle(w);
     setPuzzle(p);
-    setQueue(w.filter((x) => x.letters.trim()).map((x) => x.id));
+    // FIX: urutan soal dulu selalu ikut urutan input di Persiapan (jadi kelihatan "urut terus").
+    // Sekarang urutannya diacak (Fisher–Yates) setiap kali babak dimulai/direset.
+    const ids = w.filter((x) => x.letters.trim()).map((x) => x.id);
+    for (let i = ids.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [ids[i], ids[j]] = [ids[j], ids[i]];
+    }
+    setQueue(ids);
     setFoundMap({}); setClueRevealed(false); setActiveGroup(null); setSelStart(null);
     setTriedSet(new Set()); setOpenToAll(false); clearRetryTimer();
     setBuzzOrder([]);
@@ -844,11 +882,46 @@ function TebakCariKataGame({ onBack, teacher }) {
     setSpeaking(false);
   }
 
-  function switchBabak(id) { setBabakId(id); resetRound(id); }
+  // FIX: sebelumnya pindah babak SELALU memanggil resetRound — jadi kalau guru sudah
+  // menyelesaikan semua kata di Babak 2, lalu pindah ke Babak 3, lalu balik lagi ke Babak 2,
+  // seluruh progresnya (kata yang sudah ketemu) hilang & papan diacak ulang dari nol, padahal
+  // skornya sendiri tetap (skor memang terpisah, tersimpan per kelompok bukan per babak).
+  // Sekarang progres tiap babak yang sedang ditinggalkan disimpan dulu (snapshot), dan kalau
+  // baliknya lagi ke babak yang sudah pernah dimainkan, progresnya dipulihkan persis seperti
+  // saat ditinggalkan — bukan dibangun ulang — sampai permainan ini diakhiri.
+  function switchBabak(id) {
+    if (id === babakId) return;
+    babakSnapshotsRef.current[babakId] = {
+      queue, foundMap, triedSet: Array.from(triedSet), puzzle, clueRevealed, activeGroup, buzzOrder, selStart, openToAll,
+    };
+    setBabakId(id);
+    const saved = babakSnapshotsRef.current[id];
+    if (saved) {
+      setPuzzle(saved.puzzle);
+      setQueue(saved.queue);
+      setFoundMap(saved.foundMap);
+      setTriedSet(new Set(saved.triedSet));
+      setClueRevealed(saved.clueRevealed);
+      setActiveGroup(saved.activeGroup);
+      setSelStart(saved.selStart);
+      setBuzzOrder(saved.buzzOrder);
+      setOpenToAll(saved.openToAll);
+      activeGroupRef.current = saved.activeGroup;
+      buzzOrderRef.current = saved.buzzOrder;
+      triedSetRef.current = new Set(saved.triedSet);
+      openToAllRef.current = saved.openToAll;
+      clearRetryTimer();
+      if (audioRef.current) audioRef.current.pause();
+      setSpeaking(false);
+    } else {
+      resetRound(id);
+    }
+  }
   async function startGame() {
     // Pastikan roomCode belum dipakai kelas lain sebelum dipakai untuk buzzer/QR join.
     const uniqueCode = await ensureUniqueRoomCode(roomCode);
     if (uniqueCode !== roomCode) setRoomCode(uniqueCode);
+    babakSnapshotsRef.current = {};
     resetRound(babakId);
     setStage("play");
   }
@@ -916,6 +989,7 @@ function TebakCariKataGame({ onBack, teacher }) {
   }
 
   function resumeSession(item) {
+    babakSnapshotsRef.current = {};
     setDataByMateri((prev) => ({ ...prev, [item.materi]: item.materiWordsSnapshot || { 1: [], 2: [], 3: [] } }));
     setSelectedMateri(item.materi);
     setBabakId(item.babakId || 1);
@@ -984,6 +1058,15 @@ function TebakCariKataGame({ onBack, teacher }) {
     if (stage !== "play") return;
     db.collection("rooms").doc(roomCode).set({ activeTurnGroup: activeGroup || null }, { merge: true }).catch(() => {});
   }, [stage, roomCode, activeGroup]);
+
+  // FIX: papan skor sebelumnya cuma tersimpan lokal di browser guru (state React), jadi HP
+  // siswa asli nggak pernah bisa menampilkannya — beda dengan modal "Pratinjau HP Siswa" yang
+  // memang bisa akses state itu langsung karena dirender di komponen guru yang sama. Sekarang
+  // skor disiarkan ke Firestore juga, supaya StudentJoinScreen (dibuka di HP asli) bisa ikut baca.
+  useEffect(() => {
+    if (stage !== "play") return;
+    db.collection("rooms").doc(roomCode).set({ scores }, { merge: true }).catch(() => {});
+  }, [stage, roomCode, scores]);
 
   // Dengarkan kelompok yang join & angkat tangan dari HP siswa, tambahkan ke urutan lokal
   useEffect(() => {
@@ -1078,7 +1161,14 @@ function TebakCariKataGame({ onBack, teacher }) {
     const reversed = str.split("").reverse().join("");
     const match = str === currentWord.letters || reversed === currentWord.letters;
     if (match) {
-      setFoundMap((f) => ({ ...f, [currentWord.id]: { cells, color: GROUP_COLORS[activeGroup - 1] } }));
+      // FIX: warna highlight jawaban dulu ikut warna kelompok yang menjawab (GROUP_COLORS) —
+      // kalau kelompok yang sama beruntun menjawab benar (atau saat dites sendiri oleh guru),
+      // semua garis jawaban jadi satu warna terus. Sekarang tiap kata dapat warna tetap dari
+      // ANSWER_KEY_PALETTE berdasarkan urutannya di daftar kosakata babak ini (sama seperti
+      // pewarnaan di pratinjau Kunci Jawaban Persiapan), jadi warnanya selalu bervariasi apa pun
+      // kelompok yang menjawab.
+      const segColor = answerKeyColorByWordId[currentWord.id] || GROUP_COLORS[activeGroup - 1];
+      setFoundMap((f) => ({ ...f, [currentWord.id]: { cells, color: segColor } }));
       setScores((s) => ({ ...s, [activeGroup]: s[activeGroup] + babak.point }));
       setFlash({ type: "correct", group: activeGroup }); setTimeout(() => setFlash(null), 1400);
       nextQuestion();
@@ -1102,8 +1192,6 @@ function TebakCariKataGame({ onBack, teacher }) {
     setSelStart(null);
   }
 
-  const foundCellColor = {};
-  if (puzzle) Object.values(foundMap).forEach(({ cells, color }) => cells.forEach(([r, c]) => { foundCellColor[cellKey(r, c)] = color; }));
   // FIX (UX): sama seperti Kunci Jawaban di Persiapan — kata yang sudah ketemu saat bermain
   // dulu diwarnai per-SEL (blok solid), berat di mata & kata diagonal jadi kelihatan patah-patah
   // (kotak demi kotak, bukan garis lurus). Sekarang tiap kata yang ketemu cukup digambar sebagai
@@ -1195,16 +1283,23 @@ function TebakCariKataGame({ onBack, teacher }) {
             stroke={seg.color} strokeWidth={0.62} strokeLinecap="round" opacity={0.6} />
         ))}
       </svg>
+      {/* FIX (UX): sel papan dulu masing-masing digambar sebagai kotak solid berwarna (t.panel2)
+          dengan celah antar-kotak. Begitu ada highlight jawaban (garis/pil SVG) yang melintang
+          diagonal di atasnya, sudut-sudut kotak & celah antar-kotak tetap kelihatan mengintip di
+          balik highlight, jadi terlihat kotak-kotak/patah-patah — terutama di kata diagonal.
+          Sekarang latar per-sel dihilangkan (transparan, huruf langsung duduk di atas panel papan
+          yang polos, sama seperti pratinjau Kunci Jawaban di Persiapan) supaya highlight jawaban
+          terlihat mulus. Sel yang sedang dipilih (isSelStart) ditandai bulat, bukan kotak, supaya
+          tetap tidak menambah kesan "kotak-kotak" pada papan. */}
       <div style={{ display: "grid", gridTemplateColumns: `repeat(${puzzle.size}, minmax(0, 1fr))`, gap: big ? 4 : 3, position: "relative", zIndex: 1 }}>
         {puzzle.grid.map((row, r) => row.map((letter, c) => {
           const key = cellKey(r, c);
-          const isFound = !!foundCellColor[key];
           const isSelStart = selStart && selStart[0] === r && selStart[1] === c;
           return (
             <button key={key} className="cell-btn" onClick={() => handleCellClick(r, c)} disabled={!currentWord || activeGroup === null}
               style={{
-                aspectRatio: "1 / 1", border: "none", borderRadius: 5, cursor: currentWord && activeGroup !== null ? "pointer" : "default",
-                background: isFound ? "transparent" : isSelStart ? "#F4B740" : t.panel2, color: isSelStart ? "#101B34" : t.cellText,
+                aspectRatio: "1 / 1", border: "none", borderRadius: "50%", cursor: currentWord && activeGroup !== null ? "pointer" : "default",
+                background: isSelStart ? "#F4B740" : "transparent", color: isSelStart ? "#101B34" : t.cellText,
                 fontWeight: 700, fontSize: big ? cellFont + 3 : cellFont, display: "flex", alignItems: "center", justifyContent: "center",
                 opacity: currentWord && activeGroup === null ? 0.55 : 1, minWidth: 0, width: "100%", padding: 0,
               }}>{letter}</button>
