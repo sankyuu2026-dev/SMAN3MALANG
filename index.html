@@ -1205,7 +1205,10 @@ function TebakCariKataGame({ onBack, teacher }) {
   }).filter(Boolean) : [];
   const leaderScore = Math.max(...Object.values(scores));
   const sortedGroups = [...GROUP_NAMES].sort((a, b) => scores[b] - scores[a]);
-  const cellFont = babakId === 1 ? (puzzle && puzzle.size > 16 ? 11 : 13) : (puzzle && puzzle.size > 16 ? 13 : 16);
+  // FIX (UX): ukuran huruf dulu relatif kecil dibanding jarak antar-huruf, apalagi setelah kotak
+  // per-sel dihilangkan — papan jadi terasa renggang dan huruf terlihat kecil. Dinaikkan sedikit
+  // supaya tetap nyaman dibaca dari proyektor.
+  const cellFont = babakId === 1 ? (puzzle && puzzle.size > 16 ? 14 : 16) : (puzzle && puzzle.size > 16 ? 16 : 19);
 
   /* ---------- editing helpers (tahap persiapan) ---------- */
   function updateWord(id, wordId, field, value) {
@@ -1276,7 +1279,18 @@ function TebakCariKataGame({ onBack, teacher }) {
         : "Belum ada kosakata untuk babak ini."}
     </div>
   ) : (
-    <div style={{ position: "relative", background: t.panel, padding: 10, borderRadius: 14, maxWidth: big ? 760 : 620, width: "100%", margin: big ? "0 auto" : undefined, boxSizing: "border-box" }}>
+    <div style={{
+      position: "relative", background: t.panel, padding: 10, borderRadius: 14, maxWidth: big ? 760 : 620, width: "100%", margin: big ? "0 auto" : undefined, boxSizing: "border-box",
+      // FIX (UX): papan dulu diredupkan (opacity huruf 0.55) selama belum ada kelompok yang
+      // mengangkat tangan — maksudnya menandakan "belum boleh diklik", tapi ini malah bikin siswa
+      // susah membaca papan justru pada saat mereka paling butuh mencari kata (waktu audio/petunjuk
+      // baru diputar). Sekarang papan SELALU terlihat jelas & tidak pernah pudar; sebagai gantinya
+      // giliran kelompok ditandai dengan bingkai bersinar mengikuti warna kelompok yang sedang
+      // pegang giliran menjawab (activeGroup) — begitu belum ada yang menang giliran, bingkai ini
+      // tidak muncul sama sekali.
+      boxShadow: activeGroup ? `0 0 0 3px ${GROUP_COLORS[activeGroup - 1]}, 0 0 22px 4px ${GROUP_COLORS[activeGroup - 1]}99` : "none",
+      transition: "box-shadow .25s ease",
+    }}>
       <svg viewBox={`0 0 ${puzzle.size} ${puzzle.size}`} style={{ position: "absolute", top: 10, left: 10, right: 10, bottom: 10, pointerEvents: "none" }}>
         {foundSegments.map((seg) => (
           <line key={seg.id} x1={seg.x1} y1={seg.y1} x2={seg.x2} y2={seg.y2}
@@ -1291,7 +1305,7 @@ function TebakCariKataGame({ onBack, teacher }) {
           yang polos, sama seperti pratinjau Kunci Jawaban di Persiapan) supaya highlight jawaban
           terlihat mulus. Sel yang sedang dipilih (isSelStart) ditandai bulat, bukan kotak, supaya
           tetap tidak menambah kesan "kotak-kotak" pada papan. */}
-      <div style={{ display: "grid", gridTemplateColumns: `repeat(${puzzle.size}, minmax(0, 1fr))`, gap: big ? 4 : 3, position: "relative", zIndex: 1 }}>
+      <div style={{ display: "grid", gridTemplateColumns: `repeat(${puzzle.size}, minmax(0, 1fr))`, gap: big ? 3 : 2, position: "relative", zIndex: 1 }}>
         {puzzle.grid.map((row, r) => row.map((letter, c) => {
           const key = cellKey(r, c);
           const isSelStart = selStart && selStart[0] === r && selStart[1] === c;
@@ -1300,8 +1314,8 @@ function TebakCariKataGame({ onBack, teacher }) {
               style={{
                 aspectRatio: "1 / 1", border: "none", borderRadius: "50%", cursor: currentWord && activeGroup !== null ? "pointer" : "default",
                 background: isSelStart ? "#F4B740" : "transparent", color: isSelStart ? "#101B34" : t.cellText,
-                fontWeight: 700, fontSize: big ? cellFont + 3 : cellFont, display: "flex", alignItems: "center", justifyContent: "center",
-                opacity: currentWord && activeGroup === null ? 0.55 : 1, minWidth: 0, width: "100%", padding: 0,
+                fontWeight: 700, fontSize: big ? cellFont + 4 : cellFont, display: "flex", alignItems: "center", justifyContent: "center",
+                minWidth: 0, width: "100%", padding: 0,
               }}>{letter}</button>
           );
         }))}
@@ -1750,18 +1764,38 @@ function TebakCariKataGame({ onBack, teacher }) {
         </div>
       </div>
 
+      {/* FIX (UX): toolbar ini dulu berisi 6 tombol berjajar tanpa pengelompokan yang jelas
+          (info room, tampilan, & aksi sesi bercampur begitu saja), jadi terasa penuh & kurang
+          rapi. Sekarang dikelompokkan jadi 3 bagian dengan pemisah tipis: (1) info room & join
+          siswa, (2) opsi tampilan (tema & proyektor), (3) kontrol sesi (simpan/akhiri) yang
+          didorong ke kanan. Tombol "Papan baru" (resetRound di tengah sesi) juga dihilangkan —
+          papan sengaja dikunci sejak Persiapan (lihat shufflePuzzlePreview) supaya tidak berubah
+          waktu siswa sedang bermain, jadi tombol ini pada praktiknya jarang benar-benar mengacak
+          ulang papan (hanya mereset progres soal yang sudah ditemukan). Kalau memang perlu susunan
+          baru, itu harus dilakukan di Persiapan lewat "Acak Ulang Posisi" SEBELUM permainan
+          dimulai — bukan di tengah sesi. */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 22 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, background: t.panel, padding: "6px 8px", borderRadius: 10 }}>
-          <span style={{ fontSize: 16, lineHeight: 1, color: t.dim }}>🔳</span><span style={{ fontSize: 13, color: t.dim }}>Kode Room</span>
-          <span className="sgt" style={{ fontSize: 16, fontWeight: 700, letterSpacing: 2 }}>{roomCode}</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, background: t.panel, padding: "6px 8px", borderRadius: 10 }}>
+            <span style={{ fontSize: 16, lineHeight: 1, color: t.dim }}>🔳</span><span style={{ fontSize: 13, color: t.dim }}>Kode Room</span>
+            <span className="sgt" style={{ fontSize: 16, fontWeight: 700, letterSpacing: 2 }}>{roomCode}</span>
+          </div>
+          <button onClick={() => setQrOpen(true)} style={{ display: "flex", alignItems: "center", gap: 6, background: "#3FBFAD", border: "none", color: "#0D1730", padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>📷</span> QR Gabung</button>
         </div>
-        <button onClick={() => setQrOpen(true)} style={{ display: "flex", alignItems: "center", gap: 6, background: "#3FBFAD", border: "none", color: "#0D1730", padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>📷</span> QR Gabung</button>
-        <button onClick={() => resetRound(babakId)} title="Acak ulang papan" style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: "none", color: t.text, padding: "10px 12px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>🔄</span> Papan baru</button>
-        <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")} style={{ background: t.panel, border: "none", color: t.text, padding: 10, borderRadius: 10, cursor: "pointer" }}>{theme === "dark" ? <span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>☀</span> : <span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>🌙</span>}</button>
-        <button onClick={() => setProjectorMode(true)} style={{ display: "flex", alignItems: "center", gap: 6, background: "#F4B740", border: "none", color: "#101B34", padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>⤢</span> Mode Proyektor</button>
+
+        <div style={{ width: 1, alignSelf: "stretch", background: t.panel2, margin: "0 2px" }} />
+
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")} title="Ganti tampilan terang/gelap" style={{ background: t.panel, border: "none", color: t.text, padding: 10, borderRadius: 10, cursor: "pointer" }}>{theme === "dark" ? <span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>☀</span> : <span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>🌙</span>}</button>
+          <button onClick={() => setProjectorMode(true)} style={{ display: "flex", alignItems: "center", gap: 6, background: "#F4B740", border: "none", color: "#101B34", padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>⤢</span> Mode Proyektor</button>
+        </div>
+
         <div style={{ flex: "1 0 auto" }} />
-        <button onClick={openSaveNamePrompt} title="Simpan progres & jeda, lanjutkan nanti (mis. pindah ke kelas lain)" style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: "1px solid #F4B740", color: "#F4B740", padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>💾</span> Simpan & Jeda</button>
-        <button onClick={endGame} style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: "1px solid #EF5B5B", color: "#EF5B5B", padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>⏹</span> Akhiri Permainan</button>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <button onClick={openSaveNamePrompt} title="Simpan progres & jeda, lanjutkan nanti (mis. pindah ke kelas lain)" style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: "1px solid #F4B740", color: "#F4B740", padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>💾</span> Simpan & Jeda</button>
+          <button onClick={endGame} style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: "1px solid #EF5B5B", color: "#EF5B5B", padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>⏹</span> Akhiri Permainan</button>
+        </div>
       </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
@@ -1785,7 +1819,7 @@ function TebakCariKataGame({ onBack, teacher }) {
             </div>
           )}
           <Grid />
-          {puzzle && !currentWord && <div style={{ marginTop: 16, fontSize: 14, color: t.dim }}>Semua kosakata di babak ini sudah ditemukan. Ganti babak atau tekan "Papan baru" untuk main ulang.</div>}
+          {puzzle && !currentWord && <div style={{ marginTop: 16, fontSize: 14, color: t.dim }}>Semua kosakata di babak ini sudah ditemukan. Ganti babak untuk melanjutkan.</div>}
         </div>
         <div style={{ flex: "1 1 280px" }}><ControlPanel /></div>
       </div>
