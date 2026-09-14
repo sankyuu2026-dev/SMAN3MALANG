@@ -52,9 +52,33 @@ function ensureAnonymousAuth() {
     });
   });
 }
+// Untuk sementara, hanya email kampus @student.ub.ac.id yang boleh login sebagai guru.
+// Kalau nanti perlu menambahkan email guru lain (bukan @student.ub.ac.id), tambahkan alamat
+// lengkapnya (huruf kecil semua) ke TEACHER_EMAIL_ALLOWLIST.
+const TEACHER_ALLOWED_DOMAINS = ["student.ub.ac.id"];
+const TEACHER_EMAIL_ALLOWLIST = [];
+function isEmailAllowedForTeacher(email) {
+  if (!email) return false;
+  const lower = email.toLowerCase();
+  if (TEACHER_EMAIL_ALLOWLIST.includes(lower)) return true;
+  return TEACHER_ALLOWED_DOMAINS.some((domain) => lower.endsWith("@" + domain));
+}
 function signInTeacherWithGoogle() {
   const provider = new firebase.auth.GoogleAuthProvider();
-  return auth.signInWithPopup(provider);
+  // Kalau student.ub.ac.id adalah Google Workspace, ini akan mempersempit pilihan akun Google
+  // yang ditawarkan ke domain tersebut (hanya bantuan tampilan, tetap dicek ulang di bawah).
+  provider.setCustomParameters({ hd: "student.ub.ac.id" });
+  return auth.signInWithPopup(provider).then((result) => {
+    const email = result.user && result.user.email;
+    if (!isEmailAllowedForTeacher(email)) {
+      return auth.signOut().then(() => {
+        const err = new Error("Email tidak diizinkan");
+        err.code = "auth/email-not-allowed";
+        throw err;
+      });
+    }
+    return result;
+  });
 }
 function signOutTeacher() {
   return auth.signOut();
@@ -378,11 +402,15 @@ function StudentJoinScreen({ roomCode }) {
   const order = Array.isArray(room.buzzOrder) ? room.buzzOrder : [];
   const myIndex = order.findIndex((o) => o.group === myGroup);
   const myPosition = myIndex >= 0 ? myIndex + 1 : null;
+  // BUGFIX: dulu "giliranmu" cuma dihitung dari urutan datang (myPosition === 1) yang beku selamanya.
+  // Sekarang dibaca dari activeTurnGroup yang disiarkan ulang oleh guru setiap kali giliran
+  // berpindah (termasuk setelah kelompok di depan salah jawab).
+  const isMyTurn = room.activeTurnGroup === myGroup;
   const canBuzz = !!roundId && myPosition === null;
 
   let title = "Menunggu soal dari guru…";
   let sub = "Dengarkan petunjuknya dulu.";
-  if (myPosition === 1) { title = "Kamu paling cepat! 🎉"; sub = "Maju ke depan, jawab pertanyaannya."; }
+  if (isMyTurn) { title = "Giliranmu sekarang! 🎉"; sub = "Maju ke depan, jawab pertanyaannya."; }
   else if (myPosition) { title = `Kamu urutan ke-${myPosition}`; sub = "Tunggu giliranmu kalau yang di depan salah."; }
   else if (roundId) { title = "Soal aktif — siap?"; sub = "Tekan tombol kalau sudah tahu jawabannya."; }
 
@@ -390,13 +418,13 @@ function StudentJoinScreen({ roomCode }) {
     <div style={wrap}>
       <style>{fontImport}</style>
       <div style={{ fontSize: 12.5, color: t.dim, marginBottom: 4 }}>Room {roomCode} · Kelompok {myGroup}</div>
-      <div className="sgt" style={{ fontSize: 20, fontWeight: 700, marginBottom: 4, color: myPosition === 1 ? "#3FBFAD" : t.text }}>{title}</div>
+      <div className="sgt" style={{ fontSize: 20, fontWeight: 700, marginBottom: 4, color: isMyTurn ? "#3FBFAD" : t.text }}>{title}</div>
       <div style={{ fontSize: 13, color: t.dim, marginBottom: 24 }}>{sub}</div>
       <button onClick={pressBuzz} disabled={!canBuzz || busy} style={{
         width: 180, height: 180, borderRadius: "50%", border: "none", cursor: canBuzz ? "pointer" : "default",
-        background: myPosition === 1 ? "#3FBFAD" : canBuzz ? GROUP_COLORS[myGroup - 1] : t.panel2, color: "#101B34",
+        background: isMyTurn ? "#3FBFAD" : canBuzz ? GROUP_COLORS[myGroup - 1] : t.panel2, color: "#101B34",
         fontWeight: 700, fontSize: 16, opacity: canBuzz || myPosition ? 1 : 0.45,
-      }}>{myPosition === 1 ? <span style={{ fontSize: 46, lineHeight: 1, color: "inherit" }}>✅</span> : myPosition ? `#${myPosition}` : "ANGKAT\nTANGAN"}</button>
+      }}>{isMyTurn ? <span style={{ fontSize: 46, lineHeight: 1, color: "inherit" }}>✅</span> : myPosition ? `#${myPosition}` : "ANGKAT\nTANGAN"}</button>
     </div>
   );
 }
@@ -579,13 +607,20 @@ function TebakCariKataGame({ onBack, teacher }) {
     const className = saveNameInput.trim();
     if (!className || savingSession) return;
     setSavingSession(true);
-    // Snapshot lengkap kosakata 3 babak untuk materi ini disimpan bersama sesi, supaya saat
-    // dilanjutkan di device lain, soal & id kata tetap sama persis (tidak tergantung data lokal device itu).
+    // Audio disimpan sebagai base64 (lihat uploadAudio) yang bisa besar — kalau ikut disimpan
+    // ke Firestore, sesi dengan banyak audio gampang melebihi batas 1MB per dokumen dan gagal
+    // tersimpan. Jadi khusus untuk Riwayat Sesi, audio-nya distrip dulu (kosakata & skor tetap
+    // utuh); begitu dilanjutkan lagi, guru perlu unggah ulang audio soalnya di device itu.
+    const wordsWithoutAudio = {};
+    const source = dataByMateri[selectedMateri] || { 1: [], 2: [], 3: [] };
+    for (const bId of [1, 2, 3]) {
+      wordsWithoutAudio[bId] = (source[bId] || []).map((w) => ({ ...w, audioUrl: null }));
+    }
     const snapshot = {
       className,
       materi: selectedMateri,
       babakId, mode, audioMode, scores, roomCode,
-      materiWordsSnapshot: dataByMateri[selectedMateri] || { 1: [], 2: [], 3: [] },
+      materiWordsSnapshot: wordsWithoutAudio,
       queue, foundMap,
       triedSet: Array.from(triedSet),
       puzzle,
@@ -684,6 +719,15 @@ function TebakCariKataGame({ onBack, teacher }) {
       updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
     }, { merge: true }).catch(() => {});
   }, [stage, roomCode, currentWord?.id, selectedMateri, babakId, clueRevealed]);
+
+  // BUGFIX: giliran yang berpindah secara lokal (mis. kelompok pertama salah, sistem otomatis
+  // maju ke kelompok berikutnya yang sudah antre) sebelumnya tidak pernah ditulis balik ke
+  // Firestore — akibatnya HP kelompok berikutnya tidak pernah tahu sekarang giliran mereka.
+  // Setiap kali giliran aktif berubah di layar guru, siarkan ke room supaya semua HP ikut update.
+  useEffect(() => {
+    if (stage !== "play") return;
+    db.collection("rooms").doc(roomCode).set({ activeTurnGroup: activeGroup || null }, { merge: true }).catch(() => {});
+  }, [stage, roomCode, activeGroup]);
 
   // Dengarkan kelompok yang join & angkat tangan dari HP siswa, tambahkan ke urutan lokal
   useEffect(() => {
@@ -815,18 +859,17 @@ function TebakCariKataGame({ onBack, teacher }) {
       return { ...prev, [selectedMateri]: { ...materiData, [id]: materiData[id].map((w) => w.id === wordId ? { ...w, [field]: value } : w) } };
     });
   }
-  // Hapus file audio di Firebase Storage dengan aman: abaikan kalau URL kosong, bukan
-  // URL Storage (mis. tersisa dari data lama), atau filenya sudah tidak ada — supaya
-  // tidak pernah bikin alur pemakai gagal hanya gara-gara pembersihan file lama.
+  // SEMENTARA TANPA FIREBASE STORAGE: project belum di-upgrade ke paket Blaze (butuh kartu
+  // debit/kredit), jadi audio disimpan sebagai data langsung (base64) di localStorage browser —
+  // sama seperti sebelum fitur ini disambungkan ke Storage. Konsekuensinya: audio HANYA ada di
+  // browser tempat ia diunggah, tidak ikut tersinkron ke device lain atau ke Riwayat Sesi lintas
+  // device. Begitu project di-upgrade ke Blaze nanti, ini bisa disambungkan lagi ke Storage.
   function deleteAudioFile(url) {
-    if (!url) return;
-    try { storage.refFromURL(url).delete().catch(() => {}); } catch (e) { /* URL bukan dari Storage kita, abaikan */ }
+    // Tidak ada file terpisah untuk dihapus (audio disimpan inline sebagai base64) — no-op.
   }
   function removeWord(id, wordId) {
     setDataByMateri((prev) => {
       const materiData = prev[selectedMateri] || { 1: [], 2: [], 3: [] };
-      const removed = materiData[id].find((w) => w.id === wordId);
-      if (removed) deleteAudioFile(removed.audioUrl); // kosakata dihapus → audio-nya jadi sampah kalau tidak ikut dihapus
       return { ...prev, [selectedMateri]: { ...materiData, [id]: materiData[id].filter((w) => w.id !== wordId) } };
     });
   }
@@ -838,38 +881,27 @@ function TebakCariKataGame({ onBack, teacher }) {
   }
   function uploadAudio(id, wordId, file) {
     if (!file) return;
-    // Batas wajar per file audio soal (5MB) supaya upload tetap cepat & tidak boros kuota Storage.
-    if (file.size > 5 * 1024 * 1024) {
-      setAudioUploadError((e) => ({ ...e, [wordId]: "File audio maksimal 5MB." }));
+    // Batas lebih ketat (2MB) daripada versi Storage (5MB) karena base64 membengkakkan ukuran
+    // sekitar 33% dan semuanya numpuk di kuota localStorage browser (biasanya 5-10MB total).
+    if (file.size > 2 * 1024 * 1024) {
+      setAudioUploadError((e) => ({ ...e, [wordId]: "File audio maksimal 2MB (mode tanpa Storage)." }));
       return;
     }
-    // Simpan URL audio lama (kalau ada) supaya bisa dihapus setelah audio baru berhasil diunggah —
-    // tanpa ini, tiap kali guru "ganti" audio, file lamanya numpuk terus di Storage.
-    const oldUrl = (dataByMateri[selectedMateri]?.[id] || []).find((w) => w.id === wordId)?.audioUrl || null;
     setAudioUploadError((e) => { const n = { ...e }; delete n[wordId]; return n; });
     setUploadingAudio((u) => ({ ...u, [wordId]: true }));
-    // Disimpan di Firebase Storage (bukan base64 di localStorage), jadi yang tersimpan
-    // di data soal cuma URL-nya — kecil, dan tidak akan bikin localStorage penuh.
-    const path = `audio/${teacher.uid}/${roomOwnerPath()}/${wordId}-${Date.now()}-${file.name}`;
-    const ref = storage.ref(path);
-    ref.put(file)
-      .then((snap) => snap.ref.getDownloadURL())
-      .then((url) => {
-        updateWord(id, wordId, "audioUrl", url);
-        if (oldUrl && oldUrl !== url) deleteAudioFile(oldUrl); // hapus file lama setelah yang baru sukses diunggah
-      })
-      .catch((err) => {
-        console.error("Gagal upload audio:", err);
-        setAudioUploadError((e) => ({ ...e, [wordId]: "Gagal unggah audio. Cek koneksi & coba lagi." }));
-      })
-      .finally(() => setUploadingAudio((u) => { const n = { ...u }; delete n[wordId]; return n; }));
-  }
-  // Nama folder yang aman dipakai di path Storage (materi bisa mengandung spasi/karakter unik).
-  function roomOwnerPath() {
-    return encodeURIComponent(selectedMateri || "materi").replace(/%20/g, "_");
+    const reader = new FileReader();
+    reader.onload = () => {
+      updateWord(id, wordId, "audioUrl", reader.result);
+      setUploadingAudio((u) => { const n = { ...u }; delete n[wordId]; return n; });
+    };
+    reader.onerror = () => {
+      setAudioUploadError((e) => ({ ...e, [wordId]: "Gagal membaca file audio, coba lagi." }));
+      setUploadingAudio((u) => { const n = { ...u }; delete n[wordId]; return n; });
+    };
+    reader.readAsDataURL(file);
   }
 
-  const canStart = [1, 2, 3].every((id) => (dataByMateri[selectedMateri]?.[id] || []).some((w) => w.letters.trim()));
+  const canStart = [1, 2, 3].some((id) => (dataByMateri[selectedMateri]?.[id] || []).some((w) => w.letters.trim()));
 
   /* ---------------- Reusable game bits ---------------- */
   const Grid = ({ big }) => !puzzle ? (
@@ -1041,7 +1073,7 @@ function TebakCariKataGame({ onBack, teacher }) {
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 70 }} onClick={() => !savingSession && setSaveNameOpen(false)}>
       <div onClick={(e) => e.stopPropagation()} style={{ width: "min(360px, 90vw)", background: t.modalBg, borderRadius: 20, padding: 24, boxShadow: "0 20px 60px rgba(0,0,0,.4)" }}>
         <div className="sgt" style={{ fontSize: 17, fontWeight: 700, color: t.text, marginBottom: 6 }}>Simpan & Jeda Sesi</div>
-        <div style={{ fontSize: 12.5, color: t.dim, marginBottom: 14, lineHeight: 1.5 }}>Progres, skor, dan babak yang sedang berjalan akan tersimpan di Riwayat — bisa dilanjutkan nanti dari device mana pun.</div>
+        <div style={{ fontSize: 12.5, color: t.dim, marginBottom: 14, lineHeight: 1.5 }}>Progres, skor, dan babak yang sedang berjalan akan tersimpan di Riwayat — bisa dilanjutkan nanti dari device mana pun. Audio soal tidak ikut tersimpan lintas device (mode tanpa Storage) — perlu diunggah ulang di device tempat melanjutkan.</div>
         <label style={{ fontSize: 10.5, color: t.faint, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.4 }}>Nama kelas</label>
         <input autoFocus value={saveNameInput} onChange={(e) => setSaveNameInput(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") confirmSaveSession(); }}
@@ -1610,7 +1642,19 @@ function App() {
     signInTeacherWithGoogle()
       .catch((err) => {
         console.error("Gagal login Google:", err);
-        setLoginError(err && err.code === "auth/popup-closed-by-user" ? "Login dibatalkan." : "Gagal masuk. Coba lagi.");
+        const code = err && err.code;
+        // BUGFIX: pesan generik "Gagal masuk. Coba lagi." tidak membantu diagnosa —
+        // kode error Firebase Auth biasanya langsung menunjuk penyebab pastinya
+        // (domain belum diizinkan, provider belum diaktifkan, popup diblokir browser, dst).
+        const messages = {
+          "auth/popup-closed-by-user": "Login dibatalkan.",
+          "auth/unauthorized-domain": "Domain website ini belum diizinkan di Firebase Console (Authentication → Settings → Authorized domains).",
+          "auth/operation-not-allowed": "Login Google belum diaktifkan di Firebase Console (Authentication → Sign-in method).",
+          "auth/popup-blocked": "Jendela popup login diblokir browser. Izinkan popup untuk situs ini lalu coba lagi.",
+          "auth/network-request-failed": "Gagal terhubung ke internet. Cek koneksi lalu coba lagi.",
+          "auth/email-not-allowed": "Login dibatasi hanya untuk email @student.ub.ac.id untuk sementara.",
+        };
+        setLoginError(messages[code] || `Gagal masuk${code ? ` (${code})` : ""}. Coba lagi.`);
       })
       .finally(() => setSigningIn(false));
   }
