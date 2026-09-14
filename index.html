@@ -930,6 +930,17 @@ function TebakCariKataGame({ onBack, teacher }) {
 
   const foundCellColor = {};
   if (puzzle) Object.values(foundMap).forEach(({ cells, color }) => cells.forEach(([r, c]) => { foundCellColor[cellKey(r, c)] = color; }));
+  // FIX (UX): sama seperti Kunci Jawaban di Persiapan — kata yang sudah ketemu saat bermain
+  // dulu diwarnai per-SEL (blok solid), berat di mata & kata diagonal jadi kelihatan patah-patah
+  // (kotak demi kotak, bukan garis lurus). Sekarang tiap kata yang ketemu cukup digambar sebagai
+  // satu garis tipis transparan dari sel pertama ke sel terakhir yang tadi diseleksi siswa —
+  // otomatis lurus & mengikuti sudutnya sendiri, termasuk diagonal.
+  const foundSegments = puzzle ? Object.values(foundMap).map(({ cells, color }, i) => {
+    if (!cells || cells.length === 0) return null;
+    const [r1, c1] = cells[0];
+    const [r2, c2] = cells[cells.length - 1];
+    return { id: i, x1: c1 + 0.5, y1: r1 + 0.5, x2: c2 + 0.5, y2: r2 + 0.5, color };
+  }).filter(Boolean) : [];
   const leaderScore = Math.max(...Object.values(scores));
   const sortedGroups = [...GROUP_NAMES].sort((a, b) => scores[b] - scores[a]);
   const cellFont = babakId === 1 ? (puzzle && puzzle.size > 16 ? 11 : 13) : (puzzle && puzzle.size > 16 ? 13 : 16);
@@ -1003,21 +1014,29 @@ function TebakCariKataGame({ onBack, teacher }) {
         : "Belum ada kosakata untuk babak ini."}
     </div>
   ) : (
-    <div style={{ display: "grid", gridTemplateColumns: `repeat(${puzzle.size}, minmax(0, 1fr))`, gap: big ? 4 : 3, background: t.panel, padding: 10, borderRadius: 14, maxWidth: big ? 760 : 620, width: "100%", margin: big ? "0 auto" : undefined, boxSizing: "border-box" }}>
-      {puzzle.grid.map((row, r) => row.map((letter, c) => {
-        const key = cellKey(r, c);
-        const found = foundCellColor[key];
-        const isSelStart = selStart && selStart[0] === r && selStart[1] === c;
-        return (
-          <button key={key} className="cell-btn" onClick={() => handleCellClick(r, c)} disabled={!currentWord || activeGroup === null}
-            style={{
-              aspectRatio: "1 / 1", border: "none", borderRadius: 5, cursor: currentWord && activeGroup !== null ? "pointer" : "default",
-              background: found ? found : isSelStart ? "#F4B740" : t.panel2, color: found || isSelStart ? "#101B34" : t.cellText,
-              fontWeight: 700, fontSize: big ? cellFont + 3 : cellFont, display: "flex", alignItems: "center", justifyContent: "center",
-              opacity: currentWord && activeGroup === null ? 0.55 : 1, minWidth: 0, width: "100%", padding: 0,
-            }}>{letter}</button>
-        );
-      }))}
+    <div style={{ position: "relative", background: t.panel, padding: 10, borderRadius: 14, maxWidth: big ? 760 : 620, width: "100%", margin: big ? "0 auto" : undefined, boxSizing: "border-box" }}>
+      <svg viewBox={`0 0 ${puzzle.size} ${puzzle.size}`} style={{ position: "absolute", top: 10, left: 10, right: 10, bottom: 10, pointerEvents: "none" }}>
+        {foundSegments.map((seg) => (
+          <line key={seg.id} x1={seg.x1} y1={seg.y1} x2={seg.x2} y2={seg.y2}
+            stroke={seg.color} strokeWidth={0.62} strokeLinecap="round" opacity={0.6} />
+        ))}
+      </svg>
+      <div style={{ display: "grid", gridTemplateColumns: `repeat(${puzzle.size}, minmax(0, 1fr))`, gap: big ? 4 : 3, position: "relative", zIndex: 1 }}>
+        {puzzle.grid.map((row, r) => row.map((letter, c) => {
+          const key = cellKey(r, c);
+          const isFound = !!foundCellColor[key];
+          const isSelStart = selStart && selStart[0] === r && selStart[1] === c;
+          return (
+            <button key={key} className="cell-btn" onClick={() => handleCellClick(r, c)} disabled={!currentWord || activeGroup === null}
+              style={{
+                aspectRatio: "1 / 1", border: "none", borderRadius: 5, cursor: currentWord && activeGroup !== null ? "pointer" : "default",
+                background: isFound ? "transparent" : isSelStart ? "#F4B740" : t.panel2, color: isSelStart ? "#101B34" : t.cellText,
+                fontWeight: 700, fontSize: big ? cellFont + 3 : cellFont, display: "flex", alignItems: "center", justifyContent: "center",
+                opacity: currentWord && activeGroup === null ? 0.55 : 1, minWidth: 0, width: "100%", padding: 0,
+              }}>{letter}</button>
+          );
+        }))}
+      </div>
     </div>
   );
 
