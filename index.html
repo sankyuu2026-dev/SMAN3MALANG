@@ -295,6 +295,18 @@ function buildPuzzle(words) {
 }
 
 function cellKey(r, c) { return `${r}-${c}`; }
+
+// Dipakai buat menyembunyikan teks penjelas yang tidak krusial di layar sempit (HP) —
+// supaya layar guru lebih ringkas & nggak penuh teks berulang.
+function useIsMobile() {
+  const [isMobile, setIsMobile] = useState(() => (typeof window !== "undefined" ? window.innerWidth <= 640 : false));
+  useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth <= 640);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  return isMobile;
+}
 function makeRoomCode() {
   const letters = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   return Array.from({ length: 5 }, () => letters[Math.floor(Math.random() * letters.length)]).join("");
@@ -437,6 +449,12 @@ function StudentJoinScreen({ roomCode }) {
     );
   }
 
+  // Room Game 3 (Cocokkan Kartu) punya tampilan lain sama sekali setelah kelompok dipilih —
+  // bukan tombol angkat tangan, tapi papan kartu milik kelompok itu sendiri.
+  if (room.mode === "cards") {
+    return <CardsPlayArea roomCode={roomCode} room={room} myGroup={myGroup} />;
+  }
+
   const roundId = room.roundId || null;
   const order = Array.isArray(room.buzzOrder) ? room.buzzOrder : [];
   const myIndex = order.findIndex((o) => o.group === myGroup);
@@ -464,6 +482,162 @@ function StudentJoinScreen({ roomCode }) {
         background: isMyTurn ? "#3FBFAD" : canBuzz ? GROUP_COLORS[myGroup - 1] : t.panel2, color: "#101B34",
         fontWeight: 700, fontSize: 16, opacity: canBuzz || myPosition ? 1 : 0.45,
       }}>{isMyTurn ? <span style={{ fontSize: 46, lineHeight: 1, color: "inherit" }}>✅</span> : myPosition ? `#${myPosition}` : "ANGKAT\nTANGAN"}</button>
+    </div>
+  );
+}
+
+/* ===========================================================
+   LAYAR SISWA — Game 3 (Cocokkan Kartu)
+   Tiap kelompok punya papan sendiri (susunan acak lokal),
+   tapi isi pasangan kartunya sama untuk semua kelompok —
+   diambil dari sub-koleksi rooms/{roomCode}/cardPairs yang
+   ditulis guru saat menekan "Mulai Babak Ini".
+=========================================================== */
+function CardsPlayArea({ roomCode, room, myGroup }) {
+  const [theme] = useState("light");
+  const t = THEMES[theme];
+  const [pairs, setPairs] = useState([]);
+  const [pairsLoaded, setPairsLoaded] = useState(false);
+  const [cards, setCards] = useState([]);
+  const [flipped, setFlipped] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [finishedSent, setFinishedSent] = useState(false);
+  const appliedRoundRef = useRef(null);
+  const startAtRef = useRef(null);
+
+  useEffect(() => {
+    const col = db.collection("rooms").doc(roomCode).collection("cardPairs");
+    const unsub = col.onSnapshot(
+      (snap) => { setPairs(snap.docs.map((d) => ({ id: d.id, ...d.data() }))); setPairsLoaded(true); },
+      () => setPairsLoaded(true)
+    );
+    return () => unsub();
+  }, [roomCode]);
+
+  const roundId = room.cardsRoundId || null;
+
+  // Bangun papan ACAK milik kelompok INI SENDIRI setiap kali guru memulai ronde baru.
+  // Diacak lokal (Math.random) — bukan disinkronkan — jadi tiap HP dapat susunan berbeda
+  // walau isi pasangan katanya identik, sesuai permintaan "papan sendiri-sendiri".
+  useEffect(() => {
+    if (!roundId || !pairsLoaded || pairs.length === 0) return;
+    if (appliedRoundRef.current === roundId) return;
+    appliedRoundRef.current = roundId;
+    const deck = [];
+    pairs.forEach((p) => {
+      deck.push({ key: p.id + "-img", pairId: p.id, kind: "image", content: p.image });
+      deck.push({ key: p.id + "-word", pairId: p.id, kind: "word", content: p.word });
+    });
+    for (let i = deck.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [deck[i], deck[j]] = [deck[j], deck[i]];
+    }
+    setCards(deck.map((c) => ({ ...c, matched: false })));
+    setFlipped([]);
+    setFinishedSent(false);
+    startAtRef.current = Date.now();
+  }, [roundId, pairsLoaded, pairs]);
+
+  function flipCard(key) {
+    if (busy || finishedSent) return;
+    if (flipped.includes(key)) return;
+    const card = cards.find((c) => c.key === key);
+    if (!card || card.matched) return;
+    if (flipped.length === 0) { setFlipped([key]); return; }
+    if (flipped.length === 1) {
+      const firstKey = flipped[0];
+      setFlipped([firstKey, key]);
+      const first = cards.find((c) => c.key === firstKey);
+      if (first && first.pairId === card.pairId) {
+        setBusy(true);
+        setTimeout(() => {
+          setCards((cs) => cs.map((c) => (c.key === firstKey || c.key === key) ? { ...c, matched: true } : c));
+          setFlipped([]);
+          setBusy(false);
+        }, 450);
+      } else {
+        setBusy(true);
+        setTimeout(() => { setFlipped([]); setBusy(false); }, 700);
+      }
+    }
+  }
+
+  const totalPairs = pairs.length;
+  const matchedCount = cards.filter((c) => c.matched).length / 2;
+  const allMatched = totalPairs > 0 && matchedCount === totalPairs;
+
+  // Kirim sinyal "selesai" sekali saja begitu semua pasangan ketemu, lewat transaksi (sama
+  // seperti pressBuzz di Game 1) supaya urutan siapa-selesai-duluan tercatat dengan benar.
+  useEffect(() => {
+    if (!allMatched || finishedSent || !roundId) return;
+    setFinishedSent(true);
+    const elapsedMs = Date.now() - (startAtRef.current || Date.now());
+    const ref = db.collection("rooms").doc(roomCode);
+    db.runTransaction((tx) => tx.get(ref).then((snap) => {
+      const data = snap.data() || {};
+      if (data.cardsRoundId !== roundId) return;
+      const order = Array.isArray(data.cardsFinishers) ? data.cardsFinishers : [];
+      if (order.some((o) => o.group === myGroup)) return;
+      const name = (data.groups && data.groups[myGroup] && data.groups[myGroup].name) || `Kelompok ${myGroup}`;
+      tx.set(ref, { cardsFinishers: [...order, { group: myGroup, name, elapsedMs }] }, { merge: true });
+    })).catch(() => {});
+  }, [allMatched, finishedSent, roundId, roomCode, myGroup]);
+
+  const wrap = { minHeight: "100%", background: t.bg, color: t.text, fontFamily: "'Work Sans', system-ui, sans-serif", padding: 20, boxSizing: "border-box" };
+  const centerWrap = { ...wrap, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center" };
+
+  if (!roundId) {
+    return (
+      <div style={centerWrap}>
+        <style>{fontImport}</style>
+        <div style={{ fontSize: 12.5, color: t.dim, marginBottom: 4 }}>Room {roomCode} · Kelompok {myGroup}</div>
+        <div className="sgt" style={{ fontSize: 20, fontWeight: 700, marginBottom: 4 }}>Menunggu aba-aba guru…</div>
+        <div style={{ fontSize: 13, color: t.dim }}>Bersiap-siap, papan kartu akan muncul begitu guru menekan mulai.</div>
+      </div>
+    );
+  }
+
+  if (!pairsLoaded || cards.length === 0) {
+    return <div style={centerWrap}><style>{fontImport}</style>Menyiapkan papan…</div>;
+  }
+
+  if (allMatched) {
+    return (
+      <div style={centerWrap}>
+        <style>{fontImport}</style>
+        <div style={{ fontSize: 46, marginBottom: 8 }}>🎉</div>
+        <div className="sgt" style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>Selesai!</div>
+        <div style={{ fontSize: 13.5, color: t.dim }}>Semua pasangan sudah ketemu. Tunggu kelompok lain, ya.</div>
+      </div>
+    );
+  }
+
+  const cols = Math.min(5, Math.ceil(Math.sqrt(cards.length)));
+  return (
+    <div style={wrap}>
+      <style>{fontImport}</style>
+      <div style={{ fontSize: 12.5, color: t.dim, marginBottom: 2, textAlign: "center" }}>Room {roomCode} · Kelompok {myGroup}</div>
+      <div style={{ fontSize: 12.5, color: t.dim, marginBottom: 12, textAlign: "center", fontWeight: 600 }}>{matchedCount}/{totalPairs} pasangan ketemu</div>
+      <div style={{ display: "grid", gridTemplateColumns: `repeat(${cols}, 1fr)`, gap: 8, maxWidth: 440, margin: "0 auto" }}>
+        {cards.map((c) => {
+          const isFaceUp = c.matched || flipped.includes(c.key);
+          return (
+            <button key={c.key} onClick={() => flipCard(c.key)} disabled={c.matched || busy} style={{
+              aspectRatio: "3 / 4", borderRadius: 10, border: "none", padding: 4,
+              background: c.matched ? "#3FBFAD55" : isFaceUp ? "#FFFFFF" : "#5DA9E9",
+              cursor: c.matched || busy ? "default" : "pointer",
+              display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden",
+              boxShadow: isFaceUp ? "0 2px 6px rgba(0,0,0,.15)" : "none",
+            }}>
+              {isFaceUp ? (
+                c.kind === "image"
+                  ? <img src={c.content} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: 6 }} />
+                  : <span className="sgt" style={{ fontSize: 13, fontWeight: 700, color: "#101B34", textAlign: "center", wordBreak: "break-word" }}>{c.content}</span>
+              ) : null}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -1767,6 +1941,361 @@ function BukaKotakGame({ onBack }) {
 }
 
 /* ===========================================================
+   GAME 3 — COCOKKAN KARTU
+   Kartu gambar dipasangkan dengan kata (romaji/hiragana). Tiap
+   kelompok balapan di papannya sendiri-sendiri (isi pasangan
+   SAMA, susunan acak beda per HP). Kelompok tercepat dapat
+   poin terbanyak; babaknya bisa berapa pun, minimal 10
+   pasangan per babak.
+=========================================================== */
+function makeBabak(n) { return { id: uid(), label: `Babak ${n}`, pairs: [] }; }
+
+function CocokkanKartuGame({ onBack }) {
+  const isMobile = useIsMobile();
+  const [theme, setTheme] = useState("light");
+  const t = THEMES[theme];
+
+  const [stage, setStage] = useState("setup"); // 'setup' | 'play'
+  const [babaks, setBabaks] = useState(() => [makeBabak(1)]);
+  const [babakIdx, setBabakIdx] = useState(0);
+  const [loaded, setLoaded] = useState(false);
+  const [roomCode, setRoomCode] = useState(makeRoomCode());
+  const [scores, setScores] = useState({}); // { [group]: total poin }
+  const [uploadingImage, setUploadingImage] = useState({});
+  const [imageUploadError, setImageUploadError] = useState({});
+  const [qrOpen, setQrOpen] = useState(false);
+  const [joinedGroups, setJoinedGroups] = useState({});
+  const [cardsRoundId, setCardsRoundId] = useState(null);
+  const [finishers, setFinishers] = useState([]);
+  const [scored, setScored] = useState(false);
+  const [publishing, setPublishing] = useState(false);
+  const qrBoxRef = useRef(null);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("cck-setup-data");
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed.babaks) && parsed.babaks.length > 0) setBabaks(parsed.babaks);
+        if (parsed.theme) setTheme(parsed.theme);
+      }
+    } catch (e) { /* belum ada data tersimpan, atau data korup — mulai dari kosong */ }
+    setLoaded(true);
+    cleanupStaleRooms();
+  }, []);
+
+  useEffect(() => {
+    if (!loaded) return;
+    const tm = setTimeout(() => {
+      try { localStorage.setItem("cck-setup-data", JSON.stringify({ babaks, theme })); }
+      catch (e) { /* kemungkinan kuota localStorage penuh — gambar terlalu besar/banyak */ }
+    }, 500);
+    return () => clearTimeout(tm);
+  }, [babaks, theme, loaded]);
+
+  const babak = babaks[babakIdx] || babaks[0];
+
+  function addBabak() { setBabaks((prev) => [...prev, makeBabak(prev.length + 1)]); }
+  function removeBabak(idx) {
+    if (babaks.length <= 1) return;
+    if (!window.confirm("Hapus babak ini beserta semua pasangan kartunya?")) return;
+    setBabaks((prev) => prev.filter((_, i) => i !== idx));
+    setBabakIdx((i) => Math.max(0, Math.min(i, babaks.length - 2)));
+  }
+  function addPair(idx) {
+    setBabaks((prev) => prev.map((b, i) => i === idx ? { ...b, pairs: [...b.pairs, { id: uid(), word: "", image: null }] } : b));
+  }
+  function removePair(idx, pairId) {
+    setBabaks((prev) => prev.map((b, i) => i === idx ? { ...b, pairs: b.pairs.filter((p) => p.id !== pairId) } : b));
+  }
+  function updatePairWord(idx, pairId, value) {
+    const finalValue = value.toUpperCase(); // konsisten dgn gaya kata Game 1; aman utk hiragana
+    setBabaks((prev) => prev.map((b, i) => i === idx ? { ...b, pairs: b.pairs.map((p) => p.id === pairId ? { ...p, word: finalValue } : p) } : b));
+  }
+  function uploadImage(idx, pairId, file) {
+    if (!file) return;
+    // Beda dari audio di Game 1: gambar ini WAJIB tersinkron ke Firestore (bukan cuma
+    // localStorage guru), karena tiap HP siswa perlu benar-benar menampilkannya. Batas ketat
+    // supaya ringan diunduh serentak oleh banyak HP sekaligus & jauh dari batas ukuran dokumen.
+    if (file.size > 150 * 1024) {
+      setImageUploadError((e) => ({ ...e, [pairId]: "Gambar maksimal 150KB. Kompres/perkecil dulu gambarnya." }));
+      return;
+    }
+    setImageUploadError((e) => { const n = { ...e }; delete n[pairId]; return n; });
+    setUploadingImage((u) => ({ ...u, [pairId]: true }));
+    const reader = new FileReader();
+    reader.onload = () => {
+      setBabaks((prev) => prev.map((b, i) => i === idx ? { ...b, pairs: b.pairs.map((p) => p.id === pairId ? { ...p, image: reader.result } : p) } : b));
+      setUploadingImage((u) => { const n = { ...u }; delete n[pairId]; return n; });
+    };
+    reader.onerror = () => {
+      setImageUploadError((e) => ({ ...e, [pairId]: "Gagal membaca gambar, coba lagi." }));
+      setUploadingImage((u) => { const n = { ...u }; delete n[pairId]; return n; });
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function validPairs(b) { return b.pairs.filter((p) => p.word.trim() && p.image); }
+  const canStart = babaks.length > 0 && babaks.every((b) => validPairs(b).length >= 10);
+
+  function startSession() { setScores({}); setBabakIdx(0); setStage("play"); }
+
+  useEffect(() => {
+    if (stage !== "play") return;
+    db.collection("rooms").doc(roomCode).set({
+      mode: "cards", babakIdx, updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true }).catch(() => {});
+  }, [stage, roomCode, babakIdx]);
+
+  useEffect(() => {
+    if (stage !== "play") return;
+    const ref = db.collection("rooms").doc(roomCode);
+    const unsub = ref.onSnapshot((snap) => {
+      const data = snap.data();
+      if (!data) return;
+      setJoinedGroups(data.groups || {});
+      setCardsRoundId(data.cardsRoundId || null);
+      setFinishers(Array.isArray(data.cardsFinishers) ? data.cardsFinishers : []);
+    });
+    return () => unsub();
+  }, [stage, roomCode]);
+
+  useEffect(() => {
+    if (qrOpen && qrBoxRef.current && !isFileProtocol()) {
+      qrBoxRef.current.innerHTML = "";
+      new QRCode(qrBoxRef.current, { text: getJoinUrl(roomCode), width: 200, height: 200 });
+    }
+  }, [qrOpen, roomCode]);
+
+  function applyScores(finalFinishers) {
+    const totalGroups = Object.keys(joinedGroups).length || finalFinishers.length;
+    if (totalGroups === 0) { setScored(true); return; }
+    setScores((prev) => {
+      const next = { ...prev };
+      finalFinishers.forEach((f, i) => { next[f.group] = (next[f.group] || 0) + Math.max(totalGroups - i, 1); });
+      // Kelompok yang sudah join tapi belum menyelesaikan babak ini tetap dapat 1 poin (floor).
+      Object.keys(joinedGroups).forEach((gStr) => {
+        const g = Number(gStr);
+        if (!finalFinishers.some((f) => f.group === g)) next[g] = (next[g] || 0) + 1;
+      });
+      return next;
+    });
+    setScored(true);
+  }
+
+  // Penilaian otomatis begitu SEMUA kelompok yang join sudah menyelesaikan babak ini.
+  useEffect(() => {
+    if (stage !== "play" || !cardsRoundId || scored) return;
+    const totalGroups = Object.keys(joinedGroups).length;
+    if (totalGroups > 0 && finishers.length >= totalGroups) applyScores(finishers);
+  }, [finishers, joinedGroups, cardsRoundId, scored, stage]);
+
+  async function startRound() {
+    setPublishing(true);
+    try {
+      const col = db.collection("rooms").doc(roomCode).collection("cardPairs");
+      const existing = await col.get();
+      const batch = db.batch();
+      existing.docs.forEach((d) => batch.delete(d.ref));
+      validPairs(babak).forEach((p) => batch.set(col.doc(p.id), { word: p.word.trim(), image: p.image }));
+      await batch.commit();
+      const newRoundId = uid();
+      await db.collection("rooms").doc(roomCode).set({ cardsRoundId: newRoundId, cardsFinishers: [] }, { merge: true });
+      setScored(false);
+    } catch (e) {
+      alert("Gagal memulai babak, coba lagi.");
+    } finally {
+      setPublishing(false);
+    }
+  }
+
+  function endRoundNow() {
+    if (scored) return;
+    if (finishers.length < Object.keys(joinedGroups).length) {
+      if (!window.confirm("Masih ada kelompok yang belum selesai. Akhiri babak sekarang? Kelompok yang belum selesai tetap dapat 1 poin.")) return;
+    }
+    applyScores(finishers);
+  }
+
+  function nextBabak() {
+    if (babakIdx >= babaks.length - 1) return;
+    const nextIdx = babakIdx + 1;
+    setBabakIdx(nextIdx);
+    db.collection("rooms").doc(roomCode).set({ babakIdx: nextIdx, cardsRoundId: null, cardsFinishers: [] }, { merge: true }).catch(() => {});
+    setFinishers([]); setCardsRoundId(null); setScored(false);
+  }
+
+  function endGame() {
+    if (!window.confirm("Akhiri permainan ini? Skor akan dihapus.")) return;
+    db.collection("rooms").doc(roomCode).delete().catch(() => {});
+    setScores({}); setStage("setup"); setBabakIdx(0);
+    onBack();
+  }
+
+  const sortedGroups = [...GROUP_NAMES].sort((a, b) => (scores[b] || 0) - (scores[a] || 0));
+
+  if (stage === "setup") {
+    const fieldLabelStyle = { fontSize: 10.5, color: t.faint, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.4 };
+    return (
+      <div style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: t.bg, color: t.text, minHeight: "100%", padding: 28, boxSizing: "border-box" }}>
+        <style>{fontImport}</style>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 26, flexWrap: "wrap", gap: 12 }}>
+          <div>
+            <div className="sgt" style={{ fontSize: 28, fontWeight: 700 }}>Persiapan — Cocokkan Kartu</div>
+            {!isMobile && <div style={{ fontSize: 14, color: t.dim, marginTop: 2 }}>Kartu gambar dipasangkan dengan kata (romaji/hiragana). Minimal 10 pasang per babak.</div>}
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={onBack} style={{ background: t.panel, border: "none", color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}>← Pilih Game</button>
+            <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")} style={{ background: t.panel, border: "none", color: t.text, padding: 10, borderRadius: 10, cursor: "pointer" }}>{theme === "dark" ? "☀" : "🌙"}</button>
+          </div>
+        </div>
+
+        <div style={{ background: t.panel, borderRadius: 16, padding: "18px 20px", marginBottom: 20 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
+            <div style={{ fontSize: 14, fontWeight: 700 }}>Babak</div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+              <div style={{ display: "flex", gap: 6, background: t.panel2, padding: 4, borderRadius: 10 }}>
+                {babaks.map((b, i) => (
+                  <button key={b.id} onClick={() => setBabakIdx(i)} style={{ padding: "7px 14px", borderRadius: 7, border: "none", cursor: "pointer", background: babakIdx === i ? "#F4B740" : "transparent", color: babakIdx === i ? "#101B34" : t.text, fontWeight: 600, fontSize: 13 }}>{b.label}</button>
+                ))}
+              </div>
+              <button onClick={addBabak} style={{ background: t.panel2, border: "none", color: t.text, borderRadius: 8, padding: "8px 12px", cursor: "pointer", fontSize: 13, fontWeight: 600 }}>➕ Babak</button>
+              {babaks.length > 1 && <button onClick={() => removeBabak(babakIdx)} style={{ background: "transparent", border: "none", color: "#EF5B5B", cursor: "pointer", padding: "8px 10px", fontSize: 13 }}>🗑 Hapus babak ini</button>}
+            </div>
+          </div>
+
+          <div style={{ fontSize: 12.5, color: validPairs(babak).length >= 10 ? "#3FBFAD" : t.faint, marginBottom: 12, fontWeight: 600 }}>
+            {validPairs(babak).length} / {babak.pairs.length} pasangan siap{!isMobile ? " (minimal 10 pasangan lengkap kata + gambar)" : ""}
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {babak.pairs.map((p, idx) => (
+              <div key={p.id} style={{ display: "flex", gap: 12, alignItems: "center", background: t.panel2, borderRadius: 12, padding: "10px 14px", flexWrap: "wrap" }}>
+                <div style={{ width: 24, height: 24, borderRadius: "50%", background: t.panel, color: t.faint, fontSize: 11.5, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{idx + 1}</div>
+                <label title={p.image ? "Klik untuk ganti gambar" : "Unggah gambar"} style={{ width: 56, height: 56, borderRadius: 8, background: t.panel, flexShrink: 0, cursor: "pointer", overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", position: "relative" }}>
+                  {uploadingImage[p.id] ? "⏳" : p.image ? <img src={p.image} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ fontSize: 15, color: t.dim }}>⬆</span>}
+                  <input type="file" accept="image/*" disabled={uploadingImage[p.id]} onChange={(e) => uploadImage(babakIdx, p.id, e.target.files[0])} style={{ display: "none" }} />
+                </label>
+                <div style={{ display: "flex", flexDirection: "column", gap: 5, flex: 1, minWidth: 160 }}>
+                  {!isMobile && <label style={fieldLabelStyle}>Kata (romaji/hiragana)</label>}
+                  <input value={p.word} onChange={(e) => updatePairWord(babakIdx, p.id, e.target.value)} placeholder={isMobile ? "Kata (romaji/hiragana)" : "mis. ねこ"}
+                    style={{ padding: "9px 10px", borderRadius: 8, border: "none", background: t.panel, color: t.text, fontSize: 13 }} />
+                  {imageUploadError[p.id] && <div style={{ fontSize: 10, color: "#EF5B5B" }}>{imageUploadError[p.id]}</div>}
+                </div>
+                <button onClick={() => removePair(babakIdx, p.id)} title="Hapus pasangan ini" style={{ background: "transparent", border: "none", color: "#EF5B5B", cursor: "pointer", padding: 8 }}>🗑</button>
+              </div>
+            ))}
+          </div>
+          <button onClick={() => addPair(babakIdx)} style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 6, background: t.panel2, border: "none", color: t.text, borderRadius: 8, padding: "9px 14px", cursor: "pointer", fontSize: 13 }}>➕ Tambah Pasangan</button>
+        </div>
+
+        <button onClick={startSession} disabled={!canStart} style={{
+          display: "flex", alignItems: "center", gap: 8, background: canStart ? "#F4B740" : t.panel2, color: canStart ? "#101B34" : t.faint,
+          border: "none", borderRadius: 12, padding: "14px 22px", fontWeight: 700, fontSize: 15, cursor: canStart ? "pointer" : "default",
+        }}>Mulai Permainan ➡</button>
+        {!canStart && !isMobile && <div style={{ marginTop: 8, fontSize: 12.5, color: t.faint }}>Setiap babak butuh minimal 10 pasangan lengkap (kata + gambar) sebelum bisa dimulai.</div>}
+      </div>
+    );
+  }
+
+  const totalGroups = Object.keys(joinedGroups).length;
+
+  return (
+    <div style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: t.bg, color: t.text, minHeight: "100%", padding: 28, boxSizing: "border-box" }}>
+      <style>{fontImport}</style>
+      {qrOpen && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 60 }} onClick={() => setQrOpen(false)}>
+          <div onClick={(e) => e.stopPropagation()} style={{ background: "#FFFFFF", borderRadius: 20, padding: 28, textAlign: "center", boxShadow: "0 20px 60px rgba(0,0,0,.4)" }}>
+            <div className="sgt" style={{ fontSize: 17, fontWeight: 700, color: "#101B34", marginBottom: 4 }}>Scan untuk gabung</div>
+            <div style={{ fontSize: 13, color: "#5B6272", marginBottom: 14 }}>Kode Room: <b>{roomCode}</b> · {totalGroups} kelompok sudah join</div>
+            {isFileProtocol() ? (
+              <div style={{ width: 220, background: "#FDECEC", border: "1px solid #EF5B5B", borderRadius: 10, padding: "12px 14px", fontSize: 12.5, color: "#8A1F1F", textAlign: "left", lineHeight: 1.5 }}>
+                <b>QR ini tidak akan berfungsi.</b> Unggah dulu file ini ke layanan hosting, lalu buka lewat alamat https://.
+              </div>
+            ) : (
+              <div ref={qrBoxRef} style={{ display: "flex", justifyContent: "center" }} />
+            )}
+            <button onClick={() => setQrOpen(false)} style={{ marginTop: 14, background: "#F1EEE4", border: "none", color: "#101B34", padding: "8px 16px", borderRadius: 8, cursor: "pointer", fontSize: 13 }}>Tutup</button>
+          </div>
+        </div>
+      )}
+
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 16, marginBottom: 20 }}>
+        <div>
+          <div className="sgt" style={{ fontSize: 26, fontWeight: 700 }}>Cocokkan Kartu — {babak.label}</div>
+          <div style={{ fontSize: 13, color: t.dim, marginTop: 2 }}>Kode Room: <b>{roomCode}</b> · {totalGroups} kelompok sudah join</div>
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button onClick={() => setQrOpen(true)} style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: "none", color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}>🔗 QR Join</button>
+          <button onClick={endGame} style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: "1px solid #EF5B5B", color: "#EF5B5B", padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}>⏹ Akhiri Permainan</button>
+        </div>
+      </div>
+
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 20, alignItems: "flex-start" }}>
+        <div style={{ flex: "1 1 380px", background: t.panel, borderRadius: 16, padding: 20, boxSizing: "border-box" }}>
+          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>Kelompok yang sudah join</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 18 }}>
+            {GROUP_NAMES.map((g) => {
+              const joined = !!joinedGroups[g];
+              return (
+                <div key={g} style={{ padding: "8px 14px", borderRadius: 10, background: joined ? GROUP_COLORS[g - 1] : t.panel2, color: joined ? "#101B34" : t.faint, fontWeight: 700, fontSize: 13, opacity: joined ? 1 : 0.5 }}>
+                  {(joinedGroups[g] && joinedGroups[g].name) || `Kelompok ${g}`}{joined ? " ✓" : ""}
+                </div>
+              );
+            })}
+          </div>
+
+          {!cardsRoundId ? (
+            <button onClick={startRound} disabled={publishing || totalGroups === 0} style={{
+              display: "flex", alignItems: "center", gap: 8, background: totalGroups === 0 ? t.panel2 : "#F4B740", color: totalGroups === 0 ? t.faint : "#101B34",
+              border: "none", borderRadius: 12, padding: "14px 22px", fontWeight: 700, fontSize: 15, cursor: totalGroups === 0 ? "default" : "pointer",
+            }}>{publishing ? "Menyiapkan papan…" : "▶ Mulai Babak Ini"}</button>
+          ) : (
+            <React.Fragment>
+              <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>Urutan kelompok selesai</div>
+              {finishers.length === 0 ? (
+                <div style={{ fontSize: 13, color: t.dim, marginBottom: 14 }}>Belum ada yang selesai…</div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
+                  {finishers.map((f, i) => (
+                    <div key={f.group} style={{ display: "flex", alignItems: "center", gap: 10, background: t.panel2, borderRadius: 10, padding: "8px 14px" }}>
+                      <span style={{ width: 22, height: 22, borderRadius: "50%", background: GROUP_COLORS[f.group - 1], color: "#101B34", fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>{i + 1}</span>
+                      <span className="sgt" style={{ fontWeight: 700, fontSize: 14 }}>{f.name || `Kelompok ${f.group}`}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {!scored ? (
+                <button onClick={endRoundNow} style={{ display: "flex", alignItems: "center", gap: 8, background: t.panel2, border: "none", color: t.text, borderRadius: 10, padding: "10px 16px", cursor: "pointer", fontSize: 13, fontWeight: 700 }}>⏹ Akhiri Babak Sekarang</button>
+              ) : (
+                <button onClick={babakIdx < babaks.length - 1 ? nextBabak : endGame} style={{ display: "flex", alignItems: "center", gap: 8, background: "#F4B740", border: "none", color: "#101B34", borderRadius: 10, padding: "10px 16px", cursor: "pointer", fontSize: 13, fontWeight: 700 }}>
+                  {babakIdx < babaks.length - 1 ? "Lanjut Babak Berikutnya ➡" : "Selesaikan Sesi"}
+                </button>
+              )}
+            </React.Fragment>
+          )}
+        </div>
+
+        <div style={{ flex: "1 1 260px", background: t.panel, borderRadius: 16, padding: 20, boxSizing: "border-box" }}>
+          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12 }}>🏆 Papan Skor</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {sortedGroups.filter((g) => (scores[g] || 0) > 0 || joinedGroups[g]).map((g, i) => (
+              <div key={g} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: t.panel2, borderRadius: 10, padding: "8px 12px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ width: 10, height: 10, borderRadius: 3, background: GROUP_COLORS[g - 1] }} />
+                  <span style={{ fontSize: 13, fontWeight: 600 }}>{(joinedGroups[g] && joinedGroups[g].name) || `Kelompok ${g}`}{i === 0 && (scores[g] || 0) > 0 ? " 👑" : ""}</span>
+                </div>
+                <span className="sgt" style={{ fontWeight: 700 }}>{scores[g] || 0}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ===========================================================
    LOGIN GURU — wajib Google Sign-In sebelum masuk ke layar
    Persiapan/Panel Guru. Siswa tetap bebas lewat scan QR.
 =========================================================== */
@@ -1792,7 +2321,7 @@ function TeacherLoginScreen({ onSignIn, busy, error }) {
 const GAMES = [
   { id: "g1", name: "Tebak & Cari Kata", desc: "Word search kelompok dengan petunjuk audio & buzzer", available: true },
   { id: "g2", name: "Buka Kotak", desc: "Pilih nomor, kerjakan perintahnya — individu, tanpa skor", available: true },
-  { id: "g3", name: "Game 3", desc: "Konsepnya belum ditentukan", available: false },
+  { id: "g3", name: "Cocokkan Kartu", desc: "Balapan memasangkan kartu gambar & kata, papan sendiri-sendiri per kelompok", available: true },
 ];
 
 function App() {
@@ -1862,6 +2391,7 @@ function App() {
 
   if (activeGame === "g1") return <TebakCariKataGame onBack={() => setActiveGame(null)} teacher={authUser} />;
   if (activeGame === "g2") return <BukaKotakGame onBack={() => setActiveGame(null)} />;
+  if (activeGame === "g3") return <CocokkanKartuGame onBack={() => setActiveGame(null)} />;
 
   return (
     <div style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: THEMES.light.bg, color: THEMES.light.text, minHeight: "100%", padding: 28, boxSizing: "border-box" }}>
