@@ -13,6 +13,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.24.7/babel.min.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-storage-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 
 <script type="text/babel" data-presets="react">
@@ -33,6 +35,30 @@ const firebaseConfig = {
 };
 firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore();
+const storage = firebase.storage();
+const auth = firebase.auth();
+// Tanpa sesi login sama sekali, security rules Firestore/Storage tidak punya cara membedakan
+// "aplikasi ini" dari script sembarangan (kalau rules-nya "allow write: if true", siapa pun bisa
+// menulis/menghapus data siapa saja lewat DevTools). Ada dua jenis sesi di app ini:
+// - Siswa yang scan QR: masuk ANONIM otomatis, tanpa perlu akun — cukup untuk fitur buzzer/join.
+// - Guru: WAJIB login pakai akun Google (lihat TeacherLoginScreen), supaya data tiap guru
+//   (Riwayat sesi, audio soal) bisa dipisah per-akun dan tidak sembarang orang bisa masuk ke
+//   layar Persiapan/Panel Guru.
+function ensureAnonymousAuth() {
+  return new Promise((resolve) => {
+    const unsub = auth.onAuthStateChanged((user) => {
+      if (user) { unsub(); resolve(user); }
+      else auth.signInAnonymously().catch((err) => console.error("Gagal masuk anonim:", err));
+    });
+  });
+}
+function signInTeacherWithGoogle() {
+  const provider = new firebase.auth.GoogleAuthProvider();
+  return auth.signInWithPopup(provider);
+}
+function signOutTeacher() {
+  return auth.signOut();
+}
 
 function getJoinCodeFromUrl() {
   try {
@@ -44,6 +70,11 @@ function getJoinCodeFromUrl() {
 function getJoinUrl(roomCode) {
   const base = window.location.origin + window.location.pathname;
   return `${base}?join=${roomCode}`;
+}
+// File yang dibuka langsung dari komputer (file://) tidak punya origin yang valid,
+// jadi link/QR join tidak akan pernah bisa diakses oleh HP siswa.
+function isFileProtocol() {
+  try { return window.location.protocol === "file:"; } catch (e) { return false; }
 }
 
 
@@ -205,6 +236,38 @@ function makeRoomCode() {
   const letters = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   return Array.from({ length: 5 }, () => letters[Math.floor(Math.random() * letters.length)]).join("");
 }
+// Peluang tabrakan kode 5 karakter memang sangat kecil (~1 banding 33 juta), tapi tetap dicek
+// ke Firestore sebelum room dipakai, supaya dua kelas yang kebetulan dapat kode sama tidak
+// saling menimpa data/buzzer masing-masing. Kalau cek gagal (mis. offline), lanjut pakai kode
+// yang ada — daripada memblokir guru mulai mengajar hanya gara-gara jaringan.
+async function ensureUniqueRoomCode(currentCode) {
+  let code = currentCode;
+  for (let i = 0; i < 5; i++) {
+    try {
+      const snap = await db.collection("rooms").doc(code).get();
+      if (!snap.exists) return code;
+    } catch (e) { return code; }
+    code = makeRoomCode();
+  }
+  return code;
+}
+
+// Room di Firestore idealnya terhapus lewat endGame(), tapi kalau guru menutup tab/browser
+// begitu saja tanpa klik "Akhiri Permainan", dokumennya akan tertinggal selamanya di koleksi "rooms".
+// Karena tidak ada Cloud Functions terjadwal di setup ini, kita sapu room yang basi
+// (tidak ter-update lagi selama ROOM_STALE_MS) secara best-effort setiap kali web ini dibuka.
+const ROOM_STALE_MS = 4 * 60 * 60 * 1000; // 4 jam — sesi kelas wajar tidak akan sepanjang ini
+function cleanupStaleRooms() {
+  const cutoff = new Date(Date.now() - ROOM_STALE_MS);
+  db.collection("rooms").where("updatedAt", "<", cutoff).get()
+    .then((snap) => {
+      if (snap.empty) return;
+      const batch = db.batch();
+      snap.docs.forEach((d) => batch.delete(d.ref));
+      return batch.commit();
+    })
+    .catch(() => { /* mis. sedang offline — biarkan, akan dicoba lagi lain kali web dibuka */ });
+}
 
 const THEMES = {
   dark: { bg: "linear-gradient(180deg,#0D1730,#101B34 40%)", panel: "#17244A", panel2: "#1F2E58", text: "#F4F1E8", dim: "#A9B4D0", faint: "#6E7A9A", cellText: "#E7E9F2", modalBg: "#0D1730" },
@@ -338,7 +401,11 @@ function StudentJoinScreen({ roomCode }) {
   );
 }
 
-function TebakCariKataGame({ onBack }) {
+function TebakCariKataGame({ onBack, teacher }) {
+  // Semua data "Riwayat Sesi" & file audio soal disimpan di bawah koleksi milik guru yang sedang
+  // login (users/{uid}/...), supaya antar-guru yang sama-sama pakai app ini datanya tidak
+  // tercampur atau bisa saling lihat/hapus punya orang lain.
+  const historyCol = db.collection("users").doc(teacher.uid).collection("history");
   const [theme, setTheme] = useState("light");
   const t = THEMES[theme];
 
@@ -356,6 +423,13 @@ function TebakCariKataGame({ onBack }) {
   const [phonePreview, setPhonePreview] = useState(null); // group number or null
   const [qrOpen, setQrOpen] = useState(false);
   const [joinedGroups, setJoinedGroups] = useState({});
+  const [uploadingAudio, setUploadingAudio] = useState({}); // { [wordId]: true } saat sedang upload ke Firebase Storage
+  const [audioUploadError, setAudioUploadError] = useState({}); // { [wordId]: "pesan error" }
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyList, setHistoryList] = useState([]);
+  const [saveNameOpen, setSaveNameOpen] = useState(false);
+  const [saveNameInput, setSaveNameInput] = useState("");
+  const [savingSession, setSavingSession] = useState(false);
   const qrBoxRef = useRef(null);
   const lastAppliedRoundRef = useRef(null);
   const appliedGroupsRef = useRef(new Set());
@@ -425,6 +499,8 @@ function TebakCariKataGame({ onBack }) {
       }
     } catch (e) { /* belum ada progres tersimpan, atau data korup */ }
     setLoaded(true);
+    // Sekalian sapu room lama yang basi (lihat cleanupStaleRooms) tiap kali layar game ini dibuka.
+    cleanupStaleRooms();
   }, []);
 
   // Simpan progres permainan setiap kali berubah, supaya refresh browser tidak mereset ke awal
@@ -440,6 +516,16 @@ function TebakCariKataGame({ onBack }) {
     }, 500);
     return () => clearTimeout(tm);
   }, [stage, babakId, mode, audioMode, scores, roomCode, queue, foundMap, triedSet, puzzle, loaded]);
+
+  // Ambil daftar sesi tersimpan (Riwayat) dari Firestore setiap kali guru ada di layar Persiapan.
+  useEffect(() => {
+    if (stage !== "setup") return;
+    const unsub = historyCol.orderBy("savedAt", "desc").onSnapshot(
+      (snap) => setHistoryList(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
+      () => setHistoryList([])
+    );
+    return () => unsub();
+  }, [stage]);
 
   function endGame() {
     if (!window.confirm("Akhiri permainan ini? Skor & progres babak yang sedang berjalan akan dihapus.")) return;
@@ -475,7 +561,102 @@ function TebakCariKataGame({ onBack }) {
   }
 
   function switchBabak(id) { setBabakId(id); resetRound(id); }
-  function startGame() { resetRound(babakId); setStage("play"); }
+  async function startGame() {
+    // Pastikan roomCode belum dipakai kelas lain sebelum dipakai untuk buzzer/QR join.
+    const uniqueCode = await ensureUniqueRoomCode(roomCode);
+    if (uniqueCode !== roomCode) setRoomCode(uniqueCode);
+    resetRound(babakId);
+    setStage("play");
+  }
+
+  /* ---------------- Riwayat Sesi (jeda & lanjutkan lintas kelas/device) ---------------- */
+  function openSaveNamePrompt() {
+    setSaveNameInput("");
+    setSaveNameOpen(true);
+  }
+
+  function confirmSaveSession() {
+    const className = saveNameInput.trim();
+    if (!className || savingSession) return;
+    setSavingSession(true);
+    // Snapshot lengkap kosakata 3 babak untuk materi ini disimpan bersama sesi, supaya saat
+    // dilanjutkan di device lain, soal & id kata tetap sama persis (tidak tergantung data lokal device itu).
+    const snapshot = {
+      className,
+      materi: selectedMateri,
+      babakId, mode, audioMode, scores, roomCode,
+      materiWordsSnapshot: dataByMateri[selectedMateri] || { 1: [], 2: [], 3: [] },
+      queue, foundMap,
+      triedSet: Array.from(triedSet),
+      puzzle,
+      savedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    };
+    historyCol.add(snapshot)
+      .then(() => trimHistory())
+      .catch((err) => {
+        console.error("Gagal menyimpan riwayat:", err);
+        alert("Gagal menyimpan sesi. Cek koneksi internet lalu coba lagi.");
+      })
+      .finally(() => {
+        setSavingSession(false);
+        setSaveNameOpen(false);
+        try { localStorage.removeItem("tck-progress"); } catch (e) {}
+        setScores({ 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 });
+        setFoundMap({}); setQueue([]); setTriedSet(new Set()); setPuzzle(null);
+        setProjectorMode(false);
+        // Room code lama masih "milik" sesi yang baru dijeda (siswa kelas itu mungkin sudah join lewat QR-nya).
+        // Kalau guru langsung lanjut menyiapkan kelas berikutnya di layar ini, room code harus baru
+        // supaya tidak tumpang tindih dengan room kelas yang baru saja dijeda.
+        setRoomCode(makeRoomCode());
+        setStage("setup");
+      });
+  }
+
+  // Jaga supaya riwayat tidak menumpuk tak terbatas — simpan maksimal 10 sesi terbaru.
+  function trimHistory() {
+    historyCol.orderBy("savedAt", "asc").get().then((snap) => {
+      const extra = snap.size - 10;
+      if (extra > 0) {
+        const batch = db.batch();
+        snap.docs.slice(0, extra).forEach((d) => batch.delete(d.ref));
+        batch.commit().catch(() => {});
+      }
+    }).catch(() => {});
+  }
+
+  function resumeSession(item) {
+    setDataByMateri((prev) => ({ ...prev, [item.materi]: item.materiWordsSnapshot || { 1: [], 2: [], 3: [] } }));
+    setSelectedMateri(item.materi);
+    setBabakId(item.babakId || 1);
+    setMode(item.mode || "digital");
+    setAudioMode(item.audioMode || "guru");
+    setScores(item.scores || { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 });
+    setRoomCode(item.roomCode || makeRoomCode());
+    setQueue(item.queue || []);
+    setFoundMap(item.foundMap || {});
+    setTriedSet(new Set(item.triedSet || []));
+    setPuzzle(item.puzzle || null);
+    setClueRevealed(false); setActiveGroup(null); setSelStart(null); setBuzzOrder([]);
+    activeGroupRef.current = null; buzzOrderRef.current = []; triedSetRef.current = new Set(); openToAllRef.current = false;
+    setHistoryOpen(false);
+    setStage("play");
+    // Sesi yang sudah dilanjutkan dianggap "dipakai" — dihapus dari daftar riwayat.
+    // Kalau nanti dijeda lagi, akan tersimpan sebagai entri baru.
+    historyCol.doc(item.id).delete().catch(() => {});
+  }
+
+  function deleteHistoryItem(id) {
+    if (!window.confirm("Hapus sesi tersimpan ini? Tidak bisa dibatalkan.")) return;
+    historyCol.doc(id).delete().catch(() => alert("Gagal menghapus, coba lagi."));
+  }
+
+  function formatSavedAt(ts) {
+    try {
+      const d = ts && ts.toDate ? ts.toDate() : null;
+      if (!d) return "";
+      return d.toLocaleString("id-ID", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+    } catch (e) { return ""; }
+  }
 
   useEffect(() => () => clearRetryTimer(), []);
   useEffect(() => {
@@ -530,7 +711,7 @@ function TebakCariKataGame({ onBack }) {
 
   // Render QR code ke dalam modal saat dibuka
   useEffect(() => {
-    if (qrOpen && qrBoxRef.current) {
+    if (qrOpen && qrBoxRef.current && !isFileProtocol()) {
       qrBoxRef.current.innerHTML = "";
       new QRCode(qrBoxRef.current, { text: getJoinUrl(roomCode), width: 200, height: 200 });
     }
@@ -634,9 +815,18 @@ function TebakCariKataGame({ onBack }) {
       return { ...prev, [selectedMateri]: { ...materiData, [id]: materiData[id].map((w) => w.id === wordId ? { ...w, [field]: value } : w) } };
     });
   }
+  // Hapus file audio di Firebase Storage dengan aman: abaikan kalau URL kosong, bukan
+  // URL Storage (mis. tersisa dari data lama), atau filenya sudah tidak ada — supaya
+  // tidak pernah bikin alur pemakai gagal hanya gara-gara pembersihan file lama.
+  function deleteAudioFile(url) {
+    if (!url) return;
+    try { storage.refFromURL(url).delete().catch(() => {}); } catch (e) { /* URL bukan dari Storage kita, abaikan */ }
+  }
   function removeWord(id, wordId) {
     setDataByMateri((prev) => {
       const materiData = prev[selectedMateri] || { 1: [], 2: [], 3: [] };
+      const removed = materiData[id].find((w) => w.id === wordId);
+      if (removed) deleteAudioFile(removed.audioUrl); // kosakata dihapus → audio-nya jadi sampah kalau tidak ikut dihapus
       return { ...prev, [selectedMateri]: { ...materiData, [id]: materiData[id].filter((w) => w.id !== wordId) } };
     });
   }
@@ -648,12 +838,38 @@ function TebakCariKataGame({ onBack }) {
   }
   function uploadAudio(id, wordId, file) {
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => updateWord(id, wordId, "audioUrl", reader.result);
-    reader.readAsDataURL(file);
+    // Batas wajar per file audio soal (5MB) supaya upload tetap cepat & tidak boros kuota Storage.
+    if (file.size > 5 * 1024 * 1024) {
+      setAudioUploadError((e) => ({ ...e, [wordId]: "File audio maksimal 5MB." }));
+      return;
+    }
+    // Simpan URL audio lama (kalau ada) supaya bisa dihapus setelah audio baru berhasil diunggah —
+    // tanpa ini, tiap kali guru "ganti" audio, file lamanya numpuk terus di Storage.
+    const oldUrl = (dataByMateri[selectedMateri]?.[id] || []).find((w) => w.id === wordId)?.audioUrl || null;
+    setAudioUploadError((e) => { const n = { ...e }; delete n[wordId]; return n; });
+    setUploadingAudio((u) => ({ ...u, [wordId]: true }));
+    // Disimpan di Firebase Storage (bukan base64 di localStorage), jadi yang tersimpan
+    // di data soal cuma URL-nya — kecil, dan tidak akan bikin localStorage penuh.
+    const path = `audio/${teacher.uid}/${roomOwnerPath()}/${wordId}-${Date.now()}-${file.name}`;
+    const ref = storage.ref(path);
+    ref.put(file)
+      .then((snap) => snap.ref.getDownloadURL())
+      .then((url) => {
+        updateWord(id, wordId, "audioUrl", url);
+        if (oldUrl && oldUrl !== url) deleteAudioFile(oldUrl); // hapus file lama setelah yang baru sukses diunggah
+      })
+      .catch((err) => {
+        console.error("Gagal upload audio:", err);
+        setAudioUploadError((e) => ({ ...e, [wordId]: "Gagal unggah audio. Cek koneksi & coba lagi." }));
+      })
+      .finally(() => setUploadingAudio((u) => { const n = { ...u }; delete n[wordId]; return n; }));
+  }
+  // Nama folder yang aman dipakai di path Storage (materi bisa mengandung spasi/karakter unik).
+  function roomOwnerPath() {
+    return encodeURIComponent(selectedMateri || "materi").replace(/%20/g, "_");
   }
 
-  const canStart = (dataByMateri[selectedMateri]?.[1] || []).some((w) => w.letters.trim()) && (dataByMateri[selectedMateri]?.[2] || []).some((w) => w.letters.trim());
+  const canStart = [1, 2, 3].every((id) => (dataByMateri[selectedMateri]?.[id] || []).some((w) => w.letters.trim()));
 
   /* ---------------- Reusable game bits ---------------- */
   const Grid = ({ big }) => !puzzle ? (
@@ -820,6 +1036,53 @@ function TebakCariKataGame({ onBack }) {
     );
   };
 
+  /* ---------------- Modal: Simpan & Jeda (nama kelas) ---------------- */
+  const SaveNameModal = () => (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 70 }} onClick={() => !savingSession && setSaveNameOpen(false)}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: "min(360px, 90vw)", background: t.modalBg, borderRadius: 20, padding: 24, boxShadow: "0 20px 60px rgba(0,0,0,.4)" }}>
+        <div className="sgt" style={{ fontSize: 17, fontWeight: 700, color: t.text, marginBottom: 6 }}>Simpan & Jeda Sesi</div>
+        <div style={{ fontSize: 12.5, color: t.dim, marginBottom: 14, lineHeight: 1.5 }}>Progres, skor, dan babak yang sedang berjalan akan tersimpan di Riwayat — bisa dilanjutkan nanti dari device mana pun.</div>
+        <label style={{ fontSize: 10.5, color: t.faint, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.4 }}>Nama kelas</label>
+        <input autoFocus value={saveNameInput} onChange={(e) => setSaveNameInput(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") confirmSaveSession(); }}
+          placeholder="mis. XI IPA 1" style={{ width: "100%", marginTop: 6, marginBottom: 16, padding: "10px 12px", borderRadius: 8, border: "none", background: t.panel, color: t.text, fontSize: 14, boxSizing: "border-box" }} />
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <button onClick={() => setSaveNameOpen(false)} disabled={savingSession} style={{ background: "transparent", border: "none", color: t.dim, padding: "10px 14px", borderRadius: 8, cursor: "pointer", fontSize: 13 }}>Batal</button>
+          <button onClick={confirmSaveSession} disabled={!saveNameInput.trim() || savingSession} style={{ background: saveNameInput.trim() ? "#F4B740" : t.panel2, color: saveNameInput.trim() ? "#101B34" : t.faint, border: "none", padding: "10px 16px", borderRadius: 8, cursor: saveNameInput.trim() ? "pointer" : "default", fontSize: 13, fontWeight: 700 }}>{savingSession ? "Menyimpan…" : "Simpan & Jeda"}</button>
+        </div>
+      </div>
+    </div>
+  );
+
+  /* ---------------- Modal: Riwayat Sesi ---------------- */
+  const HistoryModal = () => (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 70, padding: 20 }} onClick={() => setHistoryOpen(false)}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: "min(520px, 92vw)", maxHeight: "80vh", overflowY: "auto", background: t.modalBg, borderRadius: 20, padding: 24, boxShadow: "0 20px 60px rgba(0,0,0,.4)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+          <div className="sgt" style={{ fontSize: 18, fontWeight: 700, color: t.text }}>📜 Riwayat Sesi</div>
+          <button onClick={() => setHistoryOpen(false)} style={{ background: "none", border: "none", color: t.dim, cursor: "pointer" }}><span style={{ fontSize: 18, lineHeight: 1, color: 'inherit' }}>✕</span></button>
+        </div>
+        <div style={{ fontSize: 12, color: t.dim, marginBottom: 14 }}>Sesi kelas yang dijeda, tersimpan di Firebase — muncul dari device manapun. Maksimal 10 sesi terbaru.</div>
+        {historyList.length === 0 ? (
+          <div style={{ padding: "20px 0", textAlign: "center", color: t.faint, fontSize: 13 }}>Belum ada sesi yang dijeda.</div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {historyList.map((it) => (
+              <div key={it.id} style={{ background: t.panel, borderRadius: 12, padding: "12px 14px", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                <div style={{ flex: 1, minWidth: 160 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14, color: t.text }}>{it.className || "(tanpa nama)"}</div>
+                  <div style={{ fontSize: 11.5, color: t.dim, marginTop: 2 }}>{it.materi} · Babak {it.babakId} · {formatSavedAt(it.savedAt)}</div>
+                </div>
+                <button onClick={() => resumeSession(it)} style={{ background: "#F4B740", border: "none", color: "#101B34", padding: "8px 12px", borderRadius: 8, cursor: "pointer", fontSize: 12.5, fontWeight: 700 }}>Lanjutkan</button>
+                <button onClick={() => deleteHistoryItem(it.id)} title="Hapus sesi ini" style={{ background: "transparent", border: "none", color: "#EF5B5B", cursor: "pointer", padding: 8 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>🗑</span></button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
   /* ---------------- STAGE: SETUP (Persiapan) ---------------- */
   if (stage === "setup") {
     const SectionLabel = ({ n, children, hint }) => (
@@ -833,6 +1096,7 @@ function TebakCariKataGame({ onBack }) {
     return (
       <div style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: t.bg, color: t.text, minHeight: "100%", padding: 28, boxSizing: "border-box" }}>
         <style>{fontImport}</style>
+        {historyOpen && <HistoryModal />}
 
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 26, flexWrap: "wrap", gap: 12 }}>
           <div>
@@ -840,6 +1104,10 @@ function TebakCariKataGame({ onBack }) {
             <div style={{ fontSize: 14, color: t.dim, marginTop: 2 }}>Susun materi & kosakata sebelum mulai bermain bersama siswa.</div>
           </div>
           <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={() => setHistoryOpen(true)} style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: "none", color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, position: "relative" }}>
+              <span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>📜</span> Riwayat Sesi
+              {historyList.length > 0 && <span style={{ position: "absolute", top: -5, right: -5, background: "#EF5B5B", color: "#fff", borderRadius: "50%", width: 18, height: 18, fontSize: 10, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>{historyList.length}</span>}
+            </button>
             <button onClick={onBack} style={{ background: t.panel, border: "none", color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}>← Pilih Game</button>
             <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")} style={{ background: t.panel, border: "none", color: t.text, padding: 10, borderRadius: 10, cursor: "pointer" }}>{theme === "dark" ? <span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>☀</span> : <span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>🌙</span>}</button>
           </div>
@@ -892,12 +1160,13 @@ function TebakCariKataGame({ onBack }) {
                   <textarea value={w.clue} onChange={(e) => updateWord(babakId, w.id, "clue", e.target.value)} placeholder="Jelaskan kata ini dengan bahasa Indonesia" rows={2}
                     style={{ padding: "9px 10px", borderRadius: 8, border: "none", background: t.panel, color: t.text, fontSize: 13, resize: "vertical", fontFamily: "inherit" }} />
                 </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 5, alignItems: "center" }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: 5, alignItems: "center", width: 100 }}>
                   <label style={fieldLabelStyle}>Audio</label>
-                  <label title={w.audioUrl ? "Audio sudah diunggah" : "Unggah audio"} style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 36, height: 36, background: t.panel, borderRadius: 8, color: w.audioUrl ? "#3FBFAD" : t.dim, cursor: "pointer", flexShrink: 0 }}>
-                    {w.audioUrl ? <span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>🎵</span> : <span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>⬆</span>}
-                    <input type="file" accept="audio/*" onChange={(e) => uploadAudio(babakId, w.id, e.target.files[0])} style={{ display: "none" }} />
+                  <label title={uploadingAudio[w.id] ? "Sedang mengunggah…" : w.audioUrl ? "Audio sudah diunggah — klik untuk ganti" : "Unggah audio"} style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 36, height: 36, background: t.panel, borderRadius: 8, color: uploadingAudio[w.id] ? "#F4B740" : w.audioUrl ? "#3FBFAD" : t.dim, cursor: uploadingAudio[w.id] ? "default" : "pointer", flexShrink: 0, opacity: uploadingAudio[w.id] ? 0.6 : 1 }}>
+                    {uploadingAudio[w.id] ? <span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>⏳</span> : w.audioUrl ? <span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>🎵</span> : <span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>⬆</span>}
+                    <input type="file" accept="audio/*" disabled={uploadingAudio[w.id]} onChange={(e) => uploadAudio(babakId, w.id, e.target.files[0])} style={{ display: "none" }} />
                   </label>
+                  {audioUploadError[w.id] && <div style={{ fontSize: 10, color: "#EF5B5B", textAlign: "center", lineHeight: 1.3 }}>{audioUploadError[w.id]}</div>}
                 </div>
                 <button onClick={() => removeWord(babakId, w.id)} title="Hapus kosakata ini" style={{ background: "transparent", border: "none", color: "#EF5B5B", cursor: "pointer", padding: 8, marginTop: 16 }}><span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>🗑</span></button>
               </div>
@@ -910,7 +1179,7 @@ function TebakCariKataGame({ onBack }) {
           display: "flex", alignItems: "center", gap: 8, background: canStart ? "#F4B740" : t.panel2, color: canStart ? "#101B34" : t.faint,
           border: "none", borderRadius: 12, padding: "14px 22px", fontWeight: 700, fontSize: 15, cursor: canStart ? "pointer" : "default",
         }}>Mulai Permainan <span style={{ fontSize: 17, lineHeight: 1, color: 'inherit' }}>➡</span></button>
-        {!canStart && <div style={{ marginTop: 8, fontSize: 12.5, color: t.faint }}>Isi minimal satu kosakata di Babak 1 dan Babak 2 untuk mulai.</div>}
+        {!canStart && <div style={{ marginTop: 8, fontSize: 12.5, color: t.faint }}>Isi minimal satu kosakata di Babak 1, 2, dan 3 untuk mulai.</div>}
       </div>
     );
   }
@@ -922,8 +1191,12 @@ function TebakCariKataGame({ onBack }) {
         <style>{fontImport}</style>
         <audio ref={audioRef} style={{ display: "none" }} />
         {phonePreview && <PhonePreview />}
+        {saveNameOpen && <SaveNameModal />}
         <button onClick={() => setProjectorMode(false)} title="Keluar mode proyektor" style={{ position: "fixed", top: 16, right: 16, background: t.panel, border: "none", color: t.text, padding: 10, borderRadius: 10, cursor: "pointer", zIndex: 30 }}><span style={{ fontSize: 18, lineHeight: 1, color: 'inherit' }}>⤡</span></button>
-        <button onClick={endGame} title="Akhiri permainan" style={{ position: "fixed", top: 16, left: 16, display: "flex", alignItems: "center", gap: 6, background: t.bg, border: "1px solid #EF5B5B", color: "#EF5B5B", padding: "10px 12px", borderRadius: 10, cursor: "pointer", zIndex: 30, fontSize: 13, fontWeight: 700 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>⏹</span> Akhiri</button>
+        <div style={{ position: "fixed", top: 16, left: 16, display: "flex", gap: 8, zIndex: 30 }}>
+          <button onClick={endGame} title="Akhiri permainan" style={{ display: "flex", alignItems: "center", gap: 6, background: t.bg, border: "1px solid #EF5B5B", color: "#EF5B5B", padding: "10px 12px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>⏹</span> Akhiri</button>
+          <button onClick={openSaveNamePrompt} title="Simpan progres & jeda, lanjutkan nanti" style={{ display: "flex", alignItems: "center", gap: 6, background: t.bg, border: "1px solid #F4B740", color: "#F4B740", padding: "10px 12px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>💾</span> Simpan & Jeda</button>
+        </div>
 
         <div style={{ maxWidth: controlsOpen ? "calc(100% - 356px)" : 900, margin: "0 auto", padding: "28px 28px 100px", boxSizing: "border-box", transition: "max-width .2s ease" }}>
           <div className="sgt" style={{ fontSize: 24, fontWeight: 700, textAlign: "center", marginBottom: 16 }}>Tebak &amp; Cari Kata — {babak.label}</div>
@@ -959,12 +1232,19 @@ function TebakCariKataGame({ onBack }) {
       <style>{fontImport}</style>
       <audio ref={audioRef} style={{ display: "none" }} />
       {phonePreview && <PhonePreview />}
+      {saveNameOpen && <SaveNameModal />}
       {qrOpen && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 60 }} onClick={() => setQrOpen(false)}>
           <div onClick={(e) => e.stopPropagation()} style={{ background: "#FFFFFF", borderRadius: 20, padding: 28, textAlign: "center", boxShadow: "0 20px 60px rgba(0,0,0,.4)" }}>
             <div className="sgt" style={{ fontSize: 17, fontWeight: 700, color: "#101B34", marginBottom: 4 }}>Scan untuk gabung</div>
             <div style={{ fontSize: 13, color: "#5B6272", marginBottom: 14 }}>Kode Room: <b>{roomCode}</b> · {Object.keys(joinedGroups).length} kelompok sudah join</div>
-            <div ref={qrBoxRef} style={{ display: "flex", justifyContent: "center" }} />
+            {isFileProtocol() ? (
+              <div style={{ width: 220, background: "#FDECEC", border: "1px solid #EF5B5B", borderRadius: 10, padding: "12px 14px", fontSize: 12.5, color: "#8A1F1F", textAlign: "left", lineHeight: 1.5 }}>
+                <b>QR ini tidak akan berfungsi.</b> File dibuka langsung dari komputer (file://), jadi HP siswa tidak bisa mengaksesnya. Unggah dulu file ini ke layanan hosting (mis. Firebase Hosting, Netlify, atau GitHub Pages), lalu buka lewat alamat https:// hosting tersebut.
+              </div>
+            ) : (
+              <div ref={qrBoxRef} style={{ display: "flex", justifyContent: "center" }} />
+            )}
             <button onClick={() => setQrOpen(false)} style={{ marginTop: 14, background: "#F1EEE4", border: "none", color: "#101B34", padding: "8px 16px", borderRadius: 8, cursor: "pointer", fontSize: 13 }}>Tutup</button>
           </div>
         </div>
@@ -995,6 +1275,7 @@ function TebakCariKataGame({ onBack }) {
         <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")} style={{ background: t.panel, border: "none", color: t.text, padding: 10, borderRadius: 10, cursor: "pointer" }}>{theme === "dark" ? <span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>☀</span> : <span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>🌙</span>}</button>
         <button onClick={() => setProjectorMode(true)} style={{ display: "flex", alignItems: "center", gap: 6, background: "#F4B740", border: "none", color: "#101B34", padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>⤢</span> Mode Proyektor</button>
         <div style={{ flex: "1 0 auto" }} />
+        <button onClick={openSaveNamePrompt} title="Simpan progres & jeda, lanjutkan nanti (mis. pindah ke kelas lain)" style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: "1px solid #F4B740", color: "#F4B740", padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>💾</span> Simpan & Jeda</button>
         <button onClick={endGame} style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: "1px solid #EF5B5B", color: "#EF5B5B", padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>⏹</span> Akhiri Permainan</button>
       </div>
 
@@ -1238,25 +1519,59 @@ function BukaKotakGame({ onBack }) {
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(90px, 1fr))", gap: 10, maxWidth: 900 }}>
-        {items.map((it, i) => {
-          const isOpen = opened[it.id];
-          return (
-            <button key={it.id} onClick={() => openBox(it)} style={{
-              aspectRatio: "1 / 1", borderRadius: 12, cursor: "pointer",
-              border: `3px solid ${BOX_COLORS[i % BOX_COLORS.length]}`,
-              background: isOpen ? t.panel2 : t.panel, color: isOpen ? t.faint : t.text,
-              fontWeight: 700, fontSize: 20, display: "flex", alignItems: "center", justifyContent: "center", opacity: isOpen ? 0.55 : 1,
-            }} className="sgt">{i + 1}</button>
-          );
-        })}
+      <div style={{ maxWidth: 860, margin: "0 auto" }}>
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, color: t.dim, marginBottom: 6 }}>
+            <span>Progres</span><span>{openedCount}/{items.length} kotak dibuka</span>
+          </div>
+          <div style={{ height: 8, borderRadius: 999, background: t.panel, overflow: "hidden" }}>
+            <div style={{ height: "100%", width: `${items.length ? (openedCount / items.length) * 100 : 0}%`, background: "#F4B740", borderRadius: 999, transition: "width .3s ease" }} />
+          </div>
+        </div>
+
+        <div style={{ background: t.panel, borderRadius: 20, padding: 20 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(84px, 1fr))", gap: 12 }}>
+            {items.map((it, i) => {
+              const isOpen = opened[it.id];
+              return (
+                <button key={it.id} onClick={() => openBox(it)} style={{
+                  aspectRatio: "1 / 1", borderRadius: 14, cursor: isOpen ? "default" : "pointer", border: "none",
+                  background: isOpen ? t.panel2 : BOX_COLORS[i % BOX_COLORS.length], color: isOpen ? t.faint : "#101B34",
+                  fontWeight: 800, fontSize: 19, display: "flex", alignItems: "center", justifyContent: "center",
+                  opacity: isOpen ? 0.45 : 1, boxShadow: isOpen ? "none" : "0 3px 0 rgba(0,0,0,.16)",
+                  transform: isOpen ? "scale(.94)" : "scale(1)", transition: "transform .15s ease, opacity .15s ease",
+                }} className="sgt">{isOpen ? <span style={{ fontSize: 20, lineHeight: 1, color: 'inherit' }}>✓</span> : i + 1}</button>
+              );
+            })}
+          </div>
+        </div>
       </div>
     </div>
   );
 }
 
 /* ===========================================================
-   PEMILIH GAME (layar paling awal)
+   LOGIN GURU — wajib Google Sign-In sebelum masuk ke layar
+   Persiapan/Panel Guru. Siswa tetap bebas lewat scan QR.
+=========================================================== */
+function TeacherLoginScreen({ onSignIn, busy, error }) {
+  return (
+    <div style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: THEMES.light.bg, color: THEMES.light.text, minHeight: "100%", display: "flex", alignItems: "center", justifyContent: "center", padding: 28, boxSizing: "border-box" }}>
+      <style>{fontImport}</style>
+      <div style={{ width: "min(360px, 100%)", background: "#FFFFFF", borderRadius: 20, padding: 32, boxShadow: "0 2px 10px rgba(0,0,0,.06)", textAlign: "center", boxSizing: "border-box" }}>
+        <div className="sgt" style={{ fontSize: 22, fontWeight: 700, marginBottom: 8 }}>Masuk sebagai Guru</div>
+        <div style={{ fontSize: 13, color: THEMES.light.dim, marginBottom: 24, lineHeight: 1.5 }}>Layar Persiapan &amp; Panel Guru cuma bisa dibuka setelah login. Siswa tetap bisa join permainan lewat scan QR tanpa perlu login.</div>
+        <button onClick={onSignIn} disabled={busy} style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10, width: "100%", background: "#F4B740", color: "#101B34", border: "none", borderRadius: 12, padding: "14px 18px", fontWeight: 700, fontSize: 15, cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1, boxSizing: "border-box" }}>
+          <span className="sgt" style={{ fontSize: 16, lineHeight: 1 }}>G</span> {busy ? "Membuka jendela login…" : "Masuk dengan Google"}
+        </button>
+        {error && <div style={{ marginTop: 12, fontSize: 12.5, color: "#EF5B5B" }}>{error}</div>}
+      </div>
+    </div>
+  );
+}
+
+/* ===========================================================
+   PEMILIH GAME (layar paling awal, khusus guru yang sudah login)
 =========================================================== */
 const GAMES = [
   { id: "g1", name: "Tebak & Cari Kata", desc: "Word search kelompok dengan petunjuk audio & buzzer", available: true },
@@ -1268,6 +1583,10 @@ function App() {
   const [activeGame, setActiveGame] = useState(() => {
     try { return localStorage.getItem("app-active-game") || null; } catch (e) { return null; }
   });
+  // undefined = status login belum diketahui (baru buka web), null = sudah tahu tapi belum login
+  const [authUser, setAuthUser] = useState(undefined);
+  const [signingIn, setSigningIn] = useState(false);
+  const [loginError, setLoginError] = useState("");
   const joinCode = getJoinCodeFromUrl();
 
   useEffect(() => {
@@ -1277,14 +1596,55 @@ function App() {
     } catch (e) {}
   }, [activeGame]);
 
+  // Pantau status login. Untuk siswa (buka lewat ?join=...), sesi ANONIM dibuat otomatis di
+  // background — tidak perlu tombol login. Untuk guru, sesi anonim TIDAK dianggap "sudah login":
+  // guru wajib klik "Masuk dengan Google" di TeacherLoginScreen sebelum masuk layar Persiapan.
+  useEffect(() => {
+    const unsub = auth.onAuthStateChanged((user) => setAuthUser(user));
+    if (joinCode) ensureAnonymousAuth();
+    return unsub;
+  }, [joinCode]);
+
+  function handleTeacherSignIn() {
+    setSigningIn(true); setLoginError("");
+    signInTeacherWithGoogle()
+      .catch((err) => {
+        console.error("Gagal login Google:", err);
+        setLoginError(err && err.code === "auth/popup-closed-by-user" ? "Login dibatalkan." : "Gagal masuk. Coba lagi.");
+      })
+      .finally(() => setSigningIn(false));
+  }
+
+  const stillConnecting = authUser === undefined || (joinCode && !authUser);
+  if (stillConnecting) {
+    return (
+      <div style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: THEMES.light.bg, color: THEMES.light.dim, minHeight: "100%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14 }}>
+        Menghubungkan…
+      </div>
+    );
+  }
+
   if (joinCode) return <StudentJoinScreen roomCode={joinCode} />;
-  if (activeGame === "g1") return <TebakCariKataGame onBack={() => setActiveGame(null)} />;
+
+  // Dari sini ke bawah khusus guru — sesi anonim (mis. bekas siswa join di device yang sama)
+  // tidak dianggap login guru yang valid.
+  if (!authUser || authUser.isAnonymous) {
+    return <TeacherLoginScreen onSignIn={handleTeacherSignIn} busy={signingIn} error={loginError} />;
+  }
+
+  if (activeGame === "g1") return <TebakCariKataGame onBack={() => setActiveGame(null)} teacher={authUser} />;
   if (activeGame === "g2") return <BukaKotakGame onBack={() => setActiveGame(null)} />;
 
   return (
     <div style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: THEMES.light.bg, color: THEMES.light.text, minHeight: "100%", padding: 28, boxSizing: "border-box" }}>
       <style>{fontImport}</style>
-      <div className="sgt" style={{ fontSize: 30, fontWeight: 700, marginBottom: 4 }}>Pilih Game</div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12, marginBottom: 4 }}>
+        <div>
+          <div className="sgt" style={{ fontSize: 30, fontWeight: 700 }}>Pilih Game</div>
+          <div style={{ fontSize: 13, color: THEMES.light.dim, marginTop: 4 }}>Masuk sebagai {authUser.displayName || authUser.email}</div>
+        </div>
+        <button onClick={() => signOutTeacher()} style={{ background: "#FFFFFF", border: "none", color: THEMES.light.dim, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, boxShadow: "0 2px 10px rgba(0,0,0,.06)" }}>Keluar</button>
+      </div>
       <div style={{ fontSize: 14, color: THEMES.light.dim, marginBottom: 24 }}>Web interaktif siswa SMA — pilih salah satu permainan untuk mulai.</div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 14, maxWidth: 760 }}>
         {GAMES.map((g) => (
@@ -1306,3 +1666,4 @@ ReactDOM.createRoot(document.getElementById("root")).render(<App />);
 </script>
 </body>
 </html>
+
