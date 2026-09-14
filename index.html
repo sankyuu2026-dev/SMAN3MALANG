@@ -936,9 +936,14 @@ function TebakCariKataGame({ onBack, teacher }) {
 
   /* ---------- editing helpers (tahap persiapan) ---------- */
   function updateWord(id, wordId, field, value) {
+    // FIX: kata jawaban dipaksa huruf besar begitu diketik, supaya konsisten dengan grid
+    // (romaji ditulis kapital) dan tidak pernah gagal cocok dengan jawaban siswa gara-gara
+    // guru tidak sengaja mengetik huruf kecil. Aman untuk hiragana karena .toUpperCase()
+    // tidak mengubah karakter kana sama sekali.
+    const finalValue = field === "letters" ? value.toUpperCase() : value;
     setDataByMateri((prev) => {
       const materiData = prev[selectedMateri] || { 1: [], 2: [], 3: [] };
-      return { ...prev, [selectedMateri]: { ...materiData, [id]: materiData[id].map((w) => w.id === wordId ? { ...w, [field]: value } : w) } };
+      return { ...prev, [selectedMateri]: { ...materiData, [id]: materiData[id].map((w) => w.id === wordId ? { ...w, [field]: finalValue } : w) } };
     });
   }
   // SEMENTARA TANPA FIREBASE STORAGE: project belum di-upgrade ke paket Blaze (butuh kartu
@@ -986,8 +991,17 @@ function TebakCariKataGame({ onBack, teacher }) {
   const canStart = [1, 2, 3].some((id) => (dataByMateri[selectedMateri]?.[id] || []).some((w) => w.letters.trim()));
 
   /* ---------------- Reusable game bits ---------------- */
+  // FIX: buildPuzzle() bisa mengembalikan null karena dua alasan berbeda — (a) memang belum
+  // ada kosakata valid di babak ini, atau (b) kosakata ADA tapi gagal disusun ke grid (mis.
+  // terlalu banyak/panjang untuk ukuran papan). Sebelumnya kedua kasus ini tampil sama persis
+  // ("Belum ada kosakata"), padahal (b) butuh tindakan berbeda dari guru (kurangi/perpendek kata).
+  const hasWordsForBabak = babak.words.some((w) => w.letters.trim());
   const Grid = ({ big }) => !puzzle ? (
-    <div style={{ padding: 24, color: t.dim, fontSize: 14 }}>Belum ada kosakata untuk babak ini.</div>
+    <div style={{ padding: 24, color: t.dim, fontSize: 14 }}>
+      {hasWordsForBabak
+        ? `Papan gagal disusun dari kosakata Babak ${babakId} ini — coba kurangi jumlah kata atau perpendek beberapa kata, lalu buka layar Persiapan dan klik "Acak Ulang Posisi".`
+        : "Belum ada kosakata untuk babak ini."}
+    </div>
   ) : (
     <div style={{ display: "grid", gridTemplateColumns: `repeat(${puzzle.size}, minmax(0, 1fr))`, gap: big ? 4 : 3, background: t.panel, padding: 10, borderRadius: 14, maxWidth: big ? 760 : 620, width: "100%", margin: big ? "0 auto" : undefined, boxSizing: "border-box" }}>
       {puzzle.grid.map((row, r) => row.map((letter, c) => {
@@ -1207,13 +1221,21 @@ function TebakCariKataGame({ onBack, teacher }) {
       </div>
     );
     const fieldLabelStyle = { fontSize: 10.5, color: t.faint, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.4 };
-    // Peta warna per sel grid pratinjau — dihitung sekali di sini (bukan per-sel saat render)
-    // supaya tidak perlu loop kata berulang-ulang untuk tiap satu dari ratusan sel grid.
-    const answerKeyCellColor = {};
+    // FIX (UX): kunci jawaban dulu mewarnai SETIAP SEL kata dengan blok warna solid — kalau
+    // banyak kata & banyak yang tumpang tindih, tampilannya jadi penuh kotak-kotak dan berat di
+    // mata (apalagi kata diagonal jadi terlihat "patah-patah" karena tiap sel diagonal digambar
+    // sebagai kotak terpisah, bukan garis lurus menyambung). Sekarang tiap kata cukup digambar
+    // sebagai SATU garis tipis transparan dari huruf pertama ke huruf terakhir (mengikuti sudut
+    // aslinya, termasuk diagonal), mirip tampilan word-search pada umumnya — jauh lebih ringan
+    // dilihat dan tetap jelas menunjukkan posisi & arah tiap kata.
+    const answerKeySegments = [];
     if (showAnswerKey && puzzlePreview) {
       babak.words.forEach((w) => {
         const cells = puzzlePreview.placements[w.id];
-        if (cells) cells.forEach(([r, c]) => { answerKeyCellColor[cellKey(r, c)] = answerKeyColorByWordId[w.id]; });
+        if (!cells || cells.length === 0) return;
+        const [r1, c1] = cells[0];
+        const [r2, c2] = cells[cells.length - 1];
+        answerKeySegments.push({ id: w.id, x1: c1 + 0.5, y1: r1 + 0.5, x2: c2 + 0.5, y2: r2 + 0.5, color: answerKeyColorByWordId[w.id] });
       });
     }
     return (
@@ -1312,19 +1334,29 @@ function TebakCariKataGame({ onBack, teacher }) {
           </div>
 
           {!puzzlePreview ? (
-            <div style={{ padding: 20, color: t.dim, fontSize: 13.5, textAlign: "center" }}>Isi kosakata Babak {babakId} dulu untuk melihat pratinjau papan.</div>
+            <div style={{ padding: 20, color: t.dim, fontSize: 13.5, textAlign: "center" }}>
+              {/* FIX: puzzlePreviewEntry.puzzle === null berarti kosakata sudah diisi tapi grid
+                  gagal dibangun (bukan sekadar belum diisi) — beri pesan & solusi yang berbeda. */}
+              {puzzlePreviewEntry && puzzlePreviewEntry.signature === babakWordsSig && puzzlePreviewEntry.puzzle === null
+                ? `Papan gagal disusun dari kosakata Babak ${babakId} — coba kurangi jumlah kata atau perpendek beberapa kata, lalu klik "Acak Ulang Posisi" lagi.`
+                : `Isi kosakata Babak ${babakId} dulu untuk melihat pratinjau papan.`}
+            </div>
           ) : (
             <>
               <div style={{ fontSize: 12, color: t.faint, marginBottom: 10, lineHeight: 1.5 }}>
                 Susunan huruf di bawah ini yang akan dipakai persis saat "Mulai Permainan" untuk Babak {babakId} — bukan diacak ulang otomatis. Klik "Acak Ulang Posisi" kalau ingin susunan lain sebelum sesi dimulai bersama siswa.
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: `repeat(${puzzlePreview.size}, minmax(0, 1fr))`, gap: 3, background: t.panel2, padding: 10, borderRadius: 12, maxWidth: 440, boxSizing: "border-box" }}>
-                {puzzlePreview.grid.map((row, r) => row.map((letter, c) => {
-                  const color = answerKeyCellColor[cellKey(r, c)];
-                  return (
-                    <div key={cellKey(r, c)} style={{ aspectRatio: "1 / 1", borderRadius: 4, background: color || "transparent", color: color ? "#101B34" : t.faint, fontWeight: 700, fontSize: 10.5, display: "flex", alignItems: "center", justifyContent: "center" }}>{letter}</div>
-                  );
-                }))}
+              <div style={{ background: t.panel2, borderRadius: 12, padding: 10, maxWidth: 440, boxSizing: "border-box" }}>
+                <svg viewBox={`0 0 ${puzzlePreview.size} ${puzzlePreview.size}`} style={{ width: "100%", height: "auto", display: "block" }}>
+                  {answerKeySegments.map((seg) => (
+                    <line key={seg.id} x1={seg.x1} y1={seg.y1} x2={seg.x2} y2={seg.y2}
+                      stroke={seg.color} strokeWidth={0.62} strokeLinecap="round" opacity={0.55} />
+                  ))}
+                  {puzzlePreview.grid.map((row, r) => row.map((letter, c) => (
+                    <text key={cellKey(r, c)} x={c + 0.5} y={r + 0.5} textAnchor="middle" dominantBaseline="central"
+                      fontSize={0.44} fontWeight={700} fill={t.cellText} style={{ fontFamily: "'Work Sans', system-ui, sans-serif" }}>{letter}</text>
+                  )))}
+                </svg>
               </div>
               {showAnswerKey && (
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12 }}>
