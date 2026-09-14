@@ -20,9 +20,11 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.24.7/babel.min.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-storage-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<!-- firebase-storage & qrcodejs SENGAJA tidak dimuat di sini: keduanya hanya dipakai di layar
+     guru (unggah audio/gambar & tampilkan QR). Siswa yang scan QR cuma butuh layar buzzer,
+     jadi dua library ini dimuat belakangan lewat loadScriptOnce() hanya kalau benar-benar
+     dibutuhkan — menghemat unduhan di 30-an HP siswa yang membuka web bersamaan. -->
 
 <script type="text/babel" data-presets="react">
 const { useState, useMemo, useRef, useCallback, useEffect } = React;
@@ -42,8 +44,29 @@ const firebaseConfig = {
 };
 firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore();
-const storage = firebase.storage();
 const auth = firebase.auth();
+
+/* ---------------------------------------------------------
+   PEMUAT SCRIPT SESUAI KEBUTUHAN
+   Library yang cuma dipakai guru (qrcodejs) tidak ikut diunduh saat halaman
+   dibuka. Baru diambil ketika fiturnya benar-benar dipakai, jadi HP siswa yang
+   join lewat QR tidak perlu mengunduhnya sama sekali.
+--------------------------------------------------------- */
+const _scriptCache = {};
+function loadScriptOnce(src) {
+  if (_scriptCache[src]) return _scriptCache[src];
+  _scriptCache[src] = new Promise((resolve, reject) => {
+    const el = document.createElement("script");
+    el.src = src;
+    el.onload = () => resolve();
+    el.onerror = () => { delete _scriptCache[src]; reject(new Error("Gagal memuat " + src)); };
+    document.head.appendChild(el);
+  });
+  return _scriptCache[src];
+}
+function loadQrLibrary() {
+  return loadScriptOnce("https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js");
+}
 // Tanpa sesi login sama sekali, security rules Firestore/Storage tidak punya cara membedakan
 // "aplikasi ini" dari script sembarangan (kalau rules-nya "allow write: if true", siapa pun bisa
 // menulis/menghapus data siapa saja lewat DevTools). Ada dua jenis sesi di app ini:
@@ -106,6 +129,82 @@ function getJoinUrl(roomCode) {
 // jadi link/QR join tidak akan pernah bisa diakses oleh HP siswa.
 function isFileProtocol() {
   try { return window.location.protocol === "file:"; } catch (e) { return false; }
+}
+
+/* ---------------------------------------------------------
+   PENYIMPANAN LOKAL YANG "BERISIK"
+   Dulu semua localStorage.setItem dibungkus try/catch kosong, jadi kalau kuota
+   browser penuh (gampang terjadi karena audio disimpan base64) penyimpanan gagal
+   diam-diam — guru baru sadar kosakatanya hilang setelah refresh. safeSetItem
+   mengembalikan status kegagalan supaya UI bisa menampilkan peringatan.
+--------------------------------------------------------- */
+function isQuotaError(e) {
+  if (!e) return false;
+  return e.name === "QuotaExceededError" || e.name === "NS_ERROR_DOM_QUOTA_REACHED" || e.code === 22 || e.code === 1014;
+}
+function safeSetItem(key, value) {
+  try {
+    localStorage.setItem(key, value);
+    return { ok: true };
+  } catch (e) {
+    return {
+      ok: false,
+      quota: isQuotaError(e),
+      message: isQuotaError(e)
+        ? "Penyimpanan browser penuh — perubahan terakhir BELUM tersimpan. Hapus audio yang tidak terpakai, atau ekspor cadangan lalu bersihkan data."
+        : "Browser menolak menyimpan data (mungkin mode penyamaran/incognito). Perubahan terakhir BELUM tersimpan.",
+    };
+  }
+}
+// Perkiraan pemakaian kuota localStorage untuk domain ini (dipakai buat indikator di UI).
+function estimateStorageUsage() {
+  try {
+    let total = 0;
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      total += (k.length + (localStorage.getItem(k) || "").length) * 2; // UTF-16 ≈ 2 byte/char
+    }
+    return total;
+  } catch (e) { return 0; }
+}
+function formatBytes(n) {
+  if (n < 1024) return n + " B";
+  if (n < 1024 * 1024) return (n / 1024).toFixed(0) + " KB";
+  return (n / (1024 * 1024)).toFixed(1) + " MB";
+}
+
+/* ---------------------------------------------------------
+   EKSPOR / IMPOR CADANGAN
+   Semua materi & kosakata cuma hidup di localStorage browser itu. Ganti laptop,
+   bersihkan cache, atau buka lewat incognito = hilang semua. Dua fungsi ini bikin
+   guru bisa menyimpan cadangan ke file .json dan memuatnya lagi kapan saja.
+--------------------------------------------------------- */
+function downloadJson(filename, dataObj) {
+  try {
+    const blob = new Blob([JSON.stringify(dataObj, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    return true;
+  } catch (e) { return false; }
+}
+function readJsonFile(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      try { resolve(JSON.parse(reader.result)); }
+      catch (e) { reject(new Error("File tidak bisa dibaca — pastikan itu file cadangan .json dari aplikasi ini.")); }
+    };
+    reader.onerror = () => reject(new Error("Gagal membaca file."));
+    reader.readAsText(file);
+  });
+}
+function todayStamp() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
 
@@ -441,6 +540,7 @@ function StudentJoinScreen({ roomCode }) {
 
   function pressBuzz() {
     if (!room || !myGroup || busy) return;
+    if (room.buzzMode === "manual") return; // guru pakai mode Manual — buzzer HP dikunci
     const roundId = room.roundId || null;
     if (!roundId) return;
     setBusy(true);
@@ -497,6 +597,7 @@ function StudentJoinScreen({ roomCode }) {
   }
 
   const roundId = room.roundId || null;
+  const isManualMode = room.buzzMode === "manual";
   const order = Array.isArray(room.buzzOrder) ? room.buzzOrder : [];
   const myIndex = order.findIndex((o) => o.group === myGroup);
   const myPosition = myIndex >= 0 ? myIndex + 1 : null;
@@ -504,11 +605,12 @@ function StudentJoinScreen({ roomCode }) {
   // Sekarang dibaca dari activeTurnGroup yang disiarkan ulang oleh guru setiap kali giliran
   // berpindah (termasuk setelah kelompok di depan salah jawab).
   const isMyTurn = room.activeTurnGroup === myGroup;
-  const canBuzz = !!roundId && myPosition === null;
+  const canBuzz = !isManualMode && !!roundId && myPosition === null;
 
   let title = "Menunggu soal dari guru…";
   let sub = "Dengarkan petunjuknya dulu.";
-  if (isMyTurn) { title = "Giliranmu sekarang! 🎉"; sub = "Maju ke depan, jawab pertanyaannya."; }
+  if (isManualMode) { title = "Mode Manual"; sub = "Angkat tangan langsung di kelas — guru yang menilai siapa duluan, tombol ini tidak dipakai."; }
+  else if (isMyTurn) { title = "Giliranmu sekarang! 🎉"; sub = "Maju ke depan, jawab pertanyaannya."; }
   else if (myPosition) { title = `Kamu urutan ke-${myPosition}`; sub = "Tunggu giliranmu kalau yang di depan salah."; }
   else if (roundId) { title = "Soal aktif — siap?"; sub = "Tekan tombol kalau sudah tahu jawabannya."; }
 
@@ -518,11 +620,13 @@ function StudentJoinScreen({ roomCode }) {
       <div style={{ fontSize: 12.5, color: t.dim, marginBottom: 4 }}>Room {roomCode} · Kelompok {myGroup}</div>
       <div className="sgt" style={{ fontSize: 20, fontWeight: 700, marginBottom: 4, color: isMyTurn ? "#3FBFAD" : t.text }}>{title}</div>
       <div style={{ fontSize: 13, color: t.dim, marginBottom: 24 }}>{sub}</div>
-      <button onClick={pressBuzz} disabled={!canBuzz || busy} style={{
-        width: 180, height: 180, borderRadius: "50%", border: "none", cursor: canBuzz ? "pointer" : "default",
-        background: isMyTurn ? "#3FBFAD" : canBuzz ? GROUP_COLORS[myGroup - 1] : t.panel2, color: "#101B34",
-        fontWeight: 700, fontSize: 16, opacity: canBuzz || myPosition ? 1 : 0.45,
-      }}>{isMyTurn ? <span style={{ fontSize: 46, lineHeight: 1, color: "inherit" }}>✅</span> : myPosition ? `#${myPosition}` : "ANGKAT\nTANGAN"}</button>
+      {!isManualMode && (
+        <button onClick={pressBuzz} disabled={!canBuzz || busy} style={{
+          width: 180, height: 180, borderRadius: "50%", border: "none", cursor: canBuzz ? "pointer" : "default",
+          background: isMyTurn ? "#3FBFAD" : canBuzz ? GROUP_COLORS[myGroup - 1] : t.panel2, color: "#101B34",
+          fontWeight: 700, fontSize: 16, opacity: canBuzz || myPosition ? 1 : 0.45,
+        }}>{isMyTurn ? <span style={{ fontSize: 46, lineHeight: 1, color: "inherit" }}>✅</span> : myPosition ? `#${myPosition}` : "ANGKAT\nTANGAN"}</button>
+      )}
 
       {/* FIX: dulu papan skor cuma muncul di "Pratinjau HP Siswa" milik guru (karena modal itu
           dirender di komponen guru yang punya akses langsung ke state skor). Di HP asli, skor
@@ -722,6 +826,8 @@ function TebakCariKataGame({ onBack, teacher }) {
   const [selectedMateri, setSelectedMateri] = useState("Gakkou no Seikatsu");
   const [dataByMateri, setDataByMateri] = useState(initialDataByMateri);
   const [loaded, setLoaded] = useState(false);
+  const [storageWarning, setStorageWarning] = useState(null); // pesan kalau localStorage gagal menyimpan
+  const [importMsg, setImportMsg] = useState(null); // { ok, text } hasil ekspor/impor cadangan
   const [babakId, setBabakId] = useState(1);
   const [mode, setMode] = useState("digital");
   const [audioMode, setAudioMode] = useState("guru");
@@ -825,12 +931,11 @@ function TebakCariKataGame({ onBack, teacher }) {
   useEffect(() => {
     if (!loaded) return;
     const tm = setTimeout(() => {
-      try {
-        localStorage.setItem("tck-progress", JSON.stringify({
-          stage, babakId, mode, audioMode, scores, roomCode, queue, foundMap,
-          triedSet: Array.from(triedSet), puzzle,
-        }));
-      } catch (e) { /* kemungkinan kuota localStorage penuh */ }
+      const res = safeSetItem("tck-progress", JSON.stringify({
+        stage, babakId, mode, audioMode, scores, roomCode, queue, foundMap,
+        triedSet: Array.from(triedSet), puzzle,
+      }));
+      setStorageWarning(res.ok ? null : res.message);
     }, 500);
     return () => clearTimeout(tm);
   }, [stage, babakId, mode, audioMode, scores, roomCode, queue, foundMap, triedSet, puzzle, loaded]);
@@ -844,6 +949,33 @@ function TebakCariKataGame({ onBack, teacher }) {
     );
     return () => unsub();
   }, [stage]);
+
+  /* ---- Cadangan kosakata: ekspor ke file .json & impor kembali ---- */
+  function exportBackup() {
+    const ok = downloadJson(`cadangan-tebak-cari-kata-${todayStamp()}.json`, {
+      app: "tebak-cari-kata", version: 1, exportedAt: new Date().toISOString(),
+      selectedMateri, dataByMateri,
+    });
+    setImportMsg(ok
+      ? { ok: true, text: "Cadangan berhasil diunduh. Simpan file itu di tempat aman." }
+      : { ok: false, text: "Gagal membuat file cadangan." });
+  }
+
+  function importBackup(file) {
+    if (!file) return;
+    readJsonFile(file).then((data) => {
+      if (!data || data.app !== "tebak-cari-kata" || !data.dataByMateri) {
+        throw new Error("File ini bukan cadangan Tebak & Cari Kata.");
+      }
+      const materiCount = Object.keys(data.dataByMateri).length;
+      if (!window.confirm(`Muat cadangan ini? ${materiCount} materi di cadangan akan MENIMPA materi dengan nama sama yang ada sekarang. Materi lain tetap aman.`)) return;
+      setDataByMateri((prev) => ({ ...prev, ...data.dataByMateri }));
+      if (data.selectedMateri) setSelectedMateri(data.selectedMateri);
+      setImportMsg({ ok: true, text: `Cadangan dimuat — ${materiCount} materi diperbarui.` });
+    }).catch((err) => {
+      setImportMsg({ ok: false, text: err.message || "Gagal memuat cadangan." });
+    });
+  }
 
   function endGame() {
     if (!window.confirm("Akhiri permainan ini? Skor & progres babak yang sedang berjalan akan dihapus.")) return;
@@ -860,9 +992,8 @@ function TebakCariKataGame({ onBack, teacher }) {
   useEffect(() => {
     if (!loaded) return;
     const tm = setTimeout(() => {
-      try {
-        localStorage.setItem("tck-setup-data", JSON.stringify({ dataByMateri, selectedMateri, theme, puzzleByBabak }));
-      } catch (e) { /* kemungkinan kuota localStorage penuh (audio terlalu besar) */ }
+      const res = safeSetItem("tck-setup-data", JSON.stringify({ dataByMateri, selectedMateri, theme, puzzleByBabak }));
+      setStorageWarning(res.ok ? null : res.message);
     }, 500);
     return () => clearTimeout(tm);
   }, [dataByMateri, selectedMateri, theme, puzzleByBabak, loaded]);
@@ -1080,16 +1211,18 @@ function TebakCariKataGame({ onBack, teacher }) {
 
   // Sinkronkan status ronde ke Firestore — roundId baru aktif (siswa boleh angkat tangan)
   // setelah guru menampilkan/memutar petunjuk, supaya tidak ada yang buzz duluan sebelum soal dibacakan.
+  // buzzMode ikut disiarkan supaya HP siswa tahu kalau guru sedang pakai mode Manual (guru yang
+  // menunjuk langsung) — di mode itu, tombol angkat tangan di HP harus nonaktif total.
   useEffect(() => {
     if (stage !== "play") return;
     const roundId = currentWord && clueRevealed ? currentWord.id : null;
     db.collection("rooms").doc(roomCode).set({
-      mode: "tck", materi: selectedMateri, babakId, roundId,
+      mode: "tck", materi: selectedMateri, babakId, roundId, buzzMode: mode,
       buzzOrder: [],
       buzz: firebase.firestore.FieldValue.delete(),
       updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
     }, { merge: true }).catch(() => {});
-  }, [stage, roomCode, currentWord?.id, selectedMateri, babakId, clueRevealed]);
+  }, [stage, roomCode, currentWord?.id, selectedMateri, babakId, clueRevealed, mode]);
 
   // BUGFIX: giliran yang berpindah secara lokal (mis. kelompok pertama salah, sistem otomatis
   // maju ke kelompok berikutnya yang sudah antre) sebelumnya tidak pernah ditulis balik ke
@@ -1110,6 +1243,8 @@ function TebakCariKataGame({ onBack, teacher }) {
   }, [stage, roomCode, scores]);
 
   // Dengarkan kelompok yang join & angkat tangan dari HP siswa, tambahkan ke urutan lokal
+  // (buzzOrder-nya diabaikan kalau mode sedang Manual — di mode itu HP siswa memang dikunci,
+  // tapi status "sudah join" tetap dipantau terus supaya titik hijau di tombol kelompok akurat)
   useEffect(() => {
     if (stage !== "play") return;
     const ref = db.collection("rooms").doc(roomCode);
@@ -1117,6 +1252,7 @@ function TebakCariKataGame({ onBack, teacher }) {
       const data = snap.data();
       if (!data) return;
       setJoinedGroups(data.groups || {});
+      if (mode !== "digital") return;
       const roundId = currentWord ? currentWord.id : null;
       if (!roundId || data.roundId !== roundId || !Array.isArray(data.buzzOrder)) return;
       if (lastAppliedRoundRef.current !== roundId) {
@@ -1131,13 +1267,22 @@ function TebakCariKataGame({ onBack, teacher }) {
       });
     });
     return () => unsub();
-  }, [stage, roomCode, currentWord?.id]);
+  }, [stage, roomCode, currentWord?.id, mode]);
 
   // Render QR code ke dalam modal saat dibuka
   useEffect(() => {
     if (qrOpen && qrBoxRef.current && !isFileProtocol()) {
-      qrBoxRef.current.innerHTML = "";
-      new QRCode(qrBoxRef.current, { text: getJoinUrl(roomCode), width: 200, height: 200 });
+      const box = qrBoxRef.current;
+      box.innerHTML = "";
+      let cancelled = false;
+      loadQrLibrary().then(() => {
+        if (cancelled || !box.isConnected) return;
+        box.innerHTML = "";
+        new QRCode(box, { text: getJoinUrl(roomCode), width: 200, height: 200 });
+      }).catch(() => {
+        if (!cancelled && box.isConnected) box.textContent = "Gagal memuat QR — cek koneksi internet.";
+      });
+      return () => { cancelled = true; };
     }
   }, [qrOpen, roomCode]);
 
@@ -1596,10 +1741,31 @@ function TebakCariKataGame({ onBack, teacher }) {
               <span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>📜</span> Riwayat Sesi
               {historyList.length > 0 && <span style={{ position: "absolute", top: -5, right: -5, background: "#EF5B5B", color: "#fff", borderRadius: "50%", width: 18, height: 18, fontSize: 10, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>{historyList.length}</span>}
             </button>
+            <button onClick={exportBackup} title="Unduh cadangan semua materi & kosakata ke file .json" style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>💾</span> Cadangkan</button>
+            <label title="Muat cadangan dari file .json" style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}>
+              <span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>📂</span> Muat Cadangan
+              <input type="file" accept="application/json,.json" onChange={(e) => { importBackup(e.target.files[0]); e.target.value = ""; }} style={{ display: "none" }} />
+            </label>
             <button onClick={onBack} style={{ background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}>← Pilih Game</button>
             <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")} style={{ background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: 10, borderRadius: 10, cursor: "pointer" }}>{theme === "dark" ? <span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>☀</span> : <span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>🌙</span>}</button>
           </div>
         </div>
+
+        {storageWarning && (
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 10, background: "rgba(239,91,91,.12)", border: "1px solid #EF5B5B", color: t.text, borderRadius: 12, padding: "12px 14px", marginBottom: 16 }}>
+            <span style={{ fontSize: 16, lineHeight: 1.2 }}>⚠</span>
+            <div style={{ fontSize: 13, lineHeight: 1.5 }}>
+              <b style={{ color: "#EF5B5B" }}>Data belum tersimpan.</b> {storageWarning}
+              <div style={{ marginTop: 6, color: t.dim, fontSize: 12.5 }}>Terpakai sekarang: {formatBytes(estimateStorageUsage())} dari kuota browser (biasanya ±5 MB).</div>
+            </div>
+          </div>
+        )}
+        {importMsg && (
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, background: importMsg.ok ? "rgba(63,191,173,.14)" : "rgba(239,91,91,.12)", border: `1px solid ${importMsg.ok ? "#3FBFAD" : "#EF5B5B"}`, borderRadius: 12, padding: "10px 14px", marginBottom: 16, fontSize: 13 }}>
+            <span>{importMsg.ok ? "✅" : "⚠"} {importMsg.text}</span>
+            <button onClick={() => setImportMsg(null)} style={{ background: "transparent", border: "none", color: t.dim, cursor: "pointer", fontSize: 15 }}>✕</button>
+          </div>
+        )}
 
         <div style={{ background: t.panel, borderRadius: 16, padding: "18px 20px", marginBottom: 20, boxShadow: t.shadowSm }}>
           <SectionLabel n={1} hint="(sesuai Prota Bahasa Jepang kelas XI Fase F)">Pilih materi</SectionLabel>
@@ -1932,6 +2098,8 @@ function BukaKotakGame({ onBack }) {
   const [selectedMateri, setSelectedMateri] = useState("Gakkou no Seikatsu");
   const [dataByMateri, setDataByMateri] = useState(initialBoxDataByMateri);
   const [loaded, setLoaded] = useState(false);
+  const [storageWarning, setStorageWarning] = useState(null); // pesan kalau localStorage gagal menyimpan
+  const [importMsg, setImportMsg] = useState(null); // { ok, text } hasil ekspor/impor cadangan
   const [opened, setOpened] = useState({}); // id -> true
   const [activeBox, setActiveBox] = useState(null); // instruction object or null
 
@@ -1958,18 +2126,16 @@ function BukaKotakGame({ onBack }) {
   useEffect(() => {
     if (!loaded) return;
     const tm = setTimeout(() => {
-      try {
-        localStorage.setItem("bk-setup-data", JSON.stringify({ dataByMateri, selectedMateri, theme }));
-      } catch (e) { /* kemungkinan kuota localStorage penuh */ }
+      const res = safeSetItem("bk-setup-data", JSON.stringify({ dataByMateri, selectedMateri, theme }));
+      setStorageWarning(res.ok ? null : res.message);
     }, 500);
     return () => clearTimeout(tm);
   }, [dataByMateri, selectedMateri, theme, loaded]);
   useEffect(() => {
     if (!loaded) return;
     const tm = setTimeout(() => {
-      try {
-        localStorage.setItem("bk-progress", JSON.stringify({ stage, opened }));
-      } catch (e) { /* kemungkinan kuota localStorage penuh */ }
+      const res = safeSetItem("bk-progress", JSON.stringify({ stage, opened }));
+      setStorageWarning(res.ok ? null : res.message);
     }, 500);
     return () => clearTimeout(tm);
   }, [stage, opened, loaded]);
@@ -1997,6 +2163,30 @@ function BukaKotakGame({ onBack }) {
   function openBox(item) { setActiveBox(item); setOpened((o) => ({ ...o, [item.id]: true })); }
   function resetBoard() { setOpened({}); setActiveBox(null); }
 
+  /* ---- Cadangan perintah: ekspor ke file .json & impor kembali ---- */
+  function exportBackup() {
+    const ok = downloadJson(`cadangan-buka-kotak-${todayStamp()}.json`, {
+      app: "buka-kotak", version: 1, exportedAt: new Date().toISOString(),
+      selectedMateri, dataByMateri,
+    });
+    setImportMsg(ok
+      ? { ok: true, text: "Cadangan berhasil diunduh. Simpan file itu di tempat aman." }
+      : { ok: false, text: "Gagal membuat file cadangan." });
+  }
+  function importBackup(file) {
+    if (!file) return;
+    readJsonFile(file).then((data) => {
+      if (!data || data.app !== "buka-kotak" || !data.dataByMateri) {
+        throw new Error("File ini bukan cadangan Buka Kotak.");
+      }
+      const materiCount = Object.keys(data.dataByMateri).length;
+      if (!window.confirm(`Muat cadangan ini? ${materiCount} materi di cadangan akan MENIMPA materi dengan nama sama yang ada sekarang. Materi lain tetap aman.`)) return;
+      setDataByMateri((prev) => ({ ...prev, ...data.dataByMateri }));
+      if (data.selectedMateri) setSelectedMateri(data.selectedMateri);
+      setImportMsg({ ok: true, text: `Cadangan dimuat — ${materiCount} materi diperbarui.` });
+    }).catch((err) => setImportMsg({ ok: false, text: err.message || "Gagal memuat cadangan." }));
+  }
+
   if (stage === "setup") {
     return (
       <div style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: t.bg, color: t.text, minHeight: "100vh", padding: 28, boxSizing: "border-box" }}>
@@ -2007,10 +2197,31 @@ function BukaKotakGame({ onBack }) {
             <div style={{ fontSize: 14, color: t.dim, marginTop: 2 }}>Susun daftar perintah sebelum dimainkan. Individu, tanpa waktu, tanpa skor.</div>
           </div>
           <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={exportBackup} title="Unduh cadangan ke file .json" style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>💾</span> Cadangkan</button>
+            <label title="Muat cadangan dari file .json" style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}>
+              <span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>📂</span> Muat Cadangan
+              <input type="file" accept="application/json,.json" onChange={(e) => { importBackup(e.target.files[0]); e.target.value = ""; }} style={{ display: "none" }} />
+            </label>
             <button onClick={onBack} style={{ background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}>← Pilih Game</button>
             <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")} style={{ background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: 10, borderRadius: 10, cursor: "pointer" }}>{theme === "dark" ? <span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>☀</span> : <span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>🌙</span>}</button>
           </div>
         </div>
+
+        {storageWarning && (
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 10, background: "rgba(239,91,91,.12)", border: "1px solid #EF5B5B", color: t.text, borderRadius: 12, padding: "12px 14px", marginBottom: 16 }}>
+            <span style={{ fontSize: 16, lineHeight: 1.2 }}>⚠</span>
+            <div style={{ fontSize: 13, lineHeight: 1.5 }}>
+              <b style={{ color: "#EF5B5B" }}>Data belum tersimpan.</b> {storageWarning}
+              <div style={{ marginTop: 6, color: t.dim, fontSize: 12.5 }}>Terpakai sekarang: {formatBytes(estimateStorageUsage())} dari kuota browser (biasanya ±5 MB).</div>
+            </div>
+          </div>
+        )}
+        {importMsg && (
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, background: importMsg.ok ? "rgba(63,191,173,.14)" : "rgba(239,91,91,.12)", border: `1px solid ${importMsg.ok ? "#3FBFAD" : "#EF5B5B"}`, borderRadius: 12, padding: "10px 14px", marginBottom: 16, fontSize: 13 }}>
+            <span>{importMsg.ok ? "✅" : "⚠"} {importMsg.text}</span>
+            <button onClick={() => setImportMsg(null)} style={{ background: "transparent", border: "none", color: t.dim, cursor: "pointer", fontSize: 15 }}>✕</button>
+          </div>
+        )}
 
         <div style={{ marginBottom: 20 }}>
           <div style={{ fontSize: 13, color: t.dim, marginBottom: 8 }}>1. Pilih materi</div>
@@ -2129,6 +2340,8 @@ function CocokkanKartuGame({ onBack }) {
   const [babaks, setBabaks] = useState(() => [makeBabak(1)]);
   const [babakIdx, setBabakIdx] = useState(0);
   const [loaded, setLoaded] = useState(false);
+  const [storageWarning, setStorageWarning] = useState(null); // pesan kalau localStorage gagal menyimpan
+  const [importMsg, setImportMsg] = useState(null); // { ok, text } hasil ekspor/impor cadangan
   const [roomCode, setRoomCode] = useState(makeRoomCode());
   const [scores, setScores] = useState({}); // { [group]: total poin }
   const [uploadingImage, setUploadingImage] = useState({});
@@ -2157,8 +2370,8 @@ function CocokkanKartuGame({ onBack }) {
   useEffect(() => {
     if (!loaded) return;
     const tm = setTimeout(() => {
-      try { localStorage.setItem("cck-setup-data", JSON.stringify({ babaks, theme })); }
-      catch (e) { /* kemungkinan kuota localStorage penuh — gambar terlalu besar/banyak */ }
+      const res = safeSetItem("cck-setup-data", JSON.stringify({ babaks, theme }));
+      setStorageWarning(res.ok ? null : res.message);
     }, 500);
     return () => clearTimeout(tm);
   }, [babaks, theme, loaded]);
@@ -2232,8 +2445,17 @@ function CocokkanKartuGame({ onBack }) {
 
   useEffect(() => {
     if (qrOpen && qrBoxRef.current && !isFileProtocol()) {
-      qrBoxRef.current.innerHTML = "";
-      new QRCode(qrBoxRef.current, { text: getJoinUrl(roomCode), width: 200, height: 200 });
+      const box = qrBoxRef.current;
+      box.innerHTML = "";
+      let cancelled = false;
+      loadQrLibrary().then(() => {
+        if (cancelled || !box.isConnected) return;
+        box.innerHTML = "";
+        new QRCode(box, { text: getJoinUrl(roomCode), width: 200, height: 200 });
+      }).catch(() => {
+        if (!cancelled && box.isConnected) box.textContent = "Gagal memuat QR — cek koneksi internet.";
+      });
+      return () => { cancelled = true; };
     }
   }, [qrOpen, roomCode]);
 
@@ -2302,6 +2524,28 @@ function CocokkanKartuGame({ onBack }) {
     onBack();
   }
 
+  /* ---- Cadangan pasangan kartu: ekspor ke file .json & impor kembali ---- */
+  function exportBackup() {
+    const ok = downloadJson(`cadangan-card-rush-${todayStamp()}.json`, {
+      app: "card-rush", version: 1, exportedAt: new Date().toISOString(), babaks,
+    });
+    setImportMsg(ok
+      ? { ok: true, text: "Cadangan berhasil diunduh. Simpan file itu di tempat aman." }
+      : { ok: false, text: "Gagal membuat file cadangan." });
+  }
+  function importBackup(file) {
+    if (!file) return;
+    readJsonFile(file).then((data) => {
+      if (!data || data.app !== "card-rush" || !Array.isArray(data.babaks)) {
+        throw new Error("File ini bukan cadangan Card Rush.");
+      }
+      if (!window.confirm(`Muat cadangan ini? Seluruh ${data.babaks.length} babak yang ada sekarang akan DIGANTI oleh isi cadangan.`)) return;
+      setBabaks(data.babaks);
+      setBabakIdx(0);
+      setImportMsg({ ok: true, text: `Cadangan dimuat — ${data.babaks.length} babak dipulihkan.` });
+    }).catch((err) => setImportMsg({ ok: false, text: err.message || "Gagal memuat cadangan." }));
+  }
+
   const sortedGroups = [...GROUP_NAMES].sort((a, b) => (scores[b] || 0) - (scores[a] || 0));
 
   if (stage === "setup") {
@@ -2315,10 +2559,31 @@ function CocokkanKartuGame({ onBack }) {
             {!isMobile && <div style={{ fontSize: 14, color: t.dim, marginTop: 2 }}>Kartu gambar dipasangkan dengan kata (romaji/hiragana). Minimal 10 pasang per babak.</div>}
           </div>
           <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={exportBackup} title="Unduh cadangan ke file .json" style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>💾</span> Cadangkan</button>
+            <label title="Muat cadangan dari file .json" style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}>
+              <span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>📂</span> Muat Cadangan
+              <input type="file" accept="application/json,.json" onChange={(e) => { importBackup(e.target.files[0]); e.target.value = ""; }} style={{ display: "none" }} />
+            </label>
             <button onClick={onBack} style={{ background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}>← Pilih Game</button>
             <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")} style={{ background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: 10, borderRadius: 10, cursor: "pointer" }}>{theme === "dark" ? "☀" : "🌙"}</button>
           </div>
         </div>
+
+        {storageWarning && (
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 10, background: "rgba(239,91,91,.12)", border: "1px solid #EF5B5B", color: t.text, borderRadius: 12, padding: "12px 14px", marginBottom: 16 }}>
+            <span style={{ fontSize: 16, lineHeight: 1.2 }}>⚠</span>
+            <div style={{ fontSize: 13, lineHeight: 1.5 }}>
+              <b style={{ color: "#EF5B5B" }}>Data belum tersimpan.</b> {storageWarning}
+              <div style={{ marginTop: 6, color: t.dim, fontSize: 12.5 }}>Terpakai sekarang: {formatBytes(estimateStorageUsage())} dari kuota browser (biasanya ±5 MB).</div>
+            </div>
+          </div>
+        )}
+        {importMsg && (
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, background: importMsg.ok ? "rgba(63,191,173,.14)" : "rgba(239,91,91,.12)", border: `1px solid ${importMsg.ok ? "#3FBFAD" : "#EF5B5B"}`, borderRadius: 12, padding: "10px 14px", marginBottom: 16, fontSize: 13 }}>
+            <span>{importMsg.ok ? "✅" : "⚠"} {importMsg.text}</span>
+            <button onClick={() => setImportMsg(null)} style={{ background: "transparent", border: "none", color: t.dim, cursor: "pointer", fontSize: 15 }}>✕</button>
+          </div>
+        )}
 
         <div style={{ background: t.panel, borderRadius: 16, padding: "18px 20px", marginBottom: 20, boxShadow: t.shadowSm }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
