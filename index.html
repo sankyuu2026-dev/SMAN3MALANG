@@ -201,11 +201,25 @@ const MATERI_LIST = [
 
 const GROUP_COLORS = ["#F4B740", "#EF5B5B", "#3FBFAD", "#F2879E", "#5DA9E9", "#8FBF6B"];
 const GROUP_NAMES = [1, 2, 3, 4, 5, 6];
+// Palet khusus untuk kunci jawaban di layar Persiapan — perlu lebih banyak warna dari GROUP_COLORS
+// karena satu babak bisa berisi sampai 20 kata sekaligus (lihat Babak 3), bukan cuma 6 kelompok.
+const ANSWER_KEY_PALETTE = [
+  "#F4B740", "#EF5B5B", "#3FBFAD", "#F2879E", "#5DA9E9", "#8FBF6B",
+  "#B98CE6", "#FFA36C", "#6EC6FF", "#D4A373", "#7FD8A6", "#FF8FAB",
+];
+// Tanda tangan (fingerprint) daftar kata suatu babak — dipakai untuk tahu kapan puzzle preview
+// di layar Persiapan sudah "basi" (kata berubah) dan perlu dibangun ulang otomatis.
+function babakSignature(words) {
+  return words.filter((w) => w.letters && w.letters.trim()).map((w) => w.id + ":" + w.letters.trim().toUpperCase()).join("|");
+}
 const ROMAJI_FILL = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 const HIRAGANA_FILL = Array.from(
   "あいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわをんがぎぐげござじずぜぞだぢづでどばびぶべぼぱぴぷぺぽ"
 );
-const DIRECTIONS = [[0,1],[1,0],[1,1],[1,-1],[0,-1],[-1,0],[-1,-1],[-1,1]];
+// Kata cuma ditempatkan dengan arah "maju" (searah baca normal), supaya tidak ada jawaban yang
+// terbalik (kanan-ke-kiri atau bawah-ke-atas): [0,1] kiri→kanan, [1,0] atas→bawah,
+// [1,1] serong kiri-atas→kanan-bawah (↘), [-1,1] serong kiri-bawah→kanan-atas (↗).
+const DIRECTIONS = [[0,1],[1,0],[1,1],[-1,1]];
 
 function isKanaWord(letters) { return /[぀-ヿ]/.test(letters); }
 
@@ -216,23 +230,45 @@ function buildPuzzle(words) {
   const lens = valid.map((w) => w.letters.length);
   const longest = Math.max(...lens);
   const totalLen = lens.reduce((a, l) => a + l, 0);
-  let size = Math.max(longest + 2, Math.ceil(Math.sqrt(totalLen * 2.6)));
-  size = Math.min(Math.max(size, 10), 22);
+  // Mulai dari ukuran grid SEKECIL mungkin (bukan langsung digenerouskan seperti sebelumnya) —
+  // supaya kata-kata "dipaksa" mencari kesempatan saling menimpa di huruf yang sama dulu (mirip
+  // contoh word search yang rapat/padat), baru diperbesar selangkah demi selangkah kalau memang
+  // tidak muat di ukuran sekecil itu.
+  let size = Math.max(longest, Math.ceil(Math.sqrt(totalLen * 1.15)), 6);
 
-  for (let sizeTry = 0; sizeTry < 8; sizeTry++) {
+  for (let sizeTry = 0; sizeTry < 16; sizeTry++) {
     const grid = Array.from({ length: size }, () => Array(size).fill(null));
+    // Daftar sel yang sudah terisi huruf — dipakai untuk "menempelkan" kata baru ke huruf yang
+    // sama persis, supaya kata-kata lebih sering berpotongan (overlap) alih-alih selalu cari
+    // ruang kosong baru.
+    const filledCells = [];
     const placements = {};
     const sorted = [...valid].sort((a, b) => b.letters.length - a.letters.length);
     let ok = true;
     for (const w of sorted) {
       let placed = false;
-      for (let attempt = 0; attempt < 600 && !placed; attempt++) {
-        const dir = DIRECTIONS[Math.floor(Math.random() * DIRECTIONS.length)];
-        const startR = Math.floor(Math.random() * size);
-        const startC = Math.floor(Math.random() * size);
+      for (let attempt = 0; attempt < 1500 && !placed; attempt++) {
+        let dir, startR, startC;
+        // Separuh percobaan: coba tempelkan kata ke salah satu huruf yang sudah ada di grid
+        // (kalau kata ini memang punya huruf yang sama). Separuh sisanya: posisi acak biasa,
+        // supaya kata tetap bisa ditempatkan walau tidak ada peluang menimpa.
+        if (attempt % 2 === 0 && filledCells.length > 0) {
+          const [fr, fc, fletter] = filledCells[Math.floor(Math.random() * filledCells.length)];
+          const matchIdxs = [];
+          for (let i = 0; i < w.letters.length; i++) if (w.letters[i] === fletter) matchIdxs.push(i);
+          if (matchIdxs.length === 0) continue;
+          const idx = matchIdxs[Math.floor(Math.random() * matchIdxs.length)];
+          dir = DIRECTIONS[Math.floor(Math.random() * DIRECTIONS.length)];
+          startR = fr - dir[0] * idx;
+          startC = fc - dir[1] * idx;
+        } else {
+          dir = DIRECTIONS[Math.floor(Math.random() * DIRECTIONS.length)];
+          startR = Math.floor(Math.random() * size);
+          startC = Math.floor(Math.random() * size);
+        }
         const endR = startR + dir[0] * (w.letters.length - 1);
         const endC = startC + dir[1] * (w.letters.length - 1);
-        if (endR < 0 || endR >= size || endC < 0 || endC >= size) continue;
+        if (startR < 0 || startR >= size || startC < 0 || startC >= size || endR < 0 || endR >= size || endC < 0 || endC >= size) continue;
         const cells = [];
         let fits = true;
         for (let i = 0; i < w.letters.length; i++) {
@@ -241,7 +277,10 @@ function buildPuzzle(words) {
           if (existing && existing !== w.letters[i]) { fits = false; break; }
           cells.push([r, c]);
         }
-        if (fits) { cells.forEach(([r, c], i) => { grid[r][c] = w.letters[i]; }); placements[w.id] = cells; placed = true; }
+        if (fits) {
+          cells.forEach(([r, c], i) => { if (!grid[r][c]) filledCells.push([r, c, w.letters[i]]); grid[r][c] = w.letters[i]; });
+          placements[w.id] = cells; placed = true;
+        }
       }
       if (!placed) { ok = false; break; }
     }
@@ -473,6 +512,11 @@ function TebakCariKataGame({ onBack, teacher }) {
     words: dataByMateri[selectedMateri]?.[babakId] || [],
   };
   const [puzzle, setPuzzle] = useState(null);
+  // Puzzle yang sudah "dikunci" per babak lewat tombol Acak di Persiapan — { [babakId]: { signature, puzzle } }.
+  // Kalau ada entri yang cocok (signature-nya sama dengan kata saat ini), papan INI yang dipakai
+  // saat Mulai Permainan/pindah babak, bukan hasil acak baru — sesuai posisi terakhir yang diatur guru.
+  const [puzzleByBabak, setPuzzleByBabak] = useState({});
+  const [showAnswerKey, setShowAnswerKey] = useState(false);
   const [queue, setQueue] = useState([]);
   const [foundMap, setFoundMap] = useState({});
   const [clueRevealed, setClueRevealed] = useState(false);
@@ -507,6 +551,7 @@ function TebakCariKataGame({ onBack, teacher }) {
         if (parsed.dataByMateri) setDataByMateri(parsed.dataByMateri);
         if (parsed.selectedMateri) setSelectedMateri(parsed.selectedMateri);
         if (parsed.theme) setTheme(parsed.theme);
+        if (parsed.puzzleByBabak) setPuzzleByBabak(parsed.puzzleByBabak);
       }
     } catch (e) { /* belum ada data tersimpan, atau data korup */ }
     // Muat progres permainan yang sedang berjalan (kalau ada), supaya refresh tidak mengulang dari awal
@@ -570,15 +615,52 @@ function TebakCariKataGame({ onBack, teacher }) {
     if (!loaded) return;
     const tm = setTimeout(() => {
       try {
-        localStorage.setItem("tck-setup-data", JSON.stringify({ dataByMateri, selectedMateri, theme }));
+        localStorage.setItem("tck-setup-data", JSON.stringify({ dataByMateri, selectedMateri, theme, puzzleByBabak }));
       } catch (e) { /* kemungkinan kuota localStorage penuh (audio terlalu besar) */ }
     }, 500);
     return () => clearTimeout(tm);
-  }, [dataByMateri, selectedMateri, theme, loaded]);
+  }, [dataByMateri, selectedMateri, theme, puzzleByBabak, loaded]);
+
+  // Fingerprint kata di babak yang sedang dibuka di Persiapan — dipakai untuk auto-build & deteksi
+  // perubahan kata (kalau guru edit/tambah/hapus kosakata, preview lama otomatis basi dan dibangun ulang).
+  const babakWordsSig = babakSignature(babak.words);
+
+  // Bangun otomatis preview puzzle utk babak yang sedang dibuka di Persiapan kalau belum ada
+  // atau kalau kosakatanya sudah berubah sejak preview terakhir dibuat.
+  useEffect(() => {
+    if (stage !== "setup") return;
+    if (!babakWordsSig) return;
+    setPuzzleByBabak((prev) => {
+      const cached = prev[babakId];
+      if (cached && cached.signature === babakWordsSig) return prev;
+      return { ...prev, [babakId]: { signature: babakWordsSig, puzzle: buildPuzzle(babak.words) } };
+    });
+  }, [stage, babakId, babakWordsSig]);
+
+  // Tombol "Acak Ulang" di Persiapan — sengaja HANYA ada di layar ini (bukan saat main),
+  // supaya posisi jawaban yang dipakai siswa sudah final & tidak berubah-ubah waktu bermain.
+  function shufflePuzzlePreview() {
+    if (!babakWordsSig) return;
+    setPuzzleByBabak((prev) => ({ ...prev, [babakId]: { signature: babakWordsSig, puzzle: buildPuzzle(babak.words) } }));
+  }
+
+  const puzzlePreviewEntry = puzzleByBabak[babakId];
+  const puzzlePreview = puzzlePreviewEntry && puzzlePreviewEntry.signature === babakWordsSig ? puzzlePreviewEntry.puzzle : null;
+  // Warna kunci jawaban per kata, urut sesuai daftar kosakata (bukan acak) supaya konsisten dengan nomor di daftar.
+  const answerKeyColorByWordId = useMemo(() => {
+    const map = {};
+    babak.words.forEach((w, i) => { map[w.id] = ANSWER_KEY_PALETTE[i % ANSWER_KEY_PALETTE.length]; });
+    return map;
+  }, [babak.words]);
 
   function resetRound(id) {
     const w = dataByMateri[selectedMateri]?.[id] || [];
-    setPuzzle(buildPuzzle(w));
+    // Kalau ada puzzle yang sudah dikunci/diacak di Persiapan untuk babak ini (dan kosakatanya belum
+    // berubah), pakai persis papan itu — supaya hasil "Acak" guru bukan cuma preview kosong belaka.
+    const sig = babakSignature(w);
+    const cached = puzzleByBabak[id];
+    const p = (cached && cached.signature === sig) ? cached.puzzle : buildPuzzle(w);
+    setPuzzle(p);
     setQueue(w.filter((x) => x.letters.trim()).map((x) => x.id));
     setFoundMap({}); setClueRevealed(false); setActiveGroup(null); setSelStart(null);
     setTriedSet(new Set()); setOpenToAll(false); clearRetryTimer();
@@ -1125,6 +1207,15 @@ function TebakCariKataGame({ onBack, teacher }) {
       </div>
     );
     const fieldLabelStyle = { fontSize: 10.5, color: t.faint, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.4 };
+    // Peta warna per sel grid pratinjau — dihitung sekali di sini (bukan per-sel saat render)
+    // supaya tidak perlu loop kata berulang-ulang untuk tiap satu dari ratusan sel grid.
+    const answerKeyCellColor = {};
+    if (showAnswerKey && puzzlePreview) {
+      babak.words.forEach((w) => {
+        const cells = puzzlePreview.placements[w.id];
+        if (cells) cells.forEach(([r, c]) => { answerKeyCellColor[cellKey(r, c)] = answerKeyColorByWordId[w.id]; });
+      });
+    }
     return (
       <div style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: t.bg, color: t.text, minHeight: "100%", padding: 28, boxSizing: "border-box" }}>
         <style>{fontImport}</style>
@@ -1205,6 +1296,48 @@ function TebakCariKataGame({ onBack, teacher }) {
             ))}
           </div>
           <button onClick={() => addWord(babakId)} style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 6, background: t.panel2, border: "none", color: t.text, borderRadius: 8, padding: "9px 14px", cursor: "pointer", fontSize: 13 }}><span style={{ fontSize: 14, lineHeight: 1, color: 'inherit' }}>➕</span> Tambah Kosakata</button>
+        </div>
+
+        <div style={{ background: t.panel, borderRadius: 16, padding: "18px 20px", marginBottom: 20 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
+            <SectionLabel n={3} hint="— papan ini persis yang dipakai saat Mulai Permainan">Kunci jawaban &amp; acak posisi — Babak {babakId}</SectionLabel>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button onClick={() => setShowAnswerKey((s) => !s)} style={{ display: "flex", alignItems: "center", gap: 6, background: showAnswerKey ? "#F4B740" : t.panel2, color: showAnswerKey ? "#101B34" : t.text, border: "none", borderRadius: 8, padding: "8px 14px", cursor: "pointer", fontSize: 13, fontWeight: 600 }}>
+                <span style={{ fontSize: 14, lineHeight: 1, color: "inherit" }}>{showAnswerKey ? "🙈" : "👁"}</span> {showAnswerKey ? "Sembunyikan Kunci" : "Tampilkan Kunci Jawaban"}
+              </button>
+              <button onClick={shufflePuzzlePreview} disabled={!babakWordsSig} style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel2, border: "none", color: t.text, borderRadius: 8, padding: "8px 14px", cursor: babakWordsSig ? "pointer" : "default", fontSize: 13, fontWeight: 600, opacity: babakWordsSig ? 1 : 0.5 }}>
+                <span style={{ fontSize: 14, lineHeight: 1, color: "inherit" }}>🔀</span> Acak Ulang Posisi
+              </button>
+            </div>
+          </div>
+
+          {!puzzlePreview ? (
+            <div style={{ padding: 20, color: t.dim, fontSize: 13.5, textAlign: "center" }}>Isi kosakata Babak {babakId} dulu untuk melihat pratinjau papan.</div>
+          ) : (
+            <>
+              <div style={{ fontSize: 12, color: t.faint, marginBottom: 10, lineHeight: 1.5 }}>
+                Susunan huruf di bawah ini yang akan dipakai persis saat "Mulai Permainan" untuk Babak {babakId} — bukan diacak ulang otomatis. Klik "Acak Ulang Posisi" kalau ingin susunan lain sebelum sesi dimulai bersama siswa.
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: `repeat(${puzzlePreview.size}, minmax(0, 1fr))`, gap: 3, background: t.panel2, padding: 10, borderRadius: 12, maxWidth: 440, boxSizing: "border-box" }}>
+                {puzzlePreview.grid.map((row, r) => row.map((letter, c) => {
+                  const color = answerKeyCellColor[cellKey(r, c)];
+                  return (
+                    <div key={cellKey(r, c)} style={{ aspectRatio: "1 / 1", borderRadius: 4, background: color || "transparent", color: color ? "#101B34" : t.faint, fontWeight: 700, fontSize: 10.5, display: "flex", alignItems: "center", justifyContent: "center" }}>{letter}</div>
+                  );
+                }))}
+              </div>
+              {showAnswerKey && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12 }}>
+                  {babak.words.filter((w) => w.letters.trim()).map((w) => (
+                    <div key={w.id} style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel2, borderRadius: 8, padding: "5px 10px" }}>
+                      <span style={{ width: 10, height: 10, borderRadius: 3, background: answerKeyColorByWordId[w.id], flexShrink: 0 }} />
+                      <span style={{ fontSize: 12, fontWeight: 600 }}>{w.letters}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
         </div>
 
         <button onClick={startGame} disabled={!canStart} style={{
