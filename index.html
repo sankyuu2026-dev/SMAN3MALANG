@@ -207,6 +207,99 @@ function todayStamp() {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
+// Dulu tiap game (Tebak & Cari Kata, Buka Kotak, Card Rush) menulis ulang fungsi
+// exportBackup/importBackup masing-masing — isinya nyaris sama persis (unduh .json
+// berstempel tanggal, validasi field "app", tampilkan pesan sukses/gagal), cuma beda nama
+// app dan cara membangun/menerapkan isi datanya. Sekarang disatukan di sini; tiap game
+// tinggal kirim `buildPayload` (apa yang disimpan) dan `applyPayload` (validasi + terapkan
+// saat dimuat) sesuai bentuk data masing-masing.
+function makeBackupHandlers({ appId, appLabel, buildPayload, applyPayload, setImportMsg }) {
+  function exportBackup() {
+    const ok = downloadJson(`cadangan-${appId}-${todayStamp()}.json`, {
+      app: appId, version: 1, exportedAt: new Date().toISOString(), ...buildPayload(),
+    });
+    setImportMsg(ok
+      ? { ok: true, text: "Cadangan berhasil diunduh. Simpan file itu di tempat aman." }
+      : { ok: false, text: "Gagal membuat file cadangan." });
+  }
+  function importBackup(file) {
+    if (!file) return;
+    readJsonFile(file).then((data) => {
+      if (!data || data.app !== appId) throw new Error(`File ini bukan cadangan ${appLabel}.`);
+      applyPayload(data);
+    }).catch((err) => setImportMsg({ ok: false, text: err.message || "Gagal memuat cadangan." }));
+  }
+  return { exportBackup, importBackup };
+}
+
+/* ---------------------------------------------------------
+   EFEK PERAYAAN saat jawaban benar — nada dibuat langsung lewat
+   Web Audio API (bukan file audio eksternal), jadi tidak butuh
+   koneksi internet, tidak butuh unggah aset, dan langsung bunyi
+   tanpa jeda loading.
+--------------------------------------------------------- */
+function playCorrectSound() {
+  try {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const notes = [660, 880, 1320]; // arpeggio naik pendek — kesan "ding-ding-ding!" ceria
+    notes.forEach((freq, i) => {
+      const t0 = ctx.currentTime + i * 0.09;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0, t0);
+      gain.gain.linearRampToValueAtTime(0.2, t0 + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.32);
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.start(t0); osc.stop(t0 + 0.34);
+    });
+    setTimeout(() => ctx.close(), 700);
+  } catch (e) { /* browser tanpa Web Audio API — abaikan saja, tidak fatal */ }
+}
+// Sebaran partikel confetti di sekeliling titik tengah layar. `accentColor` biasanya warna
+// kelompok yang baru menjawab benar, supaya perayaannya terasa "milik" kelompok itu.
+function makeConfettiBurst(accentColor) {
+  const palette = [accentColor, "#F4B740", "#3FBFAD", "#F2879E", "#5DA9E9", "#8FBF6B"];
+  const count = 26;
+  return Array.from({ length: count }, (_, i) => {
+    const angle = (Math.PI * 2 * i) / count + (Math.random() - 0.5) * 0.5;
+    const dist = 90 + Math.random() * 170;
+    return {
+      id: `${Date.now()}-${i}`,
+      color: palette[i % palette.length],
+      size: 6 + Math.random() * 6,
+      round: Math.random() > 0.5,
+      tx: Math.cos(angle) * dist,
+      ty: Math.sin(angle) * dist - 50, // sedikit condong ke atas biar terasa "meletup"
+      rot: (Math.random() - 0.5) * 480,
+      dur: 700 + Math.random() * 500,
+      delay: Math.random() * 70,
+    };
+  });
+}
+// Overlay full-screen yang menampilkan partikel confetti. Dipasang di layar Proyektor DAN
+// Panel Kontrol guru (keduanya pakai state `confetti` yang sama) supaya perayaannya terasa
+// di kedua tampilan, bukan cuma satu sisi.
+function CelebrationOverlay({ particles }) {
+  if (!particles || particles.length === 0) return null;
+  return (
+    <div style={{ position: "fixed", inset: 0, pointerEvents: "none", zIndex: 95, overflow: "hidden" }}>
+      {particles.map((p) => (
+        <span key={p.id} style={{
+          position: "absolute", top: "38%", left: "50%", width: p.size, height: p.size,
+          background: p.color, borderRadius: p.round ? "50%" : 3,
+          "--tx": `${p.tx}px`, "--ty": `${p.ty}px`, "--rot": `${p.rot}deg`,
+          animation: `confettiPop ${p.dur}ms cubic-bezier(.15,.7,.3,1) ${p.delay}ms forwards`,
+          opacity: 0,
+        }} />
+      ))}
+    </div>
+  );
+}
+
 
 /* ---------------------------------------------------------
    DATA AWAL (bisa diedit guru di tahap Persiapan)
@@ -647,6 +740,7 @@ const fontImport = `
   .grp-btn:active { transform: scale(.96); }
   @keyframes pulseFlash { 0%{opacity:0;} 15%{opacity:1;} 100%{opacity:0;} }
   @keyframes wonPulse { 0%{transform:scale(1);} 30%{transform:scale(1.06);} 60%{transform:scale(0.99);} 100%{transform:scale(1);} }
+  @keyframes confettiPop { 0% { transform: translate(-50%,-50%) rotate(0deg); opacity: 1; } 75% { opacity: 1; } 100% { transform: translate(calc(-50% + var(--tx)), calc(-50% + var(--ty))) rotate(var(--rot)); opacity: 0; } }
   @keyframes cardRise { from { opacity:0; transform: translateY(14px) scale(.97); } to { opacity:1; transform: translateY(0) scale(1); } }
   @keyframes headerFade { from { opacity:0; transform: translateY(-6px); } to { opacity:1; transform: translateY(0); } }
   .game-card { position: relative; overflow: hidden; animation: cardRise .5s cubic-bezier(.22,1,.36,1) both; transition: transform .22s cubic-bezier(.22,1,.36,1), box-shadow .22s ease, border-color .22s ease; }
@@ -1047,6 +1141,8 @@ function TebakCariKataGame({ onBack, teacher }) {
   const [triedSet, setTriedSet] = useState(new Set());
   const [openToAll, setOpenToAll] = useState(false);
   const [justWonPulse, setJustWonPulse] = useState(false);
+  const [confetti, setConfetti] = useState(null);
+  const confettiTimerRef = useRef(null);
 
   const audioRef = useRef(null);
   const retryTimerRef = useRef(null);
@@ -1121,31 +1217,19 @@ function TebakCariKataGame({ onBack, teacher }) {
   }, [stage]);
 
   /* ---- Cadangan kosakata: ekspor ke file .json & impor kembali ---- */
-  function exportBackup() {
-    const ok = downloadJson(`cadangan-tebak-cari-kata-${todayStamp()}.json`, {
-      app: "tebak-cari-kata", version: 1, exportedAt: new Date().toISOString(),
-      selectedMateri, dataByMateri,
-    });
-    setImportMsg(ok
-      ? { ok: true, text: "Cadangan berhasil diunduh. Simpan file itu di tempat aman." }
-      : { ok: false, text: "Gagal membuat file cadangan." });
-  }
-
-  function importBackup(file) {
-    if (!file) return;
-    readJsonFile(file).then((data) => {
-      if (!data || data.app !== "tebak-cari-kata" || !data.dataByMateri) {
-        throw new Error("File ini bukan cadangan Tebak & Cari Kata.");
-      }
+  const { exportBackup, importBackup } = makeBackupHandlers({
+    appId: "tebak-cari-kata", appLabel: "Tebak & Cari Kata",
+    buildPayload: () => ({ selectedMateri, dataByMateri }),
+    applyPayload: (data) => {
+      if (!data.dataByMateri) throw new Error("File ini bukan cadangan Tebak & Cari Kata.");
       const materiCount = Object.keys(data.dataByMateri).length;
       if (!window.confirm(`Muat cadangan ini? ${materiCount} materi di cadangan akan MENIMPA materi dengan nama sama yang ada sekarang. Materi lain tetap aman.`)) return;
       setDataByMateri((prev) => ({ ...prev, ...data.dataByMateri }));
       if (data.selectedMateri) setSelectedMateri(data.selectedMateri);
       setImportMsg({ ok: true, text: `Cadangan dimuat — ${materiCount} materi diperbarui.` });
-    }).catch((err) => {
-      setImportMsg({ ok: false, text: err.message || "Gagal memuat cadangan." });
-    });
-  }
+    },
+    setImportMsg,
+  });
 
   function endGame() {
     if (!window.confirm("Akhiri permainan ini? Skor & progres babak yang sedang berjalan akan dihapus.")) return;
@@ -1365,7 +1449,7 @@ function TebakCariKataGame({ onBack, teacher }) {
     } catch (e) { return ""; }
   }
 
-  useEffect(() => () => clearRetryTimer(), []);
+  useEffect(() => () => { clearRetryTimer(); if (confettiTimerRef.current) clearTimeout(confettiTimerRef.current); }, []);
   useEffect(() => {
     if (activeGroup && activeGroup === phonePreview) {
       setJustWonPulse(true);
@@ -1477,6 +1561,14 @@ function TebakCariKataGame({ onBack, teacher }) {
 
   function releaseTurn() { activeGroupRef.current = null; setActiveGroup(null); setSelStart(null); }
 
+  function triggerCelebration(group) {
+    const accent = GROUP_COLORS[(group - 1 + GROUP_COLORS.length) % GROUP_COLORS.length];
+    setConfetti(makeConfettiBurst(accent));
+    playCorrectSound();
+    if (confettiTimerRef.current) clearTimeout(confettiTimerRef.current);
+    confettiTimerRef.current = setTimeout(() => setConfetti(null), 1300);
+  }
+
   function nextQuestion() {
     setQueue((q) => q.slice(1));
     setClueRevealed(false); setTriedSet(new Set()); setOpenToAll(false);
@@ -1510,6 +1602,7 @@ function TebakCariKataGame({ onBack, teacher }) {
       setFoundMap((f) => ({ ...f, [currentWord.id]: { cells, color: segColor } }));
       setScores((s) => ({ ...s, [activeGroup]: s[activeGroup] + babak.point }));
       setFlash({ type: "correct", group: activeGroup }); setTimeout(() => setFlash(null), 1400);
+      triggerCelebration(activeGroup);
       nextQuestion();
     } else {
       const wrongGroup = activeGroup;
@@ -2062,6 +2155,7 @@ function TebakCariKataGame({ onBack, teacher }) {
         <audio ref={audioRef} style={{ display: "none" }} />
         {phonePreview && <PhonePreview />}
         {saveNameOpen && <SaveNameModal />}
+        <CelebrationOverlay particles={confetti} />
         <button onClick={() => setProjectorMode(false)} title="Keluar mode proyektor" style={{ position: "fixed", top: 16, right: 16, background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: 10, borderRadius: 10, cursor: "pointer", zIndex: 30 }}><span style={{ fontSize: 18, lineHeight: 1, color: 'inherit' }}>⤡</span></button>
         <div style={{ position: "fixed", top: 16, left: 16, display: "flex", gap: 8, zIndex: 30 }}>
           <button onClick={endGame} title="Akhiri permainan" style={{ display: "flex", alignItems: "center", gap: 6, background: t.bg, border: "1px solid #EF5B5B", color: "#EF5B5B", padding: "10px 12px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>⏹</span> Akhiri</button>
@@ -2103,6 +2197,7 @@ function TebakCariKataGame({ onBack, teacher }) {
       <audio ref={audioRef} style={{ display: "none" }} />
       {phonePreview && <PhonePreview />}
       {saveNameOpen && <SaveNameModal />}
+      <CelebrationOverlay particles={confetti} />
       <QrJoinModal open={qrOpen} onClose={() => setQrOpen(false)} roomCode={roomCode} joinedCount={Object.keys(joinedGroups).length} />
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 16, marginBottom: 14 }}>
@@ -2322,28 +2417,19 @@ function BukaKotakGame({ onBack }) {
   function resetBoard() { setOpened({}); setActiveBox(null); }
 
   /* ---- Cadangan perintah: ekspor ke file .json & impor kembali ---- */
-  function exportBackup() {
-    const ok = downloadJson(`cadangan-buka-kotak-${todayStamp()}.json`, {
-      app: "buka-kotak", version: 1, exportedAt: new Date().toISOString(),
-      selectedMateri, dataByMateri,
-    });
-    setImportMsg(ok
-      ? { ok: true, text: "Cadangan berhasil diunduh. Simpan file itu di tempat aman." }
-      : { ok: false, text: "Gagal membuat file cadangan." });
-  }
-  function importBackup(file) {
-    if (!file) return;
-    readJsonFile(file).then((data) => {
-      if (!data || data.app !== "buka-kotak" || !data.dataByMateri) {
-        throw new Error("File ini bukan cadangan Buka Kotak.");
-      }
+  const { exportBackup, importBackup } = makeBackupHandlers({
+    appId: "buka-kotak", appLabel: "Buka Kotak",
+    buildPayload: () => ({ selectedMateri, dataByMateri }),
+    applyPayload: (data) => {
+      if (!data.dataByMateri) throw new Error("File ini bukan cadangan Buka Kotak.");
       const materiCount = Object.keys(data.dataByMateri).length;
       if (!window.confirm(`Muat cadangan ini? ${materiCount} materi di cadangan akan MENIMPA materi dengan nama sama yang ada sekarang. Materi lain tetap aman.`)) return;
       setDataByMateri((prev) => ({ ...prev, ...data.dataByMateri }));
       if (data.selectedMateri) setSelectedMateri(data.selectedMateri);
       setImportMsg({ ok: true, text: `Cadangan dimuat — ${materiCount} materi diperbarui.` });
-    }).catch((err) => setImportMsg({ ok: false, text: err.message || "Gagal memuat cadangan." }));
-  }
+    },
+    setImportMsg,
+  });
 
   if (stage === "setup") {
     return (
@@ -2661,26 +2747,18 @@ function CocokkanKartuGame({ onBack }) {
   }
 
   /* ---- Cadangan pasangan kartu: ekspor ke file .json & impor kembali ---- */
-  function exportBackup() {
-    const ok = downloadJson(`cadangan-card-rush-${todayStamp()}.json`, {
-      app: "card-rush", version: 1, exportedAt: new Date().toISOString(), babaks,
-    });
-    setImportMsg(ok
-      ? { ok: true, text: "Cadangan berhasil diunduh. Simpan file itu di tempat aman." }
-      : { ok: false, text: "Gagal membuat file cadangan." });
-  }
-  function importBackup(file) {
-    if (!file) return;
-    readJsonFile(file).then((data) => {
-      if (!data || data.app !== "card-rush" || !Array.isArray(data.babaks)) {
-        throw new Error("File ini bukan cadangan Card Rush.");
-      }
+  const { exportBackup, importBackup } = makeBackupHandlers({
+    appId: "card-rush", appLabel: "Card Rush",
+    buildPayload: () => ({ babaks }),
+    applyPayload: (data) => {
+      if (!Array.isArray(data.babaks)) throw new Error("File ini bukan cadangan Card Rush.");
       if (!window.confirm(`Muat cadangan ini? Seluruh ${data.babaks.length} babak yang ada sekarang akan DIGANTI oleh isi cadangan.`)) return;
       setBabaks(data.babaks);
       setBabakIdx(0);
       setImportMsg({ ok: true, text: `Cadangan dimuat — ${data.babaks.length} babak dipulihkan.` });
-    }).catch((err) => setImportMsg({ ok: false, text: err.message || "Gagal memuat cadangan." }));
-  }
+    },
+    setImportMsg,
+  });
 
   const sortedGroups = [...GROUP_NAMES].sort((a, b) => (scores[b] || 0) - (scores[a] || 0));
 
