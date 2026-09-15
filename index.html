@@ -577,6 +577,31 @@ function makeRoomCode() {
   const letters = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   return Array.from({ length: 5 }, () => letters[Math.floor(Math.random() * letters.length)]).join("");
 }
+// Dipakai buat papan kartu Game 3 supaya benar-benar pas 1 layar. FIX: sebelumnya pakai CSS
+// "100vh", ternyata di beberapa browser HP (terutama webview dalam-aplikasi seperti WhatsApp)
+// "100vh" TIDAK sama dengan tinggi layar yang benar-benar terlihat — jadi papan kartu dihitung
+// terlalu tinggi dan malah perlu di-scroll / kartunya jadi memanjang tidak proporsional.
+// window.visualViewport.height jauh lebih akurat karena memang dirancang untuk melaporkan
+// tinggi area yang BENAR-BENAR terlihat saat ini (memperhitungkan address bar, dsb).
+function useViewportHeight() {
+  const [h, setH] = useState(() => {
+    if (typeof window === "undefined") return 800;
+    return window.visualViewport ? window.visualViewport.height : window.innerHeight;
+  });
+  useEffect(() => {
+    function update() { setH(window.visualViewport ? window.visualViewport.height : window.innerHeight); }
+    update();
+    window.addEventListener("resize", update);
+    window.addEventListener("orientationchange", update);
+    if (window.visualViewport) window.visualViewport.addEventListener("resize", update);
+    return () => {
+      window.removeEventListener("resize", update);
+      window.removeEventListener("orientationchange", update);
+      if (window.visualViewport) window.visualViewport.removeEventListener("resize", update);
+    };
+  }, []);
+  return h;
+}
 // Peluang tabrakan kode 5 karakter memang sangat kecil (~1 banding 33 juta), tapi tetap dicek
 // ke Firestore sebelum room dipakai, supaya dua kelas yang kebetulan dapat kode sama tidak
 // saling menimpa data/buzzer masing-masing. Kalau cek gagal (mis. offline), lanjut pakai kode
@@ -1041,6 +1066,18 @@ function CardsPlayArea({ roomCode, room, myGroup }) {
   const [confetti, setConfetti] = useState(null);
   const appliedRoundRef = useRef(null);
   const startAtRef = useRef(null);
+  const viewportH = useViewportHeight();
+  const headerRef = useRef(null);
+  const [headerH, setHeaderH] = useState(60);
+  useEffect(() => {
+    if (!headerRef.current || typeof ResizeObserver === "undefined") return;
+    const el = headerRef.current;
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) setHeaderH(entry.contentRect.height);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   useEffect(() => {
     const col = db.collection("rooms").doc(roomCode).collection("cardPairs");
@@ -1215,26 +1252,28 @@ function CardsPlayArea({ roomCode, room, myGroup }) {
 
   const gridCols = Math.min(5, Math.ceil(Math.sqrt(cards.length)));
   const gridRows = Math.ceil(cards.length / gridCols);
+  const PAD = 16;
+  const GAP_BELOW_HEADER = 8;
+  // FIX: percobaan sebelumnya pakai CSS "100vh" + "height:100%" ternyata TIDAK diukur dengan
+  // benar di sebagian browser HP (khususnya webview dalam-aplikasi) — hasilnya papan malah lebih
+  // tinggi dari layar yang benar-benar terlihat, jadi tetap perlu di-scroll dan barisnya jadi
+  // memanjang tidak proporsional (gambar kepotong kiri-kanan). Sekarang tinggi grid dihitung
+  // manual dari angka JS asli (viewportH & headerH yang benar-benar terukur), lalu dipasang
+  // sebagai piksel EXPLISIT — jadi tidak bergantung sama sekali ke cara browser menghitung vh/%.
+  const gridAreaHeight = Math.max(220, viewportH - headerH - PAD * 2 - GAP_BELOW_HEADER);
 
-  // FIX (keadilan antar-perangkat): sebelumnya ukuran kartu cuma dibatasi LEBAR (maxWidth
-  // 460px), tingginya dibiarkan alami — jadi kalau layar HP-nya pendek (atau browser-nya makan
-  // banyak ruang buat address bar dkk), 20 kartu bisa kepanjangan sampai perlu di-scroll,
-  // sementara HP berlayar tinggi tidak perlu scroll sama sekali. Itu bikin lomba jadi tidak adil
-  // (kelompok yang HP-nya perlu scroll jelas lebih lambat). Sekarang papan diukur dari TINGGI
-  // layar yang tersedia juga (bukan cuma lebar) — grid selalu pas mengisi sisa layar setelah
-  // header teks, seluruh kartu SELALU langsung terlihat tanpa scroll di ukuran layar berapa pun.
   return (
-    <div style={{ ...wrap, height: "100vh", minHeight: "100vh", display: "flex", flexDirection: "column", overflow: "hidden", padding: 16 }}>
+    <div style={{ ...wrap, height: viewportH, minHeight: viewportH, display: "flex", flexDirection: "column", overflow: "hidden", padding: PAD, boxSizing: "border-box" }}>
       <style>{fontImport}</style>
-      <div style={{ flexShrink: 0, marginBottom: 8 }}>
+      <div ref={headerRef} style={{ flexShrink: 0, marginBottom: GAP_BELOW_HEADER }}>
         <div style={{ fontSize: 12, color: t.dim, textAlign: "center" }}>Room {roomCode} · Kelompok {myGroup}</div>
         <div style={{ fontSize: 12, color: t.dim, textAlign: "center", fontWeight: 600 }}>{matchedCount}/{totalPairs} pasangan ketemu</div>
         <div style={{ fontSize: 11, color: t.faint, textAlign: "center" }}>Ketuk satu gambar lalu satu kata yang cocok</div>
       </div>
-      <div style={{ flex: 1, minHeight: 0, display: "flex", justifyContent: "center" }}>
+      <div style={{ display: "flex", justifyContent: "center" }}>
         <div style={{
           display: "grid", gridTemplateColumns: `repeat(${gridCols}, 1fr)`, gridTemplateRows: `repeat(${gridRows}, 1fr)`,
-          gap: 8, width: "100%", maxWidth: 520, height: "100%", boxSizing: "border-box",
+          gap: 8, width: "100%", maxWidth: 520, height: gridAreaHeight, boxSizing: "border-box",
         }}>
           {cards.map((c) => <CardTile key={c.key} c={c} />)}
         </div>
