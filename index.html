@@ -464,6 +464,114 @@ function cleanupStaleRooms() {
     .catch(() => { /* mis. sedang offline — biarkan, akan dicoba lagi lain kali web dibuka */ });
 }
 
+// Badge bulat bernomor + judul, dipakai di layar Persiapan ketiga game supaya urutan
+// langkah ("1. Pilih materi", "2. Kosakata", dst) selalu tampil konsisten.
+function SectionLabel({ n, children, hint, faint }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+      <span style={{ width: 22, height: 22, borderRadius: "50%", background: "#F4B740", color: "#101B34", fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{n}</span>
+      <span style={{ fontSize: 14, fontWeight: 700 }}>{children}</span>
+      {hint && <span style={{ fontSize: 12, color: faint }}>{hint}</span>}
+    </div>
+  );
+}
+
+// FIX (dedup): tombol toggle tema terang/gelap ini tadinya ditulis ulang 5 kali (nyaris
+// identik) tersebar di 3 game — kalau suatu saat mau ganti ikon atau perilakunya, harus diingat
+// mengubah 5 tempat sekaligus. Sekarang jadi satu komponen; tiap game cukup kirim `theme`,
+// `onToggle`, dan (opsional) `style`/`title` kalau tampilannya perlu sedikit beda dari default.
+function ThemeToggleButton({ theme, onToggle, style, title }) {
+  return (
+    <button
+      onClick={onToggle}
+      title={title || "Ganti tampilan terang/gelap"}
+      style={style || { background: "transparent", border: "none", padding: 10, borderRadius: 10, cursor: "pointer" }}
+    >
+      <span style={{ fontSize: 16, lineHeight: 1, color: "inherit" }}>{theme === "dark" ? "☀" : "🌙"}</span>
+    </button>
+  );
+}
+
+// FIX (dedup): modal "Scan untuk gabung" (QR join) ini tadinya disalin persis di Word Search
+// & Card Rush, masing-masing menyimpan qrBoxRef sendiri + useEffect pemuatan qrcodejs sendiri.
+// Sekarang jadi satu komponen yang mengurus ref & pemuatan library-nya sendiri secara internal
+// — game pemanggil cukup kirim status buka/tutup, kode room, dan jumlah kelompok yang sudah
+// join, tanpa perlu tahu detail bagaimana QR-nya digambar.
+function QrJoinModal({ open, onClose, roomCode, joinedCount }) {
+  const boxRef = useRef(null);
+  useEffect(() => {
+    if (open && boxRef.current && !isFileProtocol()) {
+      const box = boxRef.current;
+      box.innerHTML = "";
+      let cancelled = false;
+      loadQrLibrary().then(() => {
+        if (cancelled || !box.isConnected) return;
+        box.innerHTML = "";
+        new QRCode(box, { text: getJoinUrl(roomCode), width: 200, height: 200 });
+      }).catch(() => {
+        if (!cancelled && box.isConnected) box.textContent = "Gagal memuat QR — cek koneksi internet.";
+      });
+      return () => { cancelled = true; };
+    }
+  }, [open, roomCode]);
+
+  if (!open) return null;
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 60 }} onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: "#FFFFFF", borderRadius: 20, padding: 28, textAlign: "center", boxShadow: "0 20px 60px rgba(0,0,0,.4)" }}>
+        <div className="sgt" style={{ fontSize: 17, fontWeight: 700, color: "#101B34", marginBottom: 4 }}>Scan untuk gabung</div>
+        <div style={{ fontSize: 13, color: "#5B6272", marginBottom: 14 }}>Kode Room: <b>{roomCode}</b> · {joinedCount} kelompok sudah join</div>
+        {isFileProtocol() ? (
+          <div style={{ width: 220, background: "#FDECEC", border: "1px solid #EF5B5B", borderRadius: 10, padding: "12px 14px", fontSize: 12.5, color: "#8A1F1F", textAlign: "left", lineHeight: 1.5 }}>
+            <b>QR ini tidak akan berfungsi.</b> File dibuka langsung dari komputer (file://), jadi HP siswa tidak bisa mengaksesnya. Unggah dulu file ini ke layanan hosting (mis. Firebase Hosting, Netlify, atau GitHub Pages), lalu buka lewat alamat https:// hosting tersebut.
+          </div>
+        ) : (
+          <div ref={boxRef} style={{ display: "flex", justifyContent: "center" }} />
+        )}
+        <button onClick={onClose} style={{ marginTop: 14, background: "#F1EEE4", border: "none", color: "#101B34", padding: "8px 16px", borderRadius: 8, cursor: "pointer", fontSize: 13 }}>Tutup</button>
+      </div>
+    </div>
+  );
+}
+
+// FITUR BARU: menambah bahan ajar satu per satu ("Tambah Kosakata"/"Tambah Perintah"/"Tambah
+// Pasangan" diklik berkali-kali) merepotkan kalau guru sudah punya daftar panjang siap pakai
+// (mis. disusun dulu di Word/Notepad). Modal ini dipakai bersama di ketiga game: guru tempel
+// banyak baris sekaligus di satu kotak teks, lalu game pemanggil yang mem-parsing barisnya
+// sendiri lewat `onAdd` (formatnya beda tiap game — lihat `formatHint` yang dikirim tiap game)
+// dan mengembalikan berapa baris valid yang berhasil ditambahkan. Modal hanya menutup diri &
+// mengosongkan kotak teks kalau ada MINIMAL 1 baris valid — supaya tempelan yang formatnya
+// salah semua tidak hilang begitu saja tanpa guru sadar tidak ada yang masuk.
+function BulkAddModal({ open, onClose, onAdd, title, placeholder, formatHint }) {
+  const [text, setText] = useState("");
+  const [notice, setNotice] = useState("");
+  if (!open) return null;
+  function handleSubmit() {
+    const addedCount = onAdd(text);
+    if (addedCount > 0) {
+      setText(""); setNotice(""); onClose();
+    } else {
+      setNotice("Tidak ada baris valid yang terbaca. Cek lagi formatnya sesuai contoh di atas.");
+    }
+  }
+  function handleClose() { setText(""); setNotice(""); onClose(); }
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 60, padding: 20 }} onClick={handleClose}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: "#FFFFFF", borderRadius: 20, padding: 24, width: "min(560px, 100%)", boxSizing: "border-box", boxShadow: "0 20px 60px rgba(0,0,0,.4)" }}>
+        <div className="sgt" style={{ fontSize: 17, fontWeight: 700, color: "#101B34", marginBottom: 4 }}>{title}</div>
+        <div style={{ fontSize: 12.5, color: "#5B6272", marginBottom: 12, lineHeight: 1.55 }}>{formatHint}</div>
+        <textarea value={text} onChange={(e) => setText(e.target.value)} placeholder={placeholder} rows={9}
+          style={{ width: "100%", boxSizing: "border-box", padding: 10, borderRadius: 10, border: "1px solid #E4E1D6", background: "#FBF9F4", color: "#1E2233", fontSize: 13, fontFamily: "inherit", resize: "vertical", lineHeight: 1.5 }} />
+        {notice && <div style={{ marginTop: 8, fontSize: 12.5, color: "#EF5B5B" }}>{notice}</div>}
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 14 }}>
+          <button onClick={handleClose} style={{ background: "#F1EEE4", border: "none", color: "#101B34", padding: "9px 16px", borderRadius: 8, cursor: "pointer", fontSize: 13 }}>Batal</button>
+          <button onClick={handleSubmit} disabled={!text.trim()} style={{ background: "#F4B740", border: "none", color: "#101B34", padding: "9px 16px", borderRadius: 8, cursor: text.trim() ? "pointer" : "default", opacity: text.trim() ? 1 : 0.5, fontWeight: 700, fontSize: 13 }}>Tambahkan Semua</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const THEMES = {
   dark: {
     bg: "linear-gradient(180deg,#0C1428,#101B34 42%)", panel: "#182552", panel2: "#20315F",
@@ -497,12 +605,13 @@ const fontImport = `
   .game-card:hover .arrow-chip { opacity: 1; transform: translateX(0); }
   .game-card .icon-badge { transition: transform .25s cubic-bezier(.22,1,.36,1); }
   .game-card:hover .icon-badge { transform: scale(1.08) rotate(-4deg); }
-  /* Baris kosakata: tombol hapus baru "menyala" merah saat barisnya disentuh, jadi
-     daftar panjang tidak penuh ikon merah yang menarik perhatian terus-menerus. */
-  .word-row { transition: background .15s ease; }
-  .word-row .row-del { transition: color .15s ease, background .15s ease; }
-  .word-row:hover .row-del { color: #EF5B5B; }
-  .word-row .row-del:hover { background: rgba(239,91,91,.14); }
+  /* Baris daftar (kosakata, perintah kotak, pasangan kartu): tombol hapus baru "menyala"
+     merah saat barisnya disentuh, jadi daftar panjang tidak penuh ikon merah yang
+     menarik perhatian terus-menerus. Dipakai bersama di ketiga game. */
+  .list-row { transition: background .15s ease; }
+  .list-row .row-del { transition: color .15s ease, background .15s ease; }
+  .list-row:hover .row-del { color: #EF5B5B; }
+  .list-row .row-del:hover { background: rgba(239,91,91,.14); }
   .pilih-game-header { animation: headerFade .45s ease both; }
 `;
 
@@ -843,15 +952,16 @@ function TebakCariKataGame({ onBack, teacher }) {
   const [controlsOpen, setControlsOpen] = useState(true);
   const [phonePreview, setPhonePreview] = useState(null); // group number or null
   const [qrOpen, setQrOpen] = useState(false);
+  const [bulkAddOpen, setBulkAddOpen] = useState(false);
   const [joinedGroups, setJoinedGroups] = useState({});
   const [uploadingAudio, setUploadingAudio] = useState({}); // { [wordId]: true } saat sedang upload ke Firebase Storage
   const [audioUploadError, setAudioUploadError] = useState({}); // { [wordId]: "pesan error" }
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyList, setHistoryList] = useState([]);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
   const [saveNameOpen, setSaveNameOpen] = useState(false);
   const [saveNameInput, setSaveNameInput] = useState("");
   const [savingSession, setSavingSession] = useState(false);
-  const qrBoxRef = useRef(null);
   const lastAppliedRoundRef = useRef(null);
   const appliedGroupsRef = useRef(new Set());
   const [buzzOrder, setBuzzOrder] = useState([]); // urutan kelompok yang angkat tangan di soal ini: [{group}]
@@ -949,9 +1059,10 @@ function TebakCariKataGame({ onBack, teacher }) {
   // Ambil daftar sesi tersimpan (Riwayat) dari Firestore setiap kali guru ada di layar Persiapan.
   useEffect(() => {
     if (stage !== "setup") return;
+    setHistoryLoaded(false);
     const unsub = historyCol.orderBy("savedAt", "desc").onSnapshot(
-      (snap) => setHistoryList(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
-      () => setHistoryList([])
+      (snap) => { setHistoryList(snap.docs.map((d) => ({ id: d.id, ...d.data() }))); setHistoryLoaded(true); },
+      () => { setHistoryList([]); setHistoryLoaded(true); }
     );
     return () => unsub();
   }, [stage]);
@@ -1275,23 +1386,6 @@ function TebakCariKataGame({ onBack, teacher }) {
     return () => unsub();
   }, [stage, roomCode, currentWord?.id, mode]);
 
-  // Render QR code ke dalam modal saat dibuka
-  useEffect(() => {
-    if (qrOpen && qrBoxRef.current && !isFileProtocol()) {
-      const box = qrBoxRef.current;
-      box.innerHTML = "";
-      let cancelled = false;
-      loadQrLibrary().then(() => {
-        if (cancelled || !box.isConnected) return;
-        box.innerHTML = "";
-        new QRCode(box, { text: getJoinUrl(roomCode), width: 200, height: 200 });
-      }).catch(() => {
-        if (!cancelled && box.isConnected) box.textContent = "Gagal memuat QR — cek koneksi internet.";
-      });
-      return () => { cancelled = true; };
-    }
-  }, [qrOpen, roomCode]);
-
   function scheduleRetry() {
     clearRetryTimer();
     if (audioMode !== "guru") return;
@@ -1433,6 +1527,26 @@ function TebakCariKataGame({ onBack, teacher }) {
       const materiData = prev[selectedMateri] || { 1: [], 2: [], 3: [] };
       return { ...prev, [selectedMateri]: { ...materiData, [id]: [...materiData[id], { id: uid(), letters: "", clue: "", audioUrl: null }] } };
     });
+  }
+  // FITUR BARU: tambah banyak kosakata sekaligus dari teks yang ditempel guru, satu kosakata
+  // per baris dengan format "kata/petunjuk". Baris tanpa "/" atau tanpa kata di depannya
+  // dilewati (tidak dianggap error fatal — cukup tidak ikut ditambahkan), supaya satu baris
+  // yang salah format tidak menggagalkan semua baris lain yang sudah benar.
+  function addWordsBulk(id, text) {
+    const newWords = text.split("\n").map((line) => line.trim()).filter(Boolean).map((line) => {
+      const sepIdx = line.indexOf("/");
+      if (sepIdx === -1) return null;
+      const letters = line.slice(0, sepIdx).trim().toUpperCase();
+      const clue = line.slice(sepIdx + 1).trim();
+      if (!letters) return null;
+      return { id: uid(), letters, clue, audioUrl: null };
+    }).filter(Boolean);
+    if (newWords.length === 0) return 0;
+    setDataByMateri((prev) => {
+      const materiData = prev[selectedMateri] || { 1: [], 2: [], 3: [] };
+      return { ...prev, [selectedMateri]: { ...materiData, [id]: [...materiData[id], ...newWords] } };
+    });
+    return newWords.length;
   }
   function uploadAudio(id, wordId, file) {
     if (!file) return;
@@ -1685,18 +1799,20 @@ function TebakCariKataGame({ onBack, teacher }) {
           <button onClick={() => setHistoryOpen(false)} style={{ background: "none", border: "none", color: t.dim, cursor: "pointer" }}><span style={{ fontSize: 18, lineHeight: 1, color: 'inherit' }}>✕</span></button>
         </div>
         <div style={{ fontSize: 12, color: t.dim, marginBottom: 14 }}>Sesi kelas yang dijeda, tersimpan di Firebase — muncul dari device manapun. Maksimal 10 sesi terbaru.</div>
-        {historyList.length === 0 ? (
+        {!historyLoaded ? (
+          <div style={{ padding: "20px 0", textAlign: "center", color: t.faint, fontSize: 13 }}>Memuat riwayat…</div>
+        ) : historyList.length === 0 ? (
           <div style={{ padding: "20px 0", textAlign: "center", color: t.faint, fontSize: 13 }}>Belum ada sesi yang dijeda.</div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {historyList.map((it) => (
-              <div key={it.id} style={{ background: t.panel, borderRadius: 12, padding: "12px 14px", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <div key={it.id} className="list-row" style={{ background: t.panel, borderRadius: 12, padding: "12px 14px", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                 <div style={{ flex: 1, minWidth: 160 }}>
                   <div style={{ fontWeight: 700, fontSize: 14, color: t.text }}>{it.className || "(tanpa nama)"}</div>
                   <div style={{ fontSize: 11.5, color: t.dim, marginTop: 2 }}>{it.materi} · Babak {it.babakId} · {formatSavedAt(it.savedAt)}</div>
                 </div>
                 <button onClick={() => resumeSession(it)} style={{ background: "#F4B740", border: "none", color: "#101B34", padding: "8px 12px", borderRadius: 8, cursor: "pointer", fontSize: 12.5, fontWeight: 700 }}>Lanjutkan</button>
-                <button onClick={() => deleteHistoryItem(it.id)} title="Hapus sesi ini" style={{ background: "transparent", border: "none", color: "#EF5B5B", cursor: "pointer", padding: 8 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>🗑</span></button>
+                <button onClick={() => deleteHistoryItem(it.id)} title="Hapus sesi ini" className="row-del" style={{ background: "transparent", border: "none", color: t.faint, cursor: "pointer", padding: 8, borderRadius: 8 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>🗑</span></button>
               </div>
             ))}
           </div>
@@ -1707,13 +1823,6 @@ function TebakCariKataGame({ onBack, teacher }) {
 
   /* ---------------- STAGE: SETUP (Persiapan) ---------------- */
   if (stage === "setup") {
-    const SectionLabel = ({ n, children, hint }) => (
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
-        <span style={{ width: 22, height: 22, borderRadius: "50%", background: "#F4B740", color: "#101B34", fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{n}</span>
-        <span style={{ fontSize: 14, fontWeight: 700 }}>{children}</span>
-        {hint && <span style={{ fontSize: 12, color: t.faint }}>{hint}</span>}
-      </div>
-    );
     const fieldLabelStyle = { fontSize: 10.5, color: t.faint, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.4 };
     const iconBtn = { position: "relative", display: "flex", alignItems: "center", justifyContent: "center", width: 34, height: 34, background: "transparent", border: "none", borderRadius: 8, color: t.text, cursor: "pointer" };
     // FIX (UX): kunci jawaban dulu mewarnai SETIAP SEL kata dengan blok warna solid — kalau
@@ -1756,7 +1865,7 @@ function TebakCariKataGame({ onBack, teacher }) {
                 <span style={{ fontSize: 15, lineHeight: 1 }}>📂</span>
                 <input type="file" accept="application/json,.json" onChange={(e) => { importBackup(e.target.files[0]); e.target.value = ""; }} style={{ display: "none" }} />
               </label>
-              <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")} title="Ganti tema terang/gelap" style={iconBtn}><span style={{ fontSize: 15, lineHeight: 1 }}>{theme === "dark" ? "☀" : "🌙"}</span></button>
+              <ThemeToggleButton theme={theme} onToggle={() => setTheme(theme === "dark" ? "light" : "dark")} title="Ganti tema terang/gelap" style={iconBtn} />
             </div>
             <button onClick={onBack} style={{ background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}>← Pilih Game</button>
           </div>
@@ -1779,7 +1888,7 @@ function TebakCariKataGame({ onBack, teacher }) {
         )}
 
         <div style={{ background: t.panel, borderRadius: 16, padding: "18px 20px", marginBottom: 20, boxShadow: t.shadowSm }}>
-          <SectionLabel n={1} hint="(sesuai Prota Bahasa Jepang kelas XI Fase F)">Pilih materi</SectionLabel>
+          <SectionLabel n={1} hint="(sesuai Prota Bahasa Jepang kelas XI Fase F)" faint={t.faint}>Pilih materi</SectionLabel>
           {/* Dulu tiap materi berupa kartu besar 2 baris — 9 kartu memakan hampir sepertiga
               layar padahal cuma dipilih sekali di awal. Sekarang jadi chip satu baris yang
               jauh lebih ringkas; deskripsinya pindah ke tooltip. */}
@@ -1805,7 +1914,7 @@ function TebakCariKataGame({ onBack, teacher }) {
 
         <div style={{ background: t.panel, borderRadius: 16, padding: "18px 20px", marginBottom: 20, boxShadow: t.shadowSm }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
-            <SectionLabel n={2} hint="— edit, hapus, tambah, unggah audio">Kosakata per babak</SectionLabel>
+            <SectionLabel n={2} hint="— edit, hapus, tambah, unggah audio" faint={t.faint}>Kosakata per babak</SectionLabel>
             <div style={{ display: "flex", gap: 6, background: t.panel2, padding: 4, borderRadius: 10 }}>
               {[1, 2, 3].map((id) => (
                 <button key={id} onClick={() => setBabakId(id)} style={{ padding: "7px 14px", borderRadius: 7, border: "none", cursor: "pointer", background: babakId === id ? "#F4B740" : "transparent", color: babakId === id ? "#101B34" : t.text, fontWeight: 600, fontSize: 13 }}>Babak {id}</button>
@@ -1829,7 +1938,7 @@ function TebakCariKataGame({ onBack, teacher }) {
 
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {babak.words.map((w, idx) => (
-              <div key={w.id} className="word-row" style={{ display: "flex", gap: 12, alignItems: "center", background: t.panel2, borderRadius: 12, padding: "10px 14px", flexWrap: "wrap" }}>
+              <div key={w.id} className="list-row" style={{ display: "flex", gap: 12, alignItems: "center", background: t.panel2, borderRadius: 12, padding: "10px 14px", flexWrap: "wrap" }}>
                 <div style={{ width: 24, height: 24, borderRadius: "50%", background: t.panel, color: t.faint, fontSize: 11.5, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{idx + 1}</div>
                 <input value={w.letters} onChange={(e) => updateWord(babakId, w.id, "letters", e.target.value)} placeholder="mis. BOTORU"
                   style={{ width: 160, flexShrink: 0, padding: "9px 10px", borderRadius: 8, border: `1px solid ${t.border}`, background: t.panel, color: t.text, fontSize: 13, fontWeight: 600 }} />
@@ -1847,11 +1956,12 @@ function TebakCariKataGame({ onBack, teacher }) {
             ))}
           </div>
           <button onClick={() => addWord(babakId)} style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 6, background: t.panel2, border: "none", color: t.text, borderRadius: 8, padding: "9px 14px", cursor: "pointer", fontSize: 13 }}><span style={{ fontSize: 14, lineHeight: 1, color: 'inherit' }}>➕</span> Tambah Kosakata</button>
+          <button onClick={() => setBulkAddOpen(true)} style={{ marginTop: 14, marginLeft: 8, display: "inline-flex", alignItems: "center", gap: 6, background: "transparent", border: `1px dashed ${t.border}`, color: t.dim, borderRadius: 8, padding: "9px 14px", cursor: "pointer", fontSize: 13 }}><span style={{ fontSize: 14, lineHeight: 1, color: 'inherit' }}>📋</span> Tambah Banyak Sekaligus</button>
         </div>
 
         <div style={{ background: t.panel, borderRadius: 16, padding: "18px 20px", marginBottom: 20, boxShadow: t.shadowSm }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
-            <SectionLabel n={3} hint="— papan ini persis yang dipakai saat Mulai Permainan">Kunci jawaban &amp; acak posisi — Babak {babakId}</SectionLabel>
+            <SectionLabel n={3} hint="— papan ini persis yang dipakai saat Mulai Permainan" faint={t.faint}>Kunci jawaban &amp; acak posisi — Babak {babakId}</SectionLabel>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
               <button onClick={() => setShowAnswerKey((s) => !s)} style={{ display: "flex", alignItems: "center", gap: 6, background: showAnswerKey ? "#F4B740" : t.panel2, color: showAnswerKey ? "#101B34" : t.text, border: "none", borderRadius: 8, padding: "8px 14px", cursor: "pointer", fontSize: 13, fontWeight: 600 }}>
                 <span style={{ fontSize: 14, lineHeight: 1, color: "inherit" }}>{showAnswerKey ? "🙈" : "👁"}</span> {showAnswerKey ? "Sembunyikan Kunci" : "Tampilkan Kunci Jawaban"}
@@ -1959,22 +2069,15 @@ function TebakCariKataGame({ onBack, teacher }) {
       <audio ref={audioRef} style={{ display: "none" }} />
       {phonePreview && <PhonePreview />}
       {saveNameOpen && <SaveNameModal />}
-      {qrOpen && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 60 }} onClick={() => setQrOpen(false)}>
-          <div onClick={(e) => e.stopPropagation()} style={{ background: "#FFFFFF", borderRadius: 20, padding: 28, textAlign: "center", boxShadow: "0 20px 60px rgba(0,0,0,.4)" }}>
-            <div className="sgt" style={{ fontSize: 17, fontWeight: 700, color: "#101B34", marginBottom: 4 }}>Scan untuk gabung</div>
-            <div style={{ fontSize: 13, color: "#5B6272", marginBottom: 14 }}>Kode Room: <b>{roomCode}</b> · {Object.keys(joinedGroups).length} kelompok sudah join</div>
-            {isFileProtocol() ? (
-              <div style={{ width: 220, background: "#FDECEC", border: "1px solid #EF5B5B", borderRadius: 10, padding: "12px 14px", fontSize: 12.5, color: "#8A1F1F", textAlign: "left", lineHeight: 1.5 }}>
-                <b>QR ini tidak akan berfungsi.</b> File dibuka langsung dari komputer (file://), jadi HP siswa tidak bisa mengaksesnya. Unggah dulu file ini ke layanan hosting (mis. Firebase Hosting, Netlify, atau GitHub Pages), lalu buka lewat alamat https:// hosting tersebut.
-              </div>
-            ) : (
-              <div ref={qrBoxRef} style={{ display: "flex", justifyContent: "center" }} />
-            )}
-            <button onClick={() => setQrOpen(false)} style={{ marginTop: 14, background: "#F1EEE4", border: "none", color: "#101B34", padding: "8px 16px", borderRadius: 8, cursor: "pointer", fontSize: 13 }}>Tutup</button>
-          </div>
-        </div>
-      )}
+      <QrJoinModal open={qrOpen} onClose={() => setQrOpen(false)} roomCode={roomCode} joinedCount={Object.keys(joinedGroups).length} />
+      <BulkAddModal
+        open={bulkAddOpen}
+        onClose={() => setBulkAddOpen(false)}
+        onAdd={(text) => addWordsBulk(babakId, text)}
+        title={`Tambah Banyak Kosakata Sekaligus — Babak ${babakId}`}
+        formatHint={'Satu kosakata per baris, format: kata/petunjuk (dipisah tanda garis miring "/"). Baris yang tidak punya "/" akan dilewati.'}
+        placeholder={"gomibako/Wadah penampung barang bekas atau sisa pakai yang sudah tidak digunakan\nkarendaa/Lembaran penanggalan yang menunjukkan susunan hari, tanggal, dan bulan dalam setahun"}
+      />
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 16, marginBottom: 14 }}>
         <div>
@@ -2013,7 +2116,7 @@ function TebakCariKataGame({ onBack, teacher }) {
         <div style={{ width: 1, alignSelf: "stretch", background: t.panel2, margin: "0 2px" }} />
 
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-          <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")} title="Ganti tampilan terang/gelap" style={{ background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: 10, borderRadius: 10, cursor: "pointer" }}>{theme === "dark" ? <span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>☀</span> : <span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>🌙</span>}</button>
+          <ThemeToggleButton theme={theme} onToggle={() => setTheme(theme === "dark" ? "light" : "dark")} style={{ background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: 10, borderRadius: 10, cursor: "pointer" }} />
           <button onClick={() => setProjectorMode(true)} style={{ display: "flex", alignItems: "center", gap: 6, background: "#F4B740", border: "none", color: "#101B34", padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>⤢</span> Mode Proyektor</button>
         </div>
 
@@ -2120,6 +2223,7 @@ function BukaKotakGame({ onBack }) {
   const [loaded, setLoaded] = useState(false);
   const [storageWarning, setStorageWarning] = useState(null); // pesan kalau localStorage gagal menyimpan
   const [importMsg, setImportMsg] = useState(null); // { ok, text } hasil ekspor/impor cadangan
+  const [bulkAddOpen, setBulkAddOpen] = useState(false);
   const [opened, setOpened] = useState({}); // id -> true
   const [activeBox, setActiveBox] = useState(null); // instruction object or null
 
@@ -2179,6 +2283,14 @@ function BukaKotakGame({ onBack }) {
   function addItem() {
     setDataByMateri((prev) => ({ ...prev, [selectedMateri]: [...(prev[selectedMateri] || []), { id: uid(), text: "" }] }));
   }
+  // FITUR BARU: tambah banyak perintah sekaligus, satu perintah per baris — tidak perlu format
+  // khusus karena tiap baris memang cuma satu kalimat perintah utuh.
+  function addItemsBulk(text) {
+    const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+    if (lines.length === 0) return 0;
+    setDataByMateri((prev) => ({ ...prev, [selectedMateri]: [...(prev[selectedMateri] || []), ...lines.map((line) => ({ id: uid(), text: line }))] }));
+    return lines.length;
+  }
   function startGame() { setOpened({}); setActiveBox(null); setStage("play"); }
   function openBox(item) { setActiveBox(item); setOpened((o) => ({ ...o, [item.id]: true })); }
   function resetBoard() { setOpened({}); setActiveBox(null); }
@@ -2223,7 +2335,7 @@ function BukaKotakGame({ onBack }) {
               <input type="file" accept="application/json,.json" onChange={(e) => { importBackup(e.target.files[0]); e.target.value = ""; }} style={{ display: "none" }} />
             </label>
             <button onClick={onBack} style={{ background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}>← Pilih Game</button>
-            <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")} style={{ background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: 10, borderRadius: 10, cursor: "pointer" }}>{theme === "dark" ? <span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>☀</span> : <span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>🌙</span>}</button>
+            <ThemeToggleButton theme={theme} onToggle={() => setTheme(theme === "dark" ? "light" : "dark")} style={{ background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: 10, borderRadius: 10, cursor: "pointer" }} />
           </div>
         </div>
 
@@ -2243,38 +2355,47 @@ function BukaKotakGame({ onBack }) {
           </div>
         )}
 
-        <div style={{ marginBottom: 20 }}>
-          <div style={{ fontSize: 13, color: t.dim, marginBottom: 8 }}>1. Pilih materi</div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 8 }}>
+        <div style={{ background: t.panel, borderRadius: 16, padding: "18px 20px", marginBottom: 20, boxShadow: t.shadowSm }}>
+          <SectionLabel n={1} faint={t.faint}>Pilih materi</SectionLabel>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
             {MATERI_LIST.map((m) => {
               const isSelected = selectedMateri === m.name;
               return (
-                <button key={m.name} onClick={() => { setSelectedMateri(m.name); setDataByMateri((prev) => ensureBoxMateri(prev, m.name)); }} style={{
-                  textAlign: "left", display: "flex", alignItems: "center", gap: 10, background: t.panel,
-                  border: isSelected ? "2px solid #F4B740" : `2px solid ${t.panel}`, borderRadius: 12, padding: "12px 14px", cursor: "pointer",
-                }}>
-                  <span style={{ width: 10, height: 10, borderRadius: 4, background: isSelected ? "#F4B740" : t.panel2, flexShrink: 0 }} />
-                  <div><div style={{ fontWeight: 700, fontSize: 13.5 }}>{m.name}</div><div style={{ fontSize: 11.5, color: t.dim }}>{m.desc}</div></div>
-                </button>
+                <button key={m.name} title={m.desc} onClick={() => { setSelectedMateri(m.name); setDataByMateri((prev) => ensureBoxMateri(prev, m.name)); }} style={{
+                  display: "flex", alignItems: "center", gap: 7,
+                  background: isSelected ? "#F4B740" : t.panel2, color: isSelected ? "#101B34" : t.text,
+                  border: "1px solid " + (isSelected ? "#F4B740" : t.border), borderRadius: 999, padding: "9px 15px",
+                  cursor: "pointer", fontWeight: isSelected ? 700 : 500, fontSize: 13, whiteSpace: "nowrap",
+                }}>{m.name}</button>
               );
             })}
           </div>
         </div>
 
-        <div style={{ fontSize: 13, color: t.dim, marginBottom: 8 }}>2. Daftar perintah ({items.length} kotak)</div>
         <div style={{ background: t.panel, borderRadius: 14, padding: 16, marginBottom: 20, boxShadow: t.shadowSm }}>
+          <SectionLabel n={2} hint={`— ${items.length} kotak`} faint={t.faint}>Daftar perintah</SectionLabel>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {items.map((it, i) => (
-              <div key={it.id} style={{ display: "flex", gap: 8, alignItems: "flex-start", background: t.panel2, borderRadius: 10, padding: 10 }}>
+              <div key={it.id} className="list-row" style={{ display: "flex", gap: 8, alignItems: "flex-start", background: t.panel2, borderRadius: 10, padding: 10 }}>
                 <span style={{ width: 26, height: 26, borderRadius: 7, background: BOX_COLORS[i % BOX_COLORS.length], color: "#101B34", fontWeight: 700, fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{i + 1}</span>
                 <textarea value={it.text} onChange={(e) => updateItem(it.id, e.target.value)} rows={2} placeholder="Tulis perintah/instruksi…"
                   style={{ flex: 1, padding: "8px 10px", borderRadius: 7, border: `1px solid ${t.border}`, background: t.panel, color: t.text, fontSize: 13, resize: "vertical", fontFamily: "inherit" }} />
-                <button onClick={() => removeItem(it.id)} style={{ background: "transparent", border: "none", color: "#EF5B5B", cursor: "pointer", padding: 8 }}><span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>🗑</span></button>
+                <button onClick={() => removeItem(it.id)} className="row-del" title="Hapus perintah ini" style={{ background: "transparent", border: "none", color: t.faint, cursor: "pointer", padding: 8, borderRadius: 8 }}><span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>🗑</span></button>
               </div>
             ))}
           </div>
           <button onClick={addItem} style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 6, background: t.panel2, border: "none", color: t.text, borderRadius: 8, padding: "9px 14px", cursor: "pointer", fontSize: 13 }}><span style={{ fontSize: 14, lineHeight: 1, color: 'inherit' }}>➕</span> Tambah Perintah</button>
+          <button onClick={() => setBulkAddOpen(true)} style={{ marginTop: 12, marginLeft: 8, display: "inline-flex", alignItems: "center", gap: 6, background: "transparent", border: `1px dashed ${t.border}`, color: t.dim, borderRadius: 8, padding: "9px 14px", cursor: "pointer", fontSize: 13 }}><span style={{ fontSize: 14, lineHeight: 1, color: 'inherit' }}>📋</span> Tambah Banyak Sekaligus</button>
         </div>
+
+        <BulkAddModal
+          open={bulkAddOpen}
+          onClose={() => setBulkAddOpen(false)}
+          onAdd={addItemsBulk}
+          title="Tambah Banyak Perintah Sekaligus"
+          formatHint="Satu perintah per baris — tidak perlu tanda pemisah, tiap baris langsung jadi satu kotak."
+          placeholder={"Sebutkan 3 kosakata benda elektronik di kelas!\nBuat 1 kalimat tanya kepemilikan barang menggunakan kata tanya dare"}
+        />
 
         <button onClick={startGame} disabled={!canStart} style={{ display: "flex", alignItems: "center", gap: 8, background: canStart ? "#F4B740" : t.panel2, color: canStart ? "#101B34" : t.faint, border: "none", borderRadius: 12, padding: "14px 22px", fontWeight: 700, fontSize: 15, cursor: canStart ? "pointer" : "default" }}>Mulai Permainan <span style={{ fontSize: 17, lineHeight: 1, color: 'inherit' }}>➡</span></button>
         {!canStart && <div style={{ marginTop: 8, fontSize: 12.5, color: t.faint }}>Isi minimal satu perintah untuk mulai.</div>}
@@ -2306,7 +2427,7 @@ function BukaKotakGame({ onBack }) {
           <button onClick={() => setStage("setup")} style={{ background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}>← Persiapan</button>
           <button onClick={resetBoard} style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: "10px 12px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>🔄</span> Reset papan</button>
           <button onClick={endGame} style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: "1px solid #EF5B5B", color: "#EF5B5B", padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>⏹</span> Akhiri Permainan</button>
-          <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")} style={{ background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: 10, borderRadius: 10, cursor: "pointer" }}>{theme === "dark" ? <span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>☀</span> : <span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>🌙</span>}</button>
+          <ThemeToggleButton theme={theme} onToggle={() => setTheme(theme === "dark" ? "light" : "dark")} style={{ background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: 10, borderRadius: 10, cursor: "pointer" }} />
         </div>
       </div>
 
@@ -2367,12 +2488,12 @@ function CocokkanKartuGame({ onBack }) {
   const [uploadingImage, setUploadingImage] = useState({});
   const [imageUploadError, setImageUploadError] = useState({});
   const [qrOpen, setQrOpen] = useState(false);
+  const [bulkAddOpen, setBulkAddOpen] = useState(false);
   const [joinedGroups, setJoinedGroups] = useState({});
   const [cardsRoundId, setCardsRoundId] = useState(null);
   const [finishers, setFinishers] = useState([]);
   const [scored, setScored] = useState(false);
   const [publishing, setPublishing] = useState(false);
-  const qrBoxRef = useRef(null);
 
   useEffect(() => {
     try {
@@ -2407,6 +2528,15 @@ function CocokkanKartuGame({ onBack }) {
   }
   function addPair(idx) {
     setBabaks((prev) => prev.map((b, i) => i === idx ? { ...b, pairs: [...b.pairs, { id: uid(), word: "", image: null }] } : b));
+  }
+  // FITUR BARU: tambah banyak kata sekaligus, satu kata per baris. Cuma isi teksnya — gambar
+  // TIDAK bisa ikut ditempel lewat cara ini (harus diunggah manual per kartu satu-satu lewat
+  // tombol unggah gambar seperti biasa), jadi kartu-kartu baru ini akan muncul dulu tanpa gambar.
+  function addPairsBulk(idx, text) {
+    const words = text.split("\n").map((l) => l.trim()).filter(Boolean).map((w) => w.toUpperCase());
+    if (words.length === 0) return 0;
+    setBabaks((prev) => prev.map((b, i) => i === idx ? { ...b, pairs: [...b.pairs, ...words.map((word) => ({ id: uid(), word, image: null }))] } : b));
+    return words.length;
   }
   function removePair(idx, pairId) {
     setBabaks((prev) => prev.map((b, i) => i === idx ? { ...b, pairs: b.pairs.filter((p) => p.id !== pairId) } : b));
@@ -2462,22 +2592,6 @@ function CocokkanKartuGame({ onBack }) {
     });
     return () => unsub();
   }, [stage, roomCode]);
-
-  useEffect(() => {
-    if (qrOpen && qrBoxRef.current && !isFileProtocol()) {
-      const box = qrBoxRef.current;
-      box.innerHTML = "";
-      let cancelled = false;
-      loadQrLibrary().then(() => {
-        if (cancelled || !box.isConnected) return;
-        box.innerHTML = "";
-        new QRCode(box, { text: getJoinUrl(roomCode), width: 200, height: 200 });
-      }).catch(() => {
-        if (!cancelled && box.isConnected) box.textContent = "Gagal memuat QR — cek koneksi internet.";
-      });
-      return () => { cancelled = true; };
-    }
-  }, [qrOpen, roomCode]);
 
   function applyScores(finalFinishers) {
     const totalGroups = Object.keys(joinedGroups).length || finalFinishers.length;
@@ -2585,7 +2699,7 @@ function CocokkanKartuGame({ onBack }) {
               <input type="file" accept="application/json,.json" onChange={(e) => { importBackup(e.target.files[0]); e.target.value = ""; }} style={{ display: "none" }} />
             </label>
             <button onClick={onBack} style={{ background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}>← Pilih Game</button>
-            <button onClick={() => setTheme(theme === "dark" ? "light" : "dark")} style={{ background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: 10, borderRadius: 10, cursor: "pointer" }}>{theme === "dark" ? "☀" : "🌙"}</button>
+            <ThemeToggleButton theme={theme} onToggle={() => setTheme(theme === "dark" ? "light" : "dark")} style={{ background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: 10, borderRadius: 10, cursor: "pointer" }} />
           </div>
         </div>
 
@@ -2625,7 +2739,7 @@ function CocokkanKartuGame({ onBack }) {
 
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             {babak.pairs.map((p, idx) => (
-              <div key={p.id} style={{ display: "flex", gap: 12, alignItems: "center", background: t.panel2, borderRadius: 12, padding: "10px 14px", flexWrap: "wrap" }}>
+              <div key={p.id} className="list-row" style={{ display: "flex", gap: 12, alignItems: "center", background: t.panel2, borderRadius: 12, padding: "10px 14px", flexWrap: "wrap" }}>
                 <div style={{ width: 24, height: 24, borderRadius: "50%", background: t.panel, color: t.faint, fontSize: 11.5, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{idx + 1}</div>
                 <label title={p.image ? "Klik untuk ganti gambar" : "Unggah gambar"} style={{ width: 56, height: 56, borderRadius: 8, background: t.panel, flexShrink: 0, cursor: "pointer", overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", position: "relative" }}>
                   {uploadingImage[p.id] ? "⏳" : p.image ? <img src={p.image} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ fontSize: 15, color: t.dim }}>⬆</span>}
@@ -2637,11 +2751,21 @@ function CocokkanKartuGame({ onBack }) {
                     style={{ padding: "9px 10px", borderRadius: 8, border: `1px solid ${t.border}`, background: t.panel, color: t.text, fontSize: 13 }} />
                   {imageUploadError[p.id] && <div style={{ fontSize: 10, color: "#EF5B5B" }}>{imageUploadError[p.id]}</div>}
                 </div>
-                <button onClick={() => removePair(babakIdx, p.id)} title="Hapus pasangan ini" style={{ background: "transparent", border: "none", color: "#EF5B5B", cursor: "pointer", padding: 8 }}>🗑</button>
+                <button onClick={() => removePair(babakIdx, p.id)} title="Hapus pasangan ini" className="row-del" style={{ background: "transparent", border: "none", color: t.faint, cursor: "pointer", padding: 8, borderRadius: 8 }}>🗑</button>
               </div>
             ))}
           </div>
           <button onClick={() => addPair(babakIdx)} style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 6, background: t.panel2, border: "none", color: t.text, borderRadius: 8, padding: "9px 14px", cursor: "pointer", fontSize: 13 }}>➕ Tambah Pasangan</button>
+          <button onClick={() => setBulkAddOpen(true)} style={{ marginTop: 14, marginLeft: 8, display: "inline-flex", alignItems: "center", gap: 6, background: "transparent", border: `1px dashed ${t.border}`, color: t.dim, borderRadius: 8, padding: "9px 14px", cursor: "pointer", fontSize: 13 }}>📋 Tambah Banyak Sekaligus</button>
+
+          <BulkAddModal
+            open={bulkAddOpen}
+            onClose={() => setBulkAddOpen(false)}
+            onAdd={(text) => addPairsBulk(babakIdx, text)}
+            title={`Tambah Banyak Kata Sekaligus — ${babak.label}`}
+            formatHint="Satu kata per baris — hanya teksnya yang ikut ditambahkan. Gambar tetap harus diunggah manual satu per satu untuk tiap kartu baru di bawah."
+            placeholder={"GOMIBAKO\nKARENDAA"}
+          />
         </div>
 
         <button onClick={startSession} disabled={!canStart} style={{
@@ -2658,22 +2782,7 @@ function CocokkanKartuGame({ onBack }) {
   return (
     <div style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: t.bg, color: t.text, minHeight: "100vh", padding: 28, boxSizing: "border-box" }}>
       <style>{fontImport}</style>
-      {qrOpen && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 60 }} onClick={() => setQrOpen(false)}>
-          <div onClick={(e) => e.stopPropagation()} style={{ background: "#FFFFFF", borderRadius: 20, padding: 28, textAlign: "center", boxShadow: "0 20px 60px rgba(0,0,0,.4)" }}>
-            <div className="sgt" style={{ fontSize: 17, fontWeight: 700, color: "#101B34", marginBottom: 4 }}>Scan untuk gabung</div>
-            <div style={{ fontSize: 13, color: "#5B6272", marginBottom: 14 }}>Kode Room: <b>{roomCode}</b> · {totalGroups} kelompok sudah join</div>
-            {isFileProtocol() ? (
-              <div style={{ width: 220, background: "#FDECEC", border: "1px solid #EF5B5B", borderRadius: 10, padding: "12px 14px", fontSize: 12.5, color: "#8A1F1F", textAlign: "left", lineHeight: 1.5 }}>
-                <b>QR ini tidak akan berfungsi.</b> Unggah dulu file ini ke layanan hosting, lalu buka lewat alamat https://.
-              </div>
-            ) : (
-              <div ref={qrBoxRef} style={{ display: "flex", justifyContent: "center" }} />
-            )}
-            <button onClick={() => setQrOpen(false)} style={{ marginTop: 14, background: "#F1EEE4", border: "none", color: "#101B34", padding: "8px 16px", borderRadius: 8, cursor: "pointer", fontSize: 13 }}>Tutup</button>
-          </div>
-        </div>
-      )}
+      <QrJoinModal open={qrOpen} onClose={() => setQrOpen(false)} roomCode={roomCode} joinedCount={totalGroups} />
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 16, marginBottom: 20 }}>
         <div>
