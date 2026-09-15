@@ -466,6 +466,9 @@ function ImportMessageBanner({ t, msg, onDismiss }) {
 }
 
 const GROUP_COLORS = ["#F4B740", "#EF5B5B", "#3FBFAD", "#F2879E", "#5DA9E9", "#8FBF6B"];
+// Warna netral (abu-abu) khusus untuk kata yang jawabannya diungkap lewat "Lewati soal" — sengaja
+// beda dari GROUP_COLORS / ANSWER_KEY_PALETTE supaya jelas ini bukan hasil jawaban benar kelompok.
+const REVEALED_COLOR = "#9AA3B2";
 const GROUP_NAMES = [1, 2, 3, 4, 5, 6];
 // Palet khusus untuk kunci jawaban di layar Persiapan — perlu lebih banyak warna dari GROUP_COLORS
 // karena satu babak bisa berisi sampai 20 kata sekaligus (lihat Babak 3), bukan cuma 6 kelompok.
@@ -1376,6 +1379,8 @@ function TebakCariKataGame({ onBack, teacher }) {
   const [justWonPulse, setJustWonPulse] = useState(false);
   const [confetti, setConfetti] = useState(null);
   const confettiTimerRef = useRef(null);
+  const [autoNext, setAutoNext] = useState(null); // detik tersisa sebelum otomatis pindah babak, atau null kalau tidak aktif
+  const autoNextIntervalRef = useRef(null);
 
   const audioRef = useRef(null);
   const retryTimerRef = useRef(null);
@@ -1682,7 +1687,7 @@ function TebakCariKataGame({ onBack, teacher }) {
     } catch (e) { return ""; }
   }
 
-  useEffect(() => () => { clearRetryTimer(); if (confettiTimerRef.current) clearTimeout(confettiTimerRef.current); }, []);
+  useEffect(() => () => { clearRetryTimer(); if (confettiTimerRef.current) clearTimeout(confettiTimerRef.current); if (autoNextIntervalRef.current) clearInterval(autoNextIntervalRef.current); }, []);
   useEffect(() => {
     if (activeGroup && activeGroup === phonePreview) {
       setJustWonPulse(true);
@@ -1810,7 +1815,20 @@ function TebakCariKataGame({ onBack, teacher }) {
     buzzOrderRef.current = []; triedSetRef.current = new Set(); openToAllRef.current = false;
     if (audioRef.current) audioRef.current.pause();
   }
-  function skipWord() { if (currentWord) nextQuestion(); }
+  function skipWord() {
+    if (!currentWord) return;
+    // Ungkap jawabannya: sorot posisi kata di papan (warna netral abu-abu putus-putus, beda dari
+    // warna kelompok yang benar-benar menjawab) + tampilkan banner "Jawaban: ...". Posisi kata
+    // diambil dari puzzle.placements — data penempatan asli saat papan dibangun (bukan dari seleksi
+    // siswa, karena soal ini memang tidak pernah terjawab).
+    const cells = puzzle && puzzle.placements ? puzzle.placements[currentWord.id] : null;
+    if (cells) {
+      setFoundMap((f) => ({ ...f, [currentWord.id]: { cells, color: REVEALED_COLOR, revealed: true } }));
+    }
+    setFlash({ type: "revealed", word: currentWord.letters, clue: currentWord.clue });
+    setTimeout(() => setFlash(null), 2400);
+    nextQuestion();
+  }
 
   function handleCellClick(r, c) {
     if (!currentWord || activeGroup === null || !puzzle) return;
@@ -1867,11 +1885,11 @@ function TebakCariKataGame({ onBack, teacher }) {
   // (kotak demi kotak, bukan garis lurus). Sekarang tiap kata yang ketemu cukup digambar sebagai
   // satu garis tipis transparan dari sel pertama ke sel terakhir yang tadi diseleksi siswa —
   // otomatis lurus & mengikuti sudutnya sendiri, termasuk diagonal.
-  const foundSegments = puzzle ? Object.values(foundMap).map(({ cells, color }, i) => {
+  const foundSegments = puzzle ? Object.values(foundMap).map(({ cells, color, revealed }, i) => {
     if (!cells || cells.length === 0) return null;
     const [r1, c1] = cells[0];
     const [r2, c2] = cells[cells.length - 1];
-    return { id: i, x1: c1 + 0.5, y1: r1 + 0.5, x2: c2 + 0.5, y2: r2 + 0.5, color };
+    return { id: i, x1: c1 + 0.5, y1: r1 + 0.5, x2: c2 + 0.5, y2: r2 + 0.5, color, revealed: !!revealed };
   }).filter(Boolean) : [];
   const leaderScore = Math.max(...Object.values(scores));
   const sortedGroups = [...GROUP_NAMES].sort((a, b) => scores[b] - scores[a]);
@@ -1962,6 +1980,36 @@ function TebakCariKataGame({ onBack, teacher }) {
   // terlalu banyak/panjang untuk ukuran papan). Sebelumnya kedua kasus ini tampil sama persis
   // ("Belum ada kosakata"), padahal (b) butuh tindakan berbeda dari guru (kurangi/perpendek kata).
   const hasWordsForBabak = babak.words.some((w) => w.letters.trim());
+
+  // Begitu semua kosakata di babak ini sudah terjawab/dilewati (currentWord jadi null), hitung
+  // mundur 5 detik lalu otomatis pindah ke babak berikutnya lewat switchBabak() — guru tidak perlu
+  // klik tab "Babak 2" secara manual tiap kali selesai. Kalau ini sudah babak terakhir (3), atau
+  // babak berikutnya belum ada kosakatanya sama sekali, tidak ada hitung mundur — guru tetap harus
+  // pindah manual atau isi dulu kosakatanya.
+  useEffect(() => {
+    const babakDone = puzzle && !currentWord && hasWordsForBabak;
+    const nextBabakId = babakId + 1;
+    const nextHasWords = babakDone && nextBabakId <= 3 && (dataByMateri[selectedMateri]?.[nextBabakId] || []).some((w) => w.letters.trim());
+    if (!nextHasWords) { setAutoNext(null); autoNextIntervalRef.current = null; return; }
+    let sec = 5;
+    setAutoNext(sec);
+    const interval = setInterval(() => {
+      sec -= 1;
+      if (sec <= 0) { clearInterval(interval); autoNextIntervalRef.current = null; switchBabak(nextBabakId); }
+      else setAutoNext(sec);
+    }, 1000);
+    autoNextIntervalRef.current = interval;
+    return () => clearInterval(interval);
+  }, [currentWord, puzzle, babakId]);
+
+  // Guru bisa membatalkan hitung mundurnya kapan saja (mis. masih mau bahas babak ini dulu di kelas)
+  // — tidak akan otomatis mulai lagi sampai status "selesai" babak ini berubah (mis. sempat pindah
+  // babak lalu balik lagi ke sini).
+  function cancelAutoNext() {
+    if (autoNextIntervalRef.current) clearInterval(autoNextIntervalRef.current);
+    autoNextIntervalRef.current = null;
+    setAutoNext(null);
+  }
   // FIX (bug): Grid, Scoreboard, BuzzIndicator, dan ControlPanel di bawah ini tadinya
   // ditulis sebagai `const Grid = (...) => (...)` — komponen React yang didefinisikan
   // ULANG di setiap render TebakCariKataGame. Karena definisinya baru setiap render, React
@@ -1997,7 +2045,8 @@ function TebakCariKataGame({ onBack, teacher }) {
       <svg viewBox={`0 0 ${puzzle.size} ${puzzle.size}`} style={{ position: "absolute", top: 10, left: 10, right: 10, bottom: 10, pointerEvents: "none" }}>
         {foundSegments.map((seg) => (
           <line key={seg.id} x1={seg.x1} y1={seg.y1} x2={seg.x2} y2={seg.y2}
-            stroke={seg.color} strokeWidth={0.62} strokeLinecap="round" opacity={0.6} />
+            stroke={seg.revealed ? REVEALED_COLOR : seg.color} strokeWidth={0.62} strokeLinecap="round"
+            strokeDasharray={seg.revealed ? "0.16 0.14" : undefined} opacity={seg.revealed ? 0.8 : 0.6} />
         ))}
       </svg>
       {/* FIX (UX): sel papan dulu masing-masing digambar sebagai kotak solid berwarna (t.panel2)
@@ -2054,7 +2103,7 @@ function TebakCariKataGame({ onBack, teacher }) {
     </div>
   ); }
 
-  function renderControlPanel() { return (
+  function renderControlPanel({ hideScoreboard } = {}) { return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <div style={{ background: t.panel, borderRadius: 14, padding: 18, boxShadow: t.shadowSm }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
@@ -2124,7 +2173,7 @@ function TebakCariKataGame({ onBack, teacher }) {
         {currentWord && <button onClick={skipWord} style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 6, background: "transparent", border: `1px solid ${t.panel2}`, color: t.dim, borderRadius: 8, padding: "8px 12px", fontSize: 13, cursor: "pointer", width: "100%", justifyContent: "center" }}><span style={{ fontSize: 14, lineHeight: 1, color: 'inherit' }}>⏭</span> Lewati soal ini</button>}
       </div>
 
-      {renderScoreboard()}
+      {!hideScoreboard && renderScoreboard()}
 
       <button onClick={() => setPhonePreview(1)} style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "center", background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, borderRadius: 10, padding: "10px 12px", cursor: "pointer", fontSize: 13 }}>
         <span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>📱</span> Pratinjau HP Siswa
@@ -2413,6 +2462,76 @@ function TebakCariKataGame({ onBack, teacher }) {
 
   /* ---------------- STAGE: PLAY — Projector view ---------------- */
   if (projectorMode) {
+    const topOverlayButtons = (
+      <React.Fragment>
+        <button onClick={() => setProjectorMode(false)} title="Keluar mode proyektor" style={{ position: "fixed", top: 16, right: 16, background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: 10, borderRadius: 10, cursor: "pointer", zIndex: 30 }}><span style={{ fontSize: 18, lineHeight: 1, color: 'inherit' }}>⤡</span></button>
+        <div style={{ position: "fixed", top: 16, left: 16, display: "flex", gap: 8, zIndex: 30 }}>
+          <button onClick={endGame} title="Akhiri permainan" style={{ display: "flex", alignItems: "center", gap: 6, background: t.bg, border: "1px solid #EF5B5B", color: "#EF5B5B", padding: "10px 12px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>⏹</span> Akhiri</button>
+          <button onClick={openSaveNamePrompt} title="Simpan progres & jeda, lanjutkan nanti" style={{ display: "flex", alignItems: "center", gap: 6, background: t.bg, border: "1px solid #F4B740", color: "#F4B740", padding: "10px 12px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>💾</span> Simpan & Jeda</button>
+        </div>
+      </React.Fragment>
+    );
+    const flashBanner = flash && (
+      <div style={{ position: "absolute", top: -8, left: "50%", transform: "translate(-50%, -100%)", zIndex: 5, padding: "10px 22px", borderRadius: 12, fontWeight: 700, fontSize: 17, textAlign: "center", background: flash.type === "correct" ? "#3FBFAD" : flash.type === "revealed" ? REVEALED_COLOR : "#EF5B5B", color: "#0D1730", animation: `pulseFlash ${flash.type === "revealed" ? 2.4 : flash.type === "correct" ? 1.4 : 0.9}s ease forwards`, maxWidth: "90%", boxShadow: "0 6px 20px rgba(0,0,0,.25)" }}>
+        {flash.type === "correct" ? `Benar! Kelompok ${flash.group} +${babak.point} poin`
+          : flash.type === "revealed" ? `Jawaban: ${flash.word}${flash.clue ? ` — ${flash.clue}` : ""}`
+          : "Belum tepat — giliran dibuka lagi"}
+      </div>
+    );
+    const autoNextBanner = autoNext !== null && (
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 14, background: t.panel, padding: "10px 16px", borderRadius: 12, marginTop: 10, flexWrap: "wrap" }}>
+        <span className="sgt" style={{ fontSize: 14, fontWeight: 700 }}>🎉 Babak {babakId} selesai! Lanjut ke Babak {babakId + 1} dalam {autoNext} detik…</span>
+        <button onClick={cancelAutoNext} style={{ background: t.panel2, border: "none", color: t.dim, borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontSize: 12.5, fontWeight: 600 }}>Batalkan</button>
+      </div>
+    );
+
+    // Layar besar (proyektor/laptop) — dulu papan skor & panel guru ditaruh DI BAWAH papan huruf,
+    // jadi kelas harus scroll ke bawah untuk lihat skor, dan panel guru cuma bisa dibuka lewat
+    // tombol mengambang yang menutupi papan. Padahal kiri-kanan layar proyektor kosong tidak
+    // terpakai. Sekarang jadi 3 kolom penuh layar (tanpa scroll halaman): kiri = Papan Skor,
+    // tengah = papan huruf & indikator giliran (fokus utama kelas), kanan = navigasi/panel guru
+    // (selalu terlihat, tidak perlu dibuka-tutup lagi). Di HP tetap pakai tata letak lama yang
+    // bisa di-scroll, karena 3 kolom tidak akan muat di layar sempit.
+    if (!isMobile) {
+      return (
+        <div style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: t.bg, color: t.text, height: "100vh", width: "100vw", boxSizing: "border-box", overflow: "hidden", display: "grid", gridTemplateColumns: "220px minmax(0,1fr) 320px", gap: 16, padding: "58px 16px 16px" }}>
+          <style>{fontImport}</style>
+          <audio ref={audioRef} style={{ display: "none" }} />
+          {phonePreview && <PhonePreview />}
+          {saveNameOpen && <SaveNameModal />}
+          <CelebrationOverlay particles={confetti} />
+          {topOverlayButtons}
+
+          <div style={{ overflowY: "auto", minHeight: 0 }}>{renderScoreboard()}</div>
+
+          <div style={{ overflowY: "auto", minHeight: 0, minWidth: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
+            <div className="sgt" style={{ fontSize: 19, fontWeight: 700, marginBottom: 10, textAlign: "center" }}>Word Search — {babak.label}</div>
+            <div style={{ width: "100%", maxWidth: 640, marginBottom: 10 }}>{renderBuzzIndicator()}</div>
+            {buzzOrder.length > 1 && (
+              <div style={{ display: "flex", justifyContent: "center", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+                {buzzOrder.map((o, i) => (
+                  <div key={o.group} style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, borderRadius: 10, padding: "5px 10px" }}>
+                    <span style={{ width: 18, height: 18, borderRadius: "50%", background: GROUP_COLORS[o.group - 1], color: "#101B34", fontSize: 10, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>{i + 1}</span>
+                    <span className="sgt" style={{ fontWeight: 700, fontSize: 12.5 }}>Kelompok {o.group}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div style={{ position: "relative", width: "100%", display: "flex", justifyContent: "center" }}>
+              {flashBanner}
+              {renderGrid({ big: true })}
+            </div>
+            {autoNextBanner}
+          </div>
+
+          <div style={{ overflowY: "auto", minHeight: 0 }}>
+            <div style={{ fontSize: 11, color: t.faint, marginBottom: 8, textAlign: "center" }}>Panel ini hanya guru yang lihat</div>
+            {renderControlPanel({ hideScoreboard: true })}
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: t.bg, color: t.text, minHeight: "100vh", boxSizing: "border-box", position: "relative", overflowX: "hidden" }}>
         <style>{fontImport}</style>
@@ -2420,14 +2539,10 @@ function TebakCariKataGame({ onBack, teacher }) {
         {phonePreview && <PhonePreview />}
         {saveNameOpen && <SaveNameModal />}
         <CelebrationOverlay particles={confetti} />
-        <button onClick={() => setProjectorMode(false)} title="Keluar mode proyektor" style={{ position: "fixed", top: 16, right: 16, background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: 10, borderRadius: 10, cursor: "pointer", zIndex: 30 }}><span style={{ fontSize: 18, lineHeight: 1, color: 'inherit' }}>⤡</span></button>
-        <div style={{ position: "fixed", top: 16, left: 16, display: "flex", gap: 8, zIndex: 30 }}>
-          <button onClick={endGame} title="Akhiri permainan" style={{ display: "flex", alignItems: "center", gap: 6, background: t.bg, border: "1px solid #EF5B5B", color: "#EF5B5B", padding: "10px 12px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>⏹</span> Akhiri</button>
-          <button onClick={openSaveNamePrompt} title="Simpan progres & jeda, lanjutkan nanti" style={{ display: "flex", alignItems: "center", gap: 6, background: t.bg, border: "1px solid #F4B740", color: "#F4B740", padding: "10px 12px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>💾</span> Simpan & Jeda</button>
-        </div>
+        {topOverlayButtons}
 
-        <div style={{ maxWidth: isMobile ? "100%" : (controlsOpen ? "calc(100% - 356px)" : 900), margin: "0 auto", padding: "28px 28px 100px", boxSizing: "border-box", transition: "max-width .2s ease" }}>
-          <div className="sgt" style={{ fontSize: 24, fontWeight: 700, textAlign: "center", marginBottom: 16 }}>Word Search — {babak.label}</div>
+        <div style={{ maxWidth: "100%", margin: "0 auto", padding: "28px 20px 100px", boxSizing: "border-box" }}>
+          <div className="sgt" style={{ fontSize: 22, fontWeight: 700, textAlign: "center", marginBottom: 16 }}>Word Search — {babak.label}</div>
           <div style={{ marginBottom: 18 }}>{renderBuzzIndicator({ big: true })}</div>
           {buzzOrder.length > 1 && (
             <div style={{ display: "flex", justifyContent: "center", gap: 10, flexWrap: "wrap", marginBottom: 18 }}>
@@ -2439,13 +2554,17 @@ function TebakCariKataGame({ onBack, teacher }) {
               ))}
             </div>
           )}
-          <div style={{ marginBottom: 18 }}>{renderGrid({ big: true })}</div>
+          <div style={{ position: "relative" }}>
+            {flashBanner}
+            <div style={{ marginBottom: 18 }}>{renderGrid({ big: true })}</div>
+            {autoNextBanner}
+          </div>
           {renderScoreboard({ big: true })}
         </div>
 
         <button onClick={() => setControlsOpen((o) => !o)} style={{ position: "fixed", bottom: 16, right: 16, display: "flex", alignItems: "center", gap: 6, background: "#F4B740", color: "#101B34", border: "none", borderRadius: 10, padding: "10px 14px", cursor: "pointer", zIndex: 30, fontWeight: 700, fontSize: 13, boxShadow: "0 4px 16px rgba(0,0,0,.25)" }}><span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>⚙</span> {controlsOpen ? "Sembunyikan Panel" : "Panel Guru"}</button>
         {controlsOpen && (
-          <div style={{ position: "fixed", top: 0, right: 0, bottom: 0, left: isMobile ? 0 : "auto", width: isMobile ? "auto" : 336, padding: "16px 16px 76px", overflowY: "auto", background: t.modalBg, boxShadow: "-8px 0 30px rgba(0,0,0,.3)", zIndex: 25, boxSizing: "border-box" }}>
+          <div style={{ position: "fixed", top: 0, right: 0, bottom: 0, left: 0, padding: "16px 16px 76px", overflowY: "auto", background: t.modalBg, boxShadow: "-8px 0 30px rgba(0,0,0,.3)", zIndex: 25, boxSizing: "border-box" }}>
             <div style={{ fontSize: 12, color: t.faint, marginBottom: 10, textAlign: "center" }}>Panel ini hanya guru yang lihat</div>
             {renderControlPanel()}
           </div>
@@ -2529,12 +2648,23 @@ function TebakCariKataGame({ onBack, teacher }) {
             {selStart && currentWord && <span style={{ color: "#F4B740" }}> — klik huruf terakhir kata</span>}
           </div>
           {flash && (
-            <div style={{ position: "absolute", top: 34, left: "50%", transform: "translateX(-50%)", zIndex: 5, padding: "8px 18px", borderRadius: 10, fontWeight: 700, fontSize: 14, background: flash.type === "correct" ? "#3FBFAD" : "#EF5B5B", color: "#0D1730", animation: "pulseFlash 1.2s ease forwards" }}>
-              {flash.type === "correct" ? `Benar! Kelompok ${flash.group} +${babak.point} poin` : `Belum tepat — giliran dibuka lagi`}
+            <div style={{ position: "absolute", top: 34, left: "50%", transform: "translateX(-50%)", zIndex: 5, padding: "8px 18px", borderRadius: 10, fontWeight: 700, fontSize: 14, textAlign: "center", background: flash.type === "correct" ? "#3FBFAD" : flash.type === "revealed" ? REVEALED_COLOR : "#EF5B5B", color: "#0D1730", animation: `pulseFlash ${flash.type === "revealed" ? 2.4 : flash.type === "correct" ? 1.4 : 0.9}s ease forwards`, maxWidth: "88%" }}>
+              {flash.type === "correct" ? `Benar! Kelompok ${flash.group} +${babak.point} poin`
+                : flash.type === "revealed" ? `Jawaban: ${flash.word}${flash.clue ? ` — ${flash.clue}` : ""}`
+                : "Belum tepat — giliran dibuka lagi"}
             </div>
           )}
           {renderGrid()}
-          {puzzle && !currentWord && <div style={{ marginTop: 16, fontSize: 14, color: t.dim }}>Semua kosakata di babak ini sudah ditemukan. Ganti babak untuk melanjutkan.</div>}
+          {puzzle && !currentWord && (
+            autoNext !== null ? (
+              <div style={{ marginTop: 16, display: "flex", alignItems: "center", gap: 12, background: t.panel, padding: "10px 14px", borderRadius: 10, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 14, color: t.text }}>🎉 Babak {babakId} selesai! Lanjut ke Babak {babakId + 1} dalam <b>{autoNext}</b> detik…</span>
+                <button onClick={cancelAutoNext} style={{ background: t.panel2, border: "none", color: t.dim, borderRadius: 7, padding: "6px 12px", cursor: "pointer", fontSize: 12.5, fontWeight: 600 }}>Batalkan</button>
+              </div>
+            ) : (
+              <div style={{ marginTop: 16, fontSize: 14, color: t.dim }}>Semua kosakata di babak ini sudah ditemukan. Ganti babak untuk melanjutkan.</div>
+            )
+          )}
         </div>
         <div style={{ flex: "1 1 280px" }}>{renderControlPanel()}</div>
       </div>
