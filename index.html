@@ -1253,24 +1253,27 @@ function CardsPlayArea({ roomCode, room, myGroup }) {
     );
   };
 
-  const gridCols = Math.min(5, Math.ceil(Math.sqrt(cards.length)));
-  const gridRows = Math.ceil(cards.length / gridCols);
   const PAD = 16;
   const GAP_BELOW_HEADER = 8;
   const GAP = 8;
-  // FIX: papan kartu diisi PENUH ke seluruh lebar & tinggi bikin kotaknya jadi persegi panjang
-  // kurus (jumlah kolom & baris jarang sama besar, apalagi di layar HP yang portrait/tinggi).
-  // Gambarnya sendiri sengaja diformat persegi, jadi kotaknya juga HARUS tetap persegi (1:1).
-  // Caranya: hitung ukuran satu kotak dari sisi yang lebih SEMPIT — sisa lebar layar dibagi
-  // jumlah kolom, ATAU sisa tinggi layar dibagi jumlah baris, mana yang lebih kecil itu yang
-  // dipakai. Sisa ruang di sisi yang "kelebihan" dibiarkan kosong & kontennya ditengahkan —
-  // dijamin tetap persegi DAN tetap pasti muat 1 layar tanpa scroll.
   const gridAreaHeight = Math.max(220, viewportH - headerH - PAD * 2 - GAP_BELOW_HEADER);
-  const availableW = Math.min(520, viewportW - PAD * 2);
-  const cellSize = Math.floor(Math.min(
-    (availableW - (gridCols - 1) * GAP) / gridCols,
-    (gridAreaHeight - (gridRows - 1) * GAP) / gridRows
-  ));
+  const availableW = Math.min(560, viewportW - PAD * 2);
+  // FIX: dulu jumlah kolom dipatok maksimal 5 (angka tebakan, bukan dihitung dari ruang layar
+  // yang sebenarnya) — jadi di layar yang tinggi/lega, kotaknya cuma dibesarkan sampai muat di
+  // LEBAR (5 kolom), sementara sisa tinggi layar dibiarkan kosong percuma. Sekarang SEMUA
+  // kemungkinan jumlah kolom (1 sampai sebanyak jumlah kartu) dicoba satu-satu, dihitung ukuran
+  // kotak persegi yang dihasilkan tiap kemungkinan (dari sisi yang lebih sempit, lebar atau
+  // tinggi), lalu dipilih kombinasi kolom×baris yang menghasilkan kotak PALING BESAR — jadi
+  // papan selalu memenuhi ruang layar semaksimal mungkin, persegi, & tetap muat 1 layar.
+  let gridCols = 1, gridRows = cards.length, cellSize = 0;
+  for (let cols = 1; cols <= cards.length; cols++) {
+    const rows = Math.ceil(cards.length / cols);
+    const size = Math.floor(Math.min(
+      (availableW - (cols - 1) * GAP) / cols,
+      (gridAreaHeight - (rows - 1) * GAP) / rows
+    ));
+    if (size > cellSize) { cellSize = size; gridCols = cols; gridRows = rows; }
+  }
   const gridPixelW = cellSize * gridCols + (gridCols - 1) * GAP;
   const gridPixelH = cellSize * gridRows + (gridRows - 1) * GAP;
 
@@ -1959,7 +1962,19 @@ function TebakCariKataGame({ onBack, teacher }) {
   // terlalu banyak/panjang untuk ukuran papan). Sebelumnya kedua kasus ini tampil sama persis
   // ("Belum ada kosakata"), padahal (b) butuh tindakan berbeda dari guru (kurangi/perpendek kata).
   const hasWordsForBabak = babak.words.some((w) => w.letters.trim());
-  const Grid = ({ big }) => !puzzle ? (
+  // FIX (bug): Grid, Scoreboard, BuzzIndicator, dan ControlPanel di bawah ini tadinya
+  // ditulis sebagai `const Grid = (...) => (...)` — komponen React yang didefinisikan
+  // ULANG di setiap render TebakCariKataGame. Karena definisinya baru setiap render, React
+  // menganggap `<Grid big />` sebagai TIPE komponen yang berbeda dari render sebelumnya (meski
+  // isinya identik) — jadi seluruh papan/skor/panel dibongkar total lalu dipasang ulang dari nol
+  // setiap kali ADA state apa pun yang berubah, termasuk klik tombol yang sama sekali tidak
+  // berhubungan dengan papan (ganti mode, buka panel, dst). Bongkar-pasang inilah yang terlihat
+  // sebagai "kedipan", dan juga memicu ulang animasi masuk (cardRise) tiap kali.
+  // Sekarang ditulis sebagai FUNGSI BIASA yang dipanggil langsung (`renderGrid({ big: true })`),
+  // bukan dipakai sebagai tag JSX (`<Grid big />`). Dengan begitu React melihatnya sebagai bagian
+  // biasa dari pohon elemen induknya — tidak dianggap komponen terpisah — sehingga hanya
+  // memperbarui bagian yang benar-benar berubah, tanpa bongkar-pasang total.
+  function renderGrid({ big } = {}) { return !puzzle ? (
     <div style={{ padding: 24, color: t.dim, fontSize: 14 }}>
       {hasWordsForBabak
         ? `Papan gagal disusun dari kosakata Babak ${babakId} ini — coba kurangi jumlah kata atau perpendek beberapa kata, lalu buka layar Persiapan dan klik "Acak Ulang Posisi".`
@@ -2009,9 +2024,9 @@ function TebakCariKataGame({ onBack, teacher }) {
         }))}
       </div>
     </div>
-  );
+  ); }
 
-  const Scoreboard = ({ big, compact, highlight }) => (
+  function renderScoreboard({ big, compact, highlight } = {}) { return (
     <div style={{ background: compact ? "transparent" : t.panel, borderRadius: 14, padding: compact ? 0 : big ? 22 : 18 }}>
       {!compact && <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: big ? 15 : 13, color: t.dim, marginBottom: 10 }}><span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>🏆</span> Papan Skor</div>}
       <div style={{ display: "flex", flexDirection: big ? "row" : "column", gap: big ? 12 : 6, flexWrap: "wrap" }}>
@@ -2031,15 +2046,15 @@ function TebakCariKataGame({ onBack, teacher }) {
         ))}
       </div>
     </div>
-  );
+  ); }
 
-  const BuzzIndicator = ({ big }) => (
+  function renderBuzzIndicator({ big } = {}) { return (
     <div style={{ textAlign: "center", padding: big ? "18px 0" : "10px 0", borderRadius: 14, background: activeGroup ? GROUP_COLORS[activeGroup - 1] : t.panel, color: activeGroup ? "#101B34" : t.dim, fontWeight: 700, fontSize: big ? 22 : 14, transition: "background .2s ease" }}>
       {activeGroup ? `Kelompok ${activeGroup} mengangkat tangan duluan!` : "Menunggu ada yang mengangkat tangan…"}
     </div>
-  );
+  ); }
 
-  const ControlPanel = () => (
+  function renderControlPanel() { return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <div style={{ background: t.panel, borderRadius: 14, padding: 18, boxShadow: t.shadowSm }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
@@ -2065,24 +2080,35 @@ function TebakCariKataGame({ onBack, teacher }) {
         {currentWord && !clueRevealed && (
           <div style={{ marginBottom: 10, fontSize: 12, color: "#F4B740", background: "rgba(244,183,64,.12)", borderRadius: 8, padding: "8px 10px" }}>Tombol masih terkunci — klik "{audioMode === "guru" && currentWord.audioUrl ? "Putar Petunjuk" : "Tampilkan teks"}" di panel kanan dulu supaya kelompok bisa angkat tangan.</div>
         )}
+        {/* FIX (fitur diminta): dulu di mode Manual, guru cuma bisa memilih SATU kelompok
+            (klik langsung setActiveGroup), dan begitu satu kelompok aktif, tombol kelompok
+            lain otomatis terkunci sampai giliran itu selesai — jadi kalau guru sudah tahu
+            urutan mana yang mengangkat tangan duluan di kelas (mis. 4, lalu 2, lalu 1), guru
+            harus menunggu dan mengklik ulang satu-satu setiap kali kelompok sebelumnya salah.
+            Sekarang tombol kelompok di KEDUA mode memakai fungsi antrean yang sama (`buzz`)
+            yang tadinya cuma dipakai mode Digital: klik kelompok manapun akan menambahkannya
+            ke antrean; yang PERTAMA diklik langsung jadi giliran aktif, klik-klik berikutnya
+            tetap bisa dilakukan sambil kelompok pertama masih menjawab, dan begitu kelompok
+            yang aktif salah, giliran otomatis lanjut ke kelompok berikutnya sesuai URUTAN
+            KLIK guru tadi — persis seperti antrean di mode Digital. */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
           {GROUP_NAMES.map((g) => {
             const isActive = activeGroup === g;
             const eligible = isEligible(g);
             const buzzPos = buzzOrder.findIndex((o) => o.group === g);
             const alreadyBuzzed = buzzPos >= 0;
-            const locked = !currentWord || !clueRevealed || !eligible || (mode === "digital" ? alreadyBuzzed : (activeGroup !== null && !isActive));
+            const locked = !currentWord || !clueRevealed || !eligible || alreadyBuzzed;
             return (
-              <button key={g} className="grp-btn" onClick={() => (mode === "digital" ? buzz(g) : (eligible && setActiveGroup(g)))} disabled={locked}
+              <button key={g} className="grp-btn" onClick={() => buzz(g)} disabled={locked}
                 style={{ position: "relative", padding: "12px 0", borderRadius: 10, border: "none", cursor: locked ? "default" : "pointer", background: isActive ? GROUP_COLORS[g - 1] : t.panel2, color: isActive ? "#0D1730" : t.text, fontWeight: 700, fontSize: 14, opacity: locked && !isActive ? 0.4 : 1, boxShadow: isActive ? `0 0 0 2px ${GROUP_COLORS[g - 1]}` : "none" }}>
                 K{g}
                 {joinedGroups[g] && <span title="Sudah join lewat QR" style={{ position: "absolute", top: 4, right: 4, width: 7, height: 7, borderRadius: "50%", background: "#3FBFAD" }} />}
-                {mode === "digital" && alreadyBuzzed && <span style={{ position: "absolute", top: -6, left: -6, width: 18, height: 18, borderRadius: "50%", background: "#101B34", color: "#F4B740", fontSize: 10, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>{buzzPos + 1}</span>}
+                {alreadyBuzzed && <span style={{ position: "absolute", top: -6, left: -6, width: 18, height: 18, borderRadius: "50%", background: "#101B34", color: "#F4B740", fontSize: 10, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>{buzzPos + 1}</span>}
               </button>
             );
           })}
         </div>
-        {mode === "digital" && buzzOrder.length > 0 && (
+        {buzzOrder.length > 0 && (
           <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 4 }}>
             <div style={{ fontSize: 11.5, color: t.faint }}>Urutan angkat tangan:</div>
             {buzzOrder.map((o, i) => (
@@ -2098,7 +2124,7 @@ function TebakCariKataGame({ onBack, teacher }) {
         {currentWord && <button onClick={skipWord} style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 6, background: "transparent", border: `1px solid ${t.panel2}`, color: t.dim, borderRadius: 8, padding: "8px 12px", fontSize: 13, cursor: "pointer", width: "100%", justifyContent: "center" }}><span style={{ fontSize: 14, lineHeight: 1, color: 'inherit' }}>⏭</span> Lewati soal ini</button>}
       </div>
 
-      <Scoreboard />
+      {renderScoreboard()}
 
       <button onClick={() => setPhonePreview(1)} style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "center", background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, borderRadius: 10, padding: "10px 12px", cursor: "pointer", fontSize: 13 }}>
         <span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>📱</span> Pratinjau HP Siswa
@@ -2148,7 +2174,7 @@ function TebakCariKataGame({ onBack, teacher }) {
               }}>{won ? <span style={{ fontSize: 40, lineHeight: 1, color: 'inherit' }}>✅</span> : alreadyBuzzed ? `#${myPos + 1}` : "ANGKAT\nTANGAN"}</button>
             )}
           </div>
-          <div style={{ marginTop: 12 }}><Scoreboard compact highlight={g} /></div>
+          <div style={{ marginTop: 12 }}>{renderScoreboard({ compact: true, highlight: g })}</div>
         </div>
       </div>
     );
@@ -2201,7 +2227,7 @@ function TebakCariKataGame({ onBack, teacher }) {
         )}
       </div>
     </div>
-  );
+  ); }
 
   /* ---------------- STAGE: SETUP (Persiapan) ---------------- */
   if (stage === "setup") {
@@ -2402,8 +2428,8 @@ function TebakCariKataGame({ onBack, teacher }) {
 
         <div style={{ maxWidth: isMobile ? "100%" : (controlsOpen ? "calc(100% - 356px)" : 900), margin: "0 auto", padding: "28px 28px 100px", boxSizing: "border-box", transition: "max-width .2s ease" }}>
           <div className="sgt" style={{ fontSize: 24, fontWeight: 700, textAlign: "center", marginBottom: 16 }}>Word Search — {babak.label}</div>
-          <div style={{ marginBottom: 18 }}><BuzzIndicator big /></div>
-          {mode === "digital" && buzzOrder.length > 1 && (
+          <div style={{ marginBottom: 18 }}>{renderBuzzIndicator({ big: true })}</div>
+          {buzzOrder.length > 1 && (
             <div style={{ display: "flex", justifyContent: "center", gap: 10, flexWrap: "wrap", marginBottom: 18 }}>
               {buzzOrder.map((o, i) => (
                 <div key={o.group} style={{ display: "flex", alignItems: "center", gap: 8, background: t.panel, borderRadius: 10, padding: "8px 14px" }}>
@@ -2413,15 +2439,15 @@ function TebakCariKataGame({ onBack, teacher }) {
               ))}
             </div>
           )}
-          <div style={{ marginBottom: 18 }}><Grid big /></div>
-          <Scoreboard big />
+          <div style={{ marginBottom: 18 }}>{renderGrid({ big: true })}</div>
+          {renderScoreboard({ big: true })}
         </div>
 
         <button onClick={() => setControlsOpen((o) => !o)} style={{ position: "fixed", bottom: 16, right: 16, display: "flex", alignItems: "center", gap: 6, background: "#F4B740", color: "#101B34", border: "none", borderRadius: 10, padding: "10px 14px", cursor: "pointer", zIndex: 30, fontWeight: 700, fontSize: 13, boxShadow: "0 4px 16px rgba(0,0,0,.25)" }}><span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>⚙</span> {controlsOpen ? "Sembunyikan Panel" : "Panel Guru"}</button>
         {controlsOpen && (
           <div style={{ position: "fixed", top: 0, right: 0, bottom: 0, left: isMobile ? 0 : "auto", width: isMobile ? "auto" : 336, padding: "16px 16px 76px", overflowY: "auto", background: t.modalBg, boxShadow: "-8px 0 30px rgba(0,0,0,.3)", zIndex: 25, boxSizing: "border-box" }}>
             <div style={{ fontSize: 12, color: t.faint, marginBottom: 10, textAlign: "center" }}>Panel ini hanya guru yang lihat</div>
-            <ControlPanel />
+            {renderControlPanel()}
           </div>
         )}
       </div>
@@ -2493,7 +2519,7 @@ function TebakCariKataGame({ onBack, teacher }) {
           <button onClick={() => { setMode("digital"); releaseTurn(); }} style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 14px", borderRadius: 7, border: "none", cursor: "pointer", background: mode === "digital" ? "#3FBFAD" : "transparent", color: mode === "digital" ? "#0D1730" : t.text, fontWeight: 600, fontSize: 13 }}><span style={{ fontSize: 14, lineHeight: 1, color: 'inherit' }}>📻</span> Digital</button>
           <button onClick={() => { setMode("manual"); releaseTurn(); }} style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 14px", borderRadius: 7, border: "none", cursor: "pointer", background: mode === "manual" ? "#3FBFAD" : "transparent", color: mode === "manual" ? "#0D1730" : t.text, fontWeight: 600, fontSize: 13 }}><span style={{ fontSize: 14, lineHeight: 1, color: 'inherit' }}>✋</span> Manual</button>
         </div>
-        <span style={{ fontSize: 12.5, color: t.faint }}>{mode === "digital" ? "Kelompok pencet tombol duluan untuk mengunci giliran." : "Guru menunjuk kelompok yang dinilai duluan mengangkat tangan."}</span>
+        <span style={{ fontSize: 12.5, color: t.faint }}>{mode === "digital" ? "Kelompok pencet tombol duluan untuk mengunci giliran." : "Guru klik kelompok sesuai urutan angkat tangan di kelas — bisa klik beberapa kelompok berurutan sekaligus."}</span>
       </div>
 
       <div style={{ display: "flex", gap: 22, flexWrap: "wrap", alignItems: "flex-start" }}>
@@ -2507,10 +2533,10 @@ function TebakCariKataGame({ onBack, teacher }) {
               {flash.type === "correct" ? `Benar! Kelompok ${flash.group} +${babak.point} poin` : `Belum tepat — giliran dibuka lagi`}
             </div>
           )}
-          <Grid />
+          {renderGrid()}
           {puzzle && !currentWord && <div style={{ marginTop: 16, fontSize: 14, color: t.dim }}>Semua kosakata di babak ini sudah ditemukan. Ganti babak untuk melanjutkan.</div>}
         </div>
-        <div style={{ flex: "1 1 280px" }}><ControlPanel /></div>
+        <div style={{ flex: "1 1 280px" }}>{renderControlPanel()}</div>
       </div>
     </div>
   );
