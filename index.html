@@ -8,7 +8,7 @@
   /* Setiap layar app ini pakai minHeight:"100%" biar latar penuh 1 layar.
      Itu cuma bisa terhitung kalau html/body/#root punya tinggi pasti dulu —
      tanpa ini, background cuma sepanjang konten & sisanya kelihatan putih kosong. */
-  html, body { height: 100%; margin: 0; }
+  html, body { height: 100%; margin: 0; overflow-x: hidden; }
   #root { min-height: 100vh; }
 </style>
 </head>
@@ -799,6 +799,20 @@ const fontImport = `
     .game-grid { grid-template-columns: 1fr !important; max-width: 300px !important; margin: 0 auto; gap: 14px !important; }
     .jp-backdrop span { font-size: 34px !important; }
   }
+
+  /* ---------------------------------------------------------
+     RESPONSIF LAYAR GURU (Persiapan, Panel Kontrol, Mode Proyektor)
+     Layar-layar ini awalnya dirancang untuk laptop/tablet (padding 28px,
+     judul besar, panel guru selebar 336px). Aturan di bawah menyesuaikannya
+     untuk tablet & HP tanpa mengubah tampilan desktop sama sekali.
+  --------------------------------------------------------- */
+  @media (max-width: 900px) {
+    .app-screen { padding: 20px !important; }
+  }
+  @media (max-width: 640px) {
+    .app-screen { padding: 14px !important; }
+    .page-title { font-size: 21px !important; }
+  }
 `;
 
 /* ===========================================================
@@ -815,7 +829,6 @@ function StudentJoinScreen({ roomCode }) {
   const [myGroup, setMyGroup] = useState(() => {
     try { return Number(sessionStorage.getItem(`join-group-${roomCode}`)) || null; } catch (e) { return null; }
   });
-  const [nameInput, setNameInput] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -843,7 +856,7 @@ function StudentJoinScreen({ roomCode }) {
     if (!room) return;
     setErr(""); setBusy(true);
     const ref = db.collection("rooms").doc(roomCode);
-    ref.set({ groups: { [g]: { name: nameInput.trim() || `Kelompok ${g}`, joinedAt: firebase.firestore.FieldValue.serverTimestamp() } } }, { merge: true })
+    ref.set({ groups: { [g]: { name: `Kelompok ${g}`, joinedAt: firebase.firestore.FieldValue.serverTimestamp() } } }, { merge: true })
       .then(() => {
         setMyGroup(g);
         try { sessionStorage.setItem(`join-group-${roomCode}`, String(g)); } catch (e) {}
@@ -884,22 +897,36 @@ function StudentJoinScreen({ roomCode }) {
     return (
       <div style={wrap}>
         <style>{fontImport}</style>
-        <div className="sgt" style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>Gabung ke Room {roomCode}</div>
-        <div style={{ fontSize: 13.5, color: t.dim, marginBottom: 18 }}>Pilih nomor kelompokmu</div>
-        <input value={nameInput} onChange={(e) => setNameInput(e.target.value)} placeholder="Nama kelompok (opsional)"
-          style={{ width: 240, padding: "10px 12px", borderRadius: 8, border: `1px solid ${t.border}`, background: t.panel, color: t.text, fontSize: 13, marginBottom: 14 }} />
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, maxWidth: 300 }}>
-          {GROUP_NAMES.map((g) => {
-            const isTaken = !!taken[g];
-            return (
-              <button key={g} disabled={isTaken || busy} onClick={() => joinGroup(g)} style={{
-                padding: "16px 0", borderRadius: 12, border: "none", cursor: isTaken ? "default" : "pointer",
-                background: isTaken ? t.panel2 : GROUP_COLORS[g - 1], color: isTaken ? t.faint : "#101B34", fontWeight: 700, fontSize: 16, opacity: isTaken ? 0.55 : 1,
-              }}>K{g}{isTaken ? " ✓" : ""}</button>
-            );
-          })}
+        {/* Spotlight lembut di belakang konten — murni dekorasi, tidak menghalangi sentuhan */}
+        <div style={{ position: "fixed", inset: 0, background: "radial-gradient(480px 360px at 50% 8%, rgba(244,183,64,.30), transparent 65%)", pointerEvents: "none", zIndex: 0 }} />
+        <div style={{ position: "relative", zIndex: 1, width: "100%", maxWidth: 340 }}>
+          <div style={{ display: "inline-flex", alignItems: "center", gap: 8, background: t.panel, borderRadius: 999, padding: "7px 18px", marginBottom: 20, boxShadow: "0 8px 22px rgba(30,34,51,.10)" }}>
+            <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#3FBFAD", flexShrink: 0 }} />
+            <span className="sgt" style={{ fontSize: 13, fontWeight: 700, letterSpacing: 1.2 }}>ROOM {roomCode}</span>
+          </div>
+          <div className="sgt" style={{ fontSize: 27, fontWeight: 700, marginBottom: 6, lineHeight: 1.2 }}>Pilih kelompokmu</div>
+          <div style={{ fontSize: 14, color: t.dim, marginBottom: 28 }}>Ketuk salah satu nomor untuk bergabung</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14 }}>
+            {GROUP_NAMES.map((g) => {
+              const isTaken = !!taken[g];
+              return (
+                <button key={g} className="grp-btn" disabled={isTaken || busy} onClick={() => joinGroup(g)} style={{
+                  position: "relative", aspectRatio: "1 / 1", borderRadius: 20, border: "none", cursor: isTaken ? "default" : "pointer",
+                  background: isTaken ? t.panel2 : GROUP_COLORS[g - 1], color: isTaken ? t.faint : "#101B34",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  boxShadow: isTaken ? "none" : `0 10px 24px ${GROUP_COLORS[g - 1]}55`,
+                  opacity: isTaken ? 0.5 : 1,
+                }}>
+                  <span className="sgt" style={{ fontSize: 24, fontWeight: 700 }}>K{g}</span>
+                  {isTaken && (
+                    <span style={{ position: "absolute", top: 8, right: 8, width: 20, height: 20, borderRadius: "50%", background: "rgba(30,34,51,.14)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12 }}>✓</span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+          {err && <div style={{ marginTop: 16, fontSize: 12.5, color: "#EF5B5B" }}>{err}</div>}
         </div>
-        {err && <div style={{ marginTop: 12, fontSize: 12.5, color: "#EF5B5B" }}>{err}</div>}
       </div>
     );
   }
@@ -1001,10 +1028,16 @@ function CardsPlayArea({ roomCode, room, myGroup }) {
   const [pairs, setPairs] = useState([]);
   const [pairsLoaded, setPairsLoaded] = useState(false);
   const [cards, setCards] = useState([]);
-  const [flipped, setFlipped] = useState([]);
+  // FIX (desain game): dulu ini game MEMORI — kartu tertutup, dibalik satu-satu, harus
+  // dihafal letaknya. Ternyata bukan itu yang dimaksud: tantangannya adalah MENCOCOKKAN
+  // gambar dengan kata bahasa Jepang yang sesuai (seperti Quizlet Match / Wordwall Match Up),
+  // jadi kartunya harus langsung terlihat semua dari awal — tidak perlu dibuka/ditutup lagi.
+  // "selected" gantikan konsep "flipped": cuma menyimpan SATU kartu gambar & SATU kartu kata
+  // yang sedang dipilih siswa sebelum keduanya dicocokkan.
+  const [selected, setSelected] = useState(null); // { key, kind, pairId } atau null
   const [busy, setBusy] = useState(false);
   const [finishedSent, setFinishedSent] = useState(false);
-  const [mismatchKeys, setMismatchKeys] = useState([]); // 2 key kartu yang baru saja terbukti tidak cocok, buat animasi shake
+  const [wrongKeys, setWrongKeys] = useState([]); // 2 key kartu yang baru saja terbukti tidak cocok, buat animasi shake
   const [confetti, setConfetti] = useState(null);
   const appliedRoundRef = useRef(null);
   const startAtRef = useRef(null);
@@ -1022,7 +1055,8 @@ function CardsPlayArea({ roomCode, room, myGroup }) {
 
   // Bangun papan ACAK milik kelompok INI SENDIRI setiap kali guru memulai ronde baru.
   // Diacak lokal (Math.random) — bukan disinkronkan — jadi tiap HP dapat susunan berbeda
-  // walau isi pasangan katanya identik, sesuai permintaan "papan sendiri-sendiri".
+  // walau isi pasangan katanya identik, sesuai permintaan "papan sendiri-sendiri". Kolom
+  // gambar & kolom kata diacak TERPISAH supaya urutannya tidak ikut-ikutan sama.
   useEffect(() => {
     if (!roundId || !pairsLoaded || pairs.length === 0) return;
     if (appliedRoundRef.current === roundId) return;
@@ -1035,27 +1069,27 @@ function CardsPlayArea({ roomCode, room, myGroup }) {
     const expectedCount = pairs.length * 2;
     if (saved && saved.roundId === roundId && Array.isArray(saved.cards) && saved.cards.length === expectedCount) {
       setCards(saved.cards);
-      setFlipped([]);
+      setSelected(null);
       setFinishedSent(!!saved.finishedSent);
       startAtRef.current = saved.startAt || Date.now();
       return;
     }
 
-    const deck = [];
-    pairs.forEach((p) => {
-      deck.push({ key: p.id + "-img", pairId: p.id, kind: "image", content: p.image });
-      deck.push({ key: p.id + "-word", pairId: p.id, kind: "word", content: p.word });
-    });
-    for (let i = deck.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [deck[i], deck[j]] = [deck[j], deck[i]];
+    function shuffle(arr) {
+      for (let i = arr.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+      }
+      return arr;
     }
-    const shuffled = deck.map((c) => ({ ...c, matched: false }));
-    setCards(shuffled);
-    setFlipped([]);
+    const imgDeck = shuffle(pairs.map((p) => ({ key: p.id + "-img", pairId: p.id, kind: "image", content: p.image, matched: false })));
+    const wordDeck = shuffle(pairs.map((p) => ({ key: p.id + "-word", pairId: p.id, kind: "word", content: p.word, matched: false })));
+    const combined = [...imgDeck, ...wordDeck];
+    setCards(combined);
+    setSelected(null);
     setFinishedSent(false);
     startAtRef.current = Date.now();
-    saveCardsProgress(roomCode, myGroup, { roundId, cards: shuffled, finishedSent: false, startAt: startAtRef.current });
+    saveCardsProgress(roomCode, myGroup, { roundId, cards: combined, finishedSent: false, startAt: startAtRef.current });
   }, [roundId, pairsLoaded, pairs, roomCode, myGroup]);
 
   // Simpan progres tiap kali ada perubahan (kartu cocok, atau sudah kirim sinyal selesai) supaya
@@ -1065,28 +1099,26 @@ function CardsPlayArea({ roomCode, room, myGroup }) {
     saveCardsProgress(roomCode, myGroup, { roundId, cards, finishedSent, startAt: startAtRef.current });
   }, [cards, finishedSent, roundId, roomCode, myGroup]);
 
-  function flipCard(key) {
-    if (busy || finishedSent) return;
-    if (flipped.includes(key)) return;
-    const card = cards.find((c) => c.key === key);
-    if (!card || card.matched) return;
-    if (flipped.length === 0) { setFlipped([key]); return; }
-    if (flipped.length === 1) {
-      const firstKey = flipped[0];
-      setFlipped([firstKey, key]);
-      const first = cards.find((c) => c.key === firstKey);
-      if (first && first.pairId === card.pairId) {
-        setBusy(true);
-        setTimeout(() => {
-          setCards((cs) => cs.map((c) => (c.key === firstKey || c.key === key) ? { ...c, matched: true } : c));
-          setFlipped([]);
-          setBusy(false);
-        }, 450);
-      } else {
-        setBusy(true);
-        setMismatchKeys([firstKey, key]);
-        setTimeout(() => { setFlipped([]); setBusy(false); setMismatchKeys([]); }, 700);
-      }
+  // Ketuk satu kartu gambar + satu kartu kata (urutan bebas) untuk mencoba mencocokkan.
+  // Ketuk kartu lain yang SEJENIS (gambar↔gambar atau kata↔kata) akan mengganti pilihan,
+  // bukan mencoba mencocokkan — karena satu gambar cuma bisa dipasangkan dengan satu kata.
+  function tapCard(card) {
+    if (busy || finishedSent || card.matched) return;
+    if (!selected) { setSelected(card); return; }
+    if (selected.key === card.key) { setSelected(null); return; }
+    if (selected.kind === card.kind) { setSelected(card); return; }
+    if (selected.pairId === card.pairId) {
+      setBusy(true);
+      const aKey = selected.key, bKey = card.key;
+      setTimeout(() => {
+        setCards((cs) => cs.map((c) => (c.key === aKey || c.key === bKey) ? { ...c, matched: true } : c));
+        setSelected(null);
+        setBusy(false);
+      }, 320);
+    } else {
+      setBusy(true);
+      setWrongKeys([selected.key, card.key]);
+      setTimeout(() => { setSelected(null); setBusy(false); setWrongKeys([]); }, 550);
     }
   }
 
@@ -1142,41 +1174,55 @@ function CardsPlayArea({ roomCode, room, myGroup }) {
     );
   }
 
-  const cols = Math.min(5, Math.ceil(Math.sqrt(cards.length)));
+  const imageCards = cards.filter((c) => c.kind === "image");
+  const wordCards = cards.filter((c) => c.kind === "word");
+
+  // Kartu dipercantik: gambar jadi kartu foto dengan sudut membulat & bayangan lembut,
+  // kata jadi "pil" putih besar yang gampang dibaca. State-nya dibedakan lewat cincin warna
+  // di tepi (kuning = dipilih, merah = baru terbukti salah) dan efek redup + centang hijau
+  // begitu sudah cocok — bukan lagi animasi buka-tutup kartu.
+  const CardTile = ({ c }) => {
+    const isSelected = selected && selected.key === c.key;
+    const isWrong = wrongKeys.includes(c.key);
+    const ring = isSelected ? "#F4B740" : isWrong ? "#EF5B5B" : "transparent";
+    const isImage = c.kind === "image";
+    return (
+      <button onClick={() => tapCard(c)} disabled={c.matched || busy} style={{
+        position: "relative", width: "100%", padding: 0, border: "none", cursor: c.matched || busy ? "default" : "pointer",
+        aspectRatio: isImage ? "1 / 1" : undefined, minHeight: isImage ? undefined : 58,
+        borderRadius: 14, overflow: "hidden", boxSizing: "border-box",
+        boxShadow: ring !== "transparent" ? `0 0 0 3px ${ring}` : "0 2px 8px rgba(28,32,51,.12)",
+        opacity: c.matched ? 0.4 : 1,
+        transform: isSelected ? "scale(1.03)" : "scale(1)",
+        transition: "transform .15s ease, box-shadow .15s ease, opacity .2s ease",
+        animation: isWrong ? "cardShakeX .4s ease" : c.matched ? "matchGlow .6s ease" : "none",
+        background: isImage ? "#FFFFFF" : c.matched ? "#DFF6F1" : isSelected ? "#FFF6E0" : "#FFFFFF",
+      }}>
+        {isImage ? (
+          <img src={c.content} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+        ) : (
+          <div className="sgt" style={{ padding: "12px 10px", fontSize: 15, fontWeight: 700, color: c.matched ? "#3FBFAD" : "#1E2233", textAlign: "center", wordBreak: "break-word", lineHeight: 1.3 }}>{c.content}</div>
+        )}
+        {c.matched && (
+          <span style={{ position: "absolute", top: 6, right: 6, width: 22, height: 22, borderRadius: "50%", background: "#3FBFAD", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, boxShadow: "0 2px 4px rgba(0,0,0,.2)" }}>✓</span>
+        )}
+      </button>
+    );
+  };
+
   return (
     <div style={wrap}>
       <style>{fontImport}</style>
       <div style={{ fontSize: 12.5, color: t.dim, marginBottom: 2, textAlign: "center" }}>Room {roomCode} · Kelompok {myGroup}</div>
-      <div style={{ fontSize: 12.5, color: t.dim, marginBottom: 12, textAlign: "center", fontWeight: 600 }}>{matchedCount}/{totalPairs} pasangan ketemu</div>
-      <div style={{ display: "grid", gridTemplateColumns: `repeat(${cols}, 1fr)`, gap: 8, maxWidth: 440, margin: "0 auto" }}>
-        {cards.map((c) => {
-          const isFaceUp = c.matched || flipped.includes(c.key);
-          const isShaking = mismatchKeys.includes(c.key);
-          return (
-            <button key={c.key} onClick={() => flipCard(c.key)} disabled={c.matched || busy} style={{
-              aspectRatio: "3 / 4", borderRadius: 10, border: "none", padding: 0, background: "transparent",
-              cursor: c.matched || busy ? "default" : "pointer", perspective: 700,
-            }}>
-              <div style={{
-                position: "relative", width: "100%", height: "100%", borderRadius: 10,
-                transformStyle: "preserve-3d", transition: "transform .45s cubic-bezier(.4,.15,.2,1)",
-                transform: isFaceUp ? "rotateY(180deg)" : "rotateY(0deg)",
-                animation: isShaking ? "cardShakeX .4s ease" : c.matched ? "matchGlow .7s ease" : "none",
-              }}>
-                {/* Sisi belakang (tertutup) */}
-                <div style={{ position: "absolute", inset: 0, backfaceVisibility: "hidden", borderRadius: 10, background: "#5DA9E9", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 2px 4px rgba(0,0,0,.12)" }}>
-                  <span style={{ fontSize: 17, opacity: .8 }}>❓</span>
-                </div>
-                {/* Sisi depan (terbuka) */}
-                <div style={{ position: "absolute", inset: 0, backfaceVisibility: "hidden", transform: "rotateY(180deg)", borderRadius: 10, background: c.matched ? "#DFF6F1" : "#FFFFFF", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", boxShadow: "0 2px 6px rgba(0,0,0,.15)" }}>
-                  {c.kind === "image"
-                    ? <img src={c.content} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                    : <span className="sgt" style={{ fontSize: 13, fontWeight: 700, color: "#101B34", textAlign: "center", wordBreak: "break-word", padding: 4 }}>{c.content}</span>}
-                </div>
-              </div>
-            </button>
-          );
-        })}
+      <div style={{ fontSize: 12.5, color: t.dim, marginBottom: 4, textAlign: "center", fontWeight: 600 }}>{matchedCount}/{totalPairs} pasangan ketemu</div>
+      <div style={{ fontSize: 11.5, color: t.faint, marginBottom: 14, textAlign: "center" }}>Ketuk satu gambar lalu satu kata yang cocok</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, maxWidth: 440, margin: "0 auto" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {imageCards.map((c) => <CardTile key={c.key} c={c} />)}
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10, justifyContent: "flex-start" }}>
+          {wordCards.map((c) => <CardTile key={c.key} c={c} />)}
+        </div>
       </div>
     </div>
   );
@@ -1189,6 +1235,7 @@ function TebakCariKataGame({ onBack, teacher }) {
   const historyCol = db.collection("users").doc(teacher.uid).collection("history");
   const [theme, setTheme] = useState("light");
   const t = THEMES[theme];
+  const isMobile = useIsMobile();
 
   const [stage, setStage] = useState("setup"); // 'setup' | 'play'
   const [selectedMateri, setSelectedMateri] = useState("Gakkou no Seikatsu");
@@ -2014,7 +2061,7 @@ function TebakCariKataGame({ onBack, teacher }) {
     }
     return (
       <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50 }} onClick={() => setPhonePreview(null)}>
-        <div onClick={(e) => e.stopPropagation()} style={{ width: 300, background: t.modalBg, borderRadius: 32, padding: "20px 16px", boxShadow: "0 20px 60px rgba(0,0,0,.5)", position: "relative", transform: justWonPulse ? "scale(1.03)" : "scale(1)", transition: "transform .2s ease" }}>
+        <div onClick={(e) => e.stopPropagation()} style={{ width: "min(300px, 88vw)", background: t.modalBg, borderRadius: 32, padding: "20px 16px", boxShadow: "0 20px 60px rgba(0,0,0,.5)", position: "relative", transform: justWonPulse ? "scale(1.03)" : "scale(1)", transition: "transform .2s ease" }}>
           <button onClick={() => setPhonePreview(null)} style={{ position: "absolute", top: 10, right: 12, background: "none", border: "none", color: t.dim, cursor: "pointer" }}><span style={{ fontSize: 18, lineHeight: 1, color: 'inherit' }}>✕</span></button>
           <div style={{ display: "flex", justifyContent: "center", gap: 6, marginBottom: 14 }}>
             {GROUP_NAMES.map((n) => (
@@ -2112,16 +2159,16 @@ function TebakCariKataGame({ onBack, teacher }) {
       });
     }
     return (
-      <div style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: t.bg, color: t.text, minHeight: "100vh", padding: 28, boxSizing: "border-box" }}>
+      <div className="app-screen" style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: t.bg, color: t.text, minHeight: "100vh", padding: 28, boxSizing: "border-box" }}>
         <style>{fontImport}</style>
         {historyOpen && <HistoryModal />}
 
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 26, flexWrap: "wrap", gap: 12 }}>
           <div>
-            <div className="sgt" style={{ fontSize: 28, fontWeight: 700 }}>Persiapan Permainan</div>
+            <div className="sgt page-title" style={{ fontSize: 28, fontWeight: 700 }}>Persiapan Permainan</div>
             <div style={{ fontSize: 14, color: t.dim, marginTop: 2 }}>Susun materi & kosakata sebelum mulai bermain bersama siswa.</div>
           </div>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             {/* Tombol sekunder (cadangan, riwayat, tema) diringkas jadi ikon saja supaya toolbar
                 tidak ramai — teksnya tetap muncul sebagai tooltip saat disentuh/hover. */}
             <div style={{ display: "flex", gap: 2, background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, borderRadius: 10, padding: 3 }}>
@@ -2168,8 +2215,10 @@ function TebakCariKataGame({ onBack, teacher }) {
           <div style={{ fontSize: 12.5, color: t.faint, marginBottom: 12 }}>{babak.sub} · {babak.point} poin / soal · {babak.words.length} kosakata</div>
 
           {/* Label kolom cukup ditulis SEKALI di sini. Sebelumnya tiap baris mengulang
-              "KATA / PETUNJUK / AUDIO" — 12 kata = 36 label, bikin halaman terasa penuh. */}
-          {babak.words.length > 0 && (
+              "KATA / PETUNJUK / AUDIO" — 12 kata = 36 label, bikin halaman terasa penuh.
+              Disembunyikan di HP karena lebar kolom tetapnya (>500px total) pasti overflow
+              di layar sempit, dan sudah tergantikan oleh placeholder tiap input. */}
+          {!isMobile && babak.words.length > 0 && (
             <div style={{ display: "flex", gap: 12, alignItems: "center", padding: "0 14px 8px", ...fieldLabelStyle }}>
               <span style={{ width: 24, flexShrink: 0 }} />
               <span style={{ width: 160, flexShrink: 0 }}>Kata (jawaban)</span>
@@ -2285,7 +2334,7 @@ function TebakCariKataGame({ onBack, teacher }) {
           <button onClick={openSaveNamePrompt} title="Simpan progres & jeda, lanjutkan nanti" style={{ display: "flex", alignItems: "center", gap: 6, background: t.bg, border: "1px solid #F4B740", color: "#F4B740", padding: "10px 12px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>💾</span> Simpan & Jeda</button>
         </div>
 
-        <div style={{ maxWidth: controlsOpen ? "calc(100% - 356px)" : 900, margin: "0 auto", padding: "28px 28px 100px", boxSizing: "border-box", transition: "max-width .2s ease" }}>
+        <div style={{ maxWidth: isMobile ? "100%" : (controlsOpen ? "calc(100% - 356px)" : 900), margin: "0 auto", padding: "28px 28px 100px", boxSizing: "border-box", transition: "max-width .2s ease" }}>
           <div className="sgt" style={{ fontSize: 24, fontWeight: 700, textAlign: "center", marginBottom: 16 }}>Word Search — {babak.label}</div>
           <div style={{ marginBottom: 18 }}><BuzzIndicator big /></div>
           {mode === "digital" && buzzOrder.length > 1 && (
@@ -2304,7 +2353,7 @@ function TebakCariKataGame({ onBack, teacher }) {
 
         <button onClick={() => setControlsOpen((o) => !o)} style={{ position: "fixed", bottom: 16, right: 16, display: "flex", alignItems: "center", gap: 6, background: "#F4B740", color: "#101B34", border: "none", borderRadius: 10, padding: "10px 14px", cursor: "pointer", zIndex: 30, fontWeight: 700, fontSize: 13, boxShadow: "0 4px 16px rgba(0,0,0,.25)" }}><span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>⚙</span> {controlsOpen ? "Sembunyikan Panel" : "Panel Guru"}</button>
         {controlsOpen && (
-          <div style={{ position: "fixed", top: 0, right: 0, bottom: 0, width: 336, padding: "16px 16px 76px", overflowY: "auto", background: t.modalBg, boxShadow: "-8px 0 30px rgba(0,0,0,.3)", zIndex: 25, boxSizing: "border-box" }}>
+          <div style={{ position: "fixed", top: 0, right: 0, bottom: 0, left: isMobile ? 0 : "auto", width: isMobile ? "auto" : 336, padding: "16px 16px 76px", overflowY: "auto", background: t.modalBg, boxShadow: "-8px 0 30px rgba(0,0,0,.3)", zIndex: 25, boxSizing: "border-box" }}>
             <div style={{ fontSize: 12, color: t.faint, marginBottom: 10, textAlign: "center" }}>Panel ini hanya guru yang lihat</div>
             <ControlPanel />
           </div>
@@ -2315,7 +2364,7 @@ function TebakCariKataGame({ onBack, teacher }) {
 
   /* ---------------- STAGE: PLAY — Control view ---------------- */
   return (
-    <div style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: t.bg, color: t.text, minHeight: "100vh", padding: 28, boxSizing: "border-box" }}>
+    <div className="app-screen" style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: t.bg, color: t.text, minHeight: "100vh", padding: 28, boxSizing: "border-box" }}>
       <style>{fontImport}</style>
       <audio ref={audioRef} style={{ display: "none" }} />
       {phonePreview && <PhonePreview />}
@@ -2325,7 +2374,7 @@ function TebakCariKataGame({ onBack, teacher }) {
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 16, marginBottom: 14 }}>
         <div>
-          <div className="sgt" style={{ fontSize: 30, fontWeight: 700, letterSpacing: -0.5 }}>Word Search</div>
+          <div className="sgt page-title" style={{ fontSize: 30, fontWeight: 700, letterSpacing: -0.5 }}>Word Search</div>
           <div style={{ fontSize: 14, color: t.dim, marginTop: 2 }}>{babak.label} · {babak.sub} · {babak.point} poin / soal</div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
@@ -2556,14 +2605,14 @@ function BukaKotakGame({ onBack }) {
 
   if (stage === "setup") {
     return (
-      <div style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: t.bg, color: t.text, minHeight: "100vh", padding: 28, boxSizing: "border-box" }}>
+      <div className="app-screen" style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: t.bg, color: t.text, minHeight: "100vh", padding: 28, boxSizing: "border-box" }}>
         <style>{fontImport}</style>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 22, flexWrap: "wrap", gap: 12 }}>
           <div>
-            <div className="sgt" style={{ fontSize: 28, fontWeight: 700 }}>Persiapan — Mystery Box</div>
+            <div className="sgt page-title" style={{ fontSize: 28, fontWeight: 700 }}>Persiapan — Mystery Box</div>
             <div style={{ fontSize: 14, color: t.dim, marginTop: 2 }}>Susun daftar perintah sebelum dimainkan. Individu, tanpa waktu, tanpa skor.</div>
           </div>
-          <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button onClick={exportBackup} title="Unduh cadangan ke file .json" style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>💾</span> Cadangkan</button>
             <label title="Muat cadangan dari file .json" style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}>
               <span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>📂</span> Muat Cadangan
@@ -2619,7 +2668,7 @@ function BukaKotakGame({ onBack }) {
   const openedCount = Object.keys(opened).length;
 
   return (
-    <div style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: t.bg, color: t.text, minHeight: "100vh", padding: 28, boxSizing: "border-box", position: "relative" }}>
+    <div className="app-screen" style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: t.bg, color: t.text, minHeight: "100vh", padding: 28, boxSizing: "border-box", position: "relative" }}>
       <style>{fontImport}</style>
 
       {activeBox && (
@@ -2633,10 +2682,10 @@ function BukaKotakGame({ onBack }) {
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 16, marginBottom: 22 }}>
         <div>
-          <div className="sgt" style={{ fontSize: 30, fontWeight: 700, letterSpacing: -0.5 }}>Mystery Box</div>
+          <div className="sgt page-title" style={{ fontSize: 30, fontWeight: 700, letterSpacing: -0.5 }}>Mystery Box</div>
           <div style={{ fontSize: 14, color: t.dim, marginTop: 2 }}>{selectedMateri} · {openedCount}/{items.length} kotak sudah dibuka · individu, tanpa skor</div>
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button onClick={() => setStage("setup")} style={{ background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}>← Persiapan</button>
           <button onClick={resetBoard} style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: "10px 12px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>🔄</span> Reset papan</button>
           <button onClick={endGame} style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: "1px solid #EF5B5B", color: "#EF5B5B", padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>⏹</span> Akhiri Permainan</button>
@@ -2898,14 +2947,14 @@ function CocokkanKartuGame({ onBack }) {
   if (stage === "setup") {
     const fieldLabelStyle = { fontSize: 10.5, color: t.faint, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.4 };
     return (
-      <div style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: t.bg, color: t.text, minHeight: "100vh", padding: 28, boxSizing: "border-box" }}>
+      <div className="app-screen" style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: t.bg, color: t.text, minHeight: "100vh", padding: 28, boxSizing: "border-box" }}>
         <style>{fontImport}</style>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 26, flexWrap: "wrap", gap: 12 }}>
           <div>
-            <div className="sgt" style={{ fontSize: 28, fontWeight: 700 }}>Persiapan — Card Rush</div>
+            <div className="sgt page-title" style={{ fontSize: 28, fontWeight: 700 }}>Persiapan — Card Rush</div>
             {!isMobile && <div style={{ fontSize: 14, color: t.dim, marginTop: 2 }}>Kartu gambar dipasangkan dengan kata (romaji/hiragana). Minimal 10 pasang per babak.</div>}
           </div>
-          <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button onClick={exportBackup} title="Unduh cadangan ke file .json" style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>💾</span> Cadangkan</button>
             <label title="Muat cadangan dari file .json" style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}>
               <span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>📂</span> Muat Cadangan
@@ -2982,13 +3031,13 @@ function CocokkanKartuGame({ onBack }) {
   const totalGroups = Object.keys(joinedGroups).length;
 
   return (
-    <div style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: t.bg, color: t.text, minHeight: "100vh", padding: 28, boxSizing: "border-box" }}>
+    <div className="app-screen" style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: t.bg, color: t.text, minHeight: "100vh", padding: 28, boxSizing: "border-box" }}>
       <style>{fontImport}</style>
       <QrJoinModal open={qrOpen} onClose={() => setQrOpen(false)} roomCode={roomCode} joinedCount={totalGroups} />
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 16, marginBottom: 20 }}>
         <div>
-          <div className="sgt" style={{ fontSize: 26, fontWeight: 700 }}>Card Rush — {babak.label}</div>
+          <div className="sgt page-title" style={{ fontSize: 26, fontWeight: 700 }}>Card Rush — {babak.label}</div>
           <div style={{ fontSize: 13, color: t.dim, marginTop: 2 }}>Kode Room: <b>{roomCode}</b> · {totalGroups} kelompok sudah join</div>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
