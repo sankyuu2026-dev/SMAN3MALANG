@@ -581,15 +581,18 @@ function makeRoomCode() {
 // "100vh", ternyata di beberapa browser HP (terutama webview dalam-aplikasi seperti WhatsApp)
 // "100vh" TIDAK sama dengan tinggi layar yang benar-benar terlihat — jadi papan kartu dihitung
 // terlalu tinggi dan malah perlu di-scroll / kartunya jadi memanjang tidak proporsional.
-// window.visualViewport.height jauh lebih akurat karena memang dirancang untuk melaporkan
-// tinggi area yang BENAR-BENAR terlihat saat ini (memperhitungkan address bar, dsb).
-function useViewportHeight() {
-  const [h, setH] = useState(() => {
-    if (typeof window === "undefined") return 800;
-    return window.visualViewport ? window.visualViewport.height : window.innerHeight;
-  });
+// window.visualViewport jauh lebih akurat karena memang dirancang untuk melaporkan ukuran area
+// yang BENAR-BENAR terlihat saat ini (memperhitungkan address bar, dsb). Dipakai untuk lebar
+// JUGA (bukan cuma tinggi) supaya kartu bisa dibuat persegi (1:1) dan tetap pasti muat 1 layar.
+function useViewportSize() {
+  const getSize = () => {
+    if (typeof window === "undefined") return { w: 400, h: 800 };
+    if (window.visualViewport) return { w: window.visualViewport.width, h: window.visualViewport.height };
+    return { w: window.innerWidth, h: window.innerHeight };
+  };
+  const [size, setSize] = useState(getSize);
   useEffect(() => {
-    function update() { setH(window.visualViewport ? window.visualViewport.height : window.innerHeight); }
+    function update() { setSize(getSize()); }
     update();
     window.addEventListener("resize", update);
     window.addEventListener("orientationchange", update);
@@ -600,7 +603,7 @@ function useViewportHeight() {
       if (window.visualViewport) window.visualViewport.removeEventListener("resize", update);
     };
   }, []);
-  return h;
+  return size;
 }
 // Peluang tabrakan kode 5 karakter memang sangat kecil (~1 banding 33 juta), tapi tetap dicek
 // ke Firestore sebelum room dipakai, supaya dua kelas yang kebetulan dapat kode sama tidak
@@ -1066,7 +1069,7 @@ function CardsPlayArea({ roomCode, room, myGroup }) {
   const [confetti, setConfetti] = useState(null);
   const appliedRoundRef = useRef(null);
   const startAtRef = useRef(null);
-  const viewportH = useViewportHeight();
+  const { w: viewportW, h: viewportH } = useViewportSize();
   const headerRef = useRef(null);
   const [headerH, setHeaderH] = useState(60);
   useEffect(() => {
@@ -1239,7 +1242,7 @@ function CardsPlayArea({ roomCode, room, myGroup }) {
         background: isImage ? "#FFFFFF" : c.matched ? "#DFF6F1" : isSelected ? "#FFF6E0" : "#FFFFFF",
       }}>
         {isImage ? (
-          <img src={c.content} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+          <img src={c.content} alt="" style={{ width: "100%", height: "100%", objectFit: "contain", display: "block", background: "#FFFFFF" }} />
         ) : (
           <div className="sgt" style={{ fontSize: 13, fontWeight: 700, color: c.matched ? "#3FBFAD" : "#1E2233", textAlign: "center", wordBreak: "break-word", lineHeight: 1.25 }}>{c.content}</div>
         )}
@@ -1254,13 +1257,22 @@ function CardsPlayArea({ roomCode, room, myGroup }) {
   const gridRows = Math.ceil(cards.length / gridCols);
   const PAD = 16;
   const GAP_BELOW_HEADER = 8;
-  // FIX: percobaan sebelumnya pakai CSS "100vh" + "height:100%" ternyata TIDAK diukur dengan
-  // benar di sebagian browser HP (khususnya webview dalam-aplikasi) — hasilnya papan malah lebih
-  // tinggi dari layar yang benar-benar terlihat, jadi tetap perlu di-scroll dan barisnya jadi
-  // memanjang tidak proporsional (gambar kepotong kiri-kanan). Sekarang tinggi grid dihitung
-  // manual dari angka JS asli (viewportH & headerH yang benar-benar terukur), lalu dipasang
-  // sebagai piksel EXPLISIT — jadi tidak bergantung sama sekali ke cara browser menghitung vh/%.
+  const GAP = 8;
+  // FIX: papan kartu diisi PENUH ke seluruh lebar & tinggi bikin kotaknya jadi persegi panjang
+  // kurus (jumlah kolom & baris jarang sama besar, apalagi di layar HP yang portrait/tinggi).
+  // Gambarnya sendiri sengaja diformat persegi, jadi kotaknya juga HARUS tetap persegi (1:1).
+  // Caranya: hitung ukuran satu kotak dari sisi yang lebih SEMPIT — sisa lebar layar dibagi
+  // jumlah kolom, ATAU sisa tinggi layar dibagi jumlah baris, mana yang lebih kecil itu yang
+  // dipakai. Sisa ruang di sisi yang "kelebihan" dibiarkan kosong & kontennya ditengahkan —
+  // dijamin tetap persegi DAN tetap pasti muat 1 layar tanpa scroll.
   const gridAreaHeight = Math.max(220, viewportH - headerH - PAD * 2 - GAP_BELOW_HEADER);
+  const availableW = Math.min(520, viewportW - PAD * 2);
+  const cellSize = Math.floor(Math.min(
+    (availableW - (gridCols - 1) * GAP) / gridCols,
+    (gridAreaHeight - (gridRows - 1) * GAP) / gridRows
+  ));
+  const gridPixelW = cellSize * gridCols + (gridCols - 1) * GAP;
+  const gridPixelH = cellSize * gridRows + (gridRows - 1) * GAP;
 
   return (
     <div style={{ ...wrap, height: viewportH, minHeight: viewportH, display: "flex", flexDirection: "column", overflow: "hidden", padding: PAD, boxSizing: "border-box" }}>
@@ -1270,10 +1282,10 @@ function CardsPlayArea({ roomCode, room, myGroup }) {
         <div style={{ fontSize: 12, color: t.dim, textAlign: "center", fontWeight: 600 }}>{matchedCount}/{totalPairs} pasangan ketemu</div>
         <div style={{ fontSize: 11, color: t.faint, textAlign: "center" }}>Ketuk satu gambar lalu satu kata yang cocok</div>
       </div>
-      <div style={{ display: "flex", justifyContent: "center" }}>
+      <div style={{ height: gridAreaHeight, display: "flex", alignItems: "center", justifyContent: "center" }}>
         <div style={{
-          display: "grid", gridTemplateColumns: `repeat(${gridCols}, 1fr)`, gridTemplateRows: `repeat(${gridRows}, 1fr)`,
-          gap: 8, width: "100%", maxWidth: 520, height: gridAreaHeight, boxSizing: "border-box",
+          display: "grid", gridTemplateColumns: `repeat(${gridCols}, ${cellSize}px)`, gridTemplateRows: `repeat(${gridRows}, ${cellSize}px)`,
+          gap: GAP, width: gridPixelW, height: gridPixelH, boxSizing: "border-box",
         }}>
           {cards.map((c) => <CardTile key={c.key} c={c} />)}
         </div>
@@ -2784,7 +2796,7 @@ function BukaKotakGame({ onBack }) {
    Kartu gambar dipasangkan dengan kata (romaji/hiragana). Tiap
    kelompok balapan di papannya sendiri-sendiri (isi pasangan
    SAMA, susunan acak beda per HP). Kelompok tercepat dapat
-   poin terbanyak; babaknya bisa berapa pun, minimal 10
+   poin terbanyak; babaknya bisa berapa pun, minimal 5
    pasangan per babak.
 =========================================================== */
 function makeBabak(n) { return { id: uid(), label: `Babak ${n}`, pairs: [] }; }
@@ -2886,7 +2898,7 @@ function CocokkanKartuGame({ onBack }) {
   }
 
   function validPairs(b) { return b.pairs.filter((p) => p.word.trim() && p.image); }
-  const canStart = babaks.length > 0 && babaks.every((b) => validPairs(b).length >= 10);
+  const canStart = babaks.length > 0 && babaks.every((b) => validPairs(b).length >= 5);
 
   async function startSession() {
     // Sama seperti Word Search: pastikan roomCode belum dipakai kelas lain sebelum dipakai QR join.
@@ -3006,7 +3018,7 @@ function CocokkanKartuGame({ onBack }) {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 26, flexWrap: "wrap", gap: 12 }}>
           <div>
             <div className="sgt page-title" style={{ fontSize: 28, fontWeight: 700 }}>Persiapan — Card Rush</div>
-            {!isMobile && <div style={{ fontSize: 14, color: t.dim, marginTop: 2 }}>Kartu gambar dipasangkan dengan kata (romaji/hiragana). Minimal 10 pasang per babak.</div>}
+            {!isMobile && <div style={{ fontSize: 14, color: t.dim, marginTop: 2 }}>Kartu gambar dipasangkan dengan kata (romaji/hiragana). Minimal 5 pasang per babak.</div>}
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button onClick={exportBackup} title="Unduh cadangan ke file .json" style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>💾</span> Cadangkan</button>
@@ -3037,8 +3049,8 @@ function CocokkanKartuGame({ onBack }) {
           </div>
 
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: 12 }}>
-            <div style={{ fontSize: 12.5, color: validPairs(babak).length >= 10 ? "#3FBFAD" : t.faint, fontWeight: 600 }}>
-              {validPairs(babak).length} / {babak.pairs.length} pasangan siap{!isMobile ? " (minimal 10 pasangan lengkap kata + gambar)" : ""}
+            <div style={{ fontSize: 12.5, color: validPairs(babak).length >= 5 ? "#3FBFAD" : t.faint, fontWeight: 600 }}>
+              {validPairs(babak).length} / {babak.pairs.length} pasangan siap{!isMobile ? " (minimal 5 pasangan lengkap kata + gambar)" : ""}
             </div>
             <button onClick={() => setBulkAddOpen(true)} style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: `1px dashed ${t.border}`, color: t.dim, borderRadius: 8, padding: "8px 14px", cursor: "pointer", fontSize: 13 }}>📋 Tambah Banyak Sekaligus</button>
           </div>
@@ -3077,7 +3089,7 @@ function CocokkanKartuGame({ onBack }) {
           display: "flex", alignItems: "center", gap: 8, background: canStart ? "#F4B740" : t.panel2, color: canStart ? "#101B34" : t.faint,
           border: "none", borderRadius: 12, padding: "14px 22px", fontWeight: 700, fontSize: 15, cursor: canStart ? "pointer" : "default",
         }}>Mulai Permainan ➡</button>
-        {!canStart && !isMobile && <div style={{ marginTop: 8, fontSize: 12.5, color: t.faint }}>Setiap babak butuh minimal 10 pasangan lengkap (kata + gambar) sebelum bisa dimulai.</div>}
+        {!canStart && !isMobile && <div style={{ marginTop: 8, fontSize: 12.5, color: t.faint }}>Setiap babak butuh minimal 5 pasangan lengkap (kata + gambar) sebelum bisa dimulai.</div>}
       </div>
     );
   }
