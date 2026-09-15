@@ -2691,9 +2691,18 @@ function TebakCariKataGame({ onBack, teacher }) {
                             <>
                               <div style={{ background: t.panel2, borderRadius: 12, padding: 10, boxSizing: "border-box" }}>
                                 <svg viewBox={`0 0 ${puzzlePreview.size} ${puzzlePreview.size}`} style={{ width: "100%", height: "auto", display: "block" }}>
+                                  {/* Kotak per-sel bergaris (seperti papan Educaplay) — sebelumnya huruf
+                                      cuma duduk di panel polos tanpa kotak. Digambar sebagai <rect> di
+                                      lapisan PALING BAWAH (di bawah garis kunci jawaban & huruf) supaya
+                                      garis warna kunci jawaban tetap terlihat melintang mulus di atas kotak,
+                                      persis seperti contoh Educaplay. */}
+                                  {puzzlePreview.grid.map((row, r) => row.map((letter, c) => (
+                                    <rect key={`box-${cellKey(r, c)}`} x={c} y={r} width={1} height={1}
+                                      fill={t.panel} stroke={t.border} strokeWidth={0.03} />
+                                  )))}
                                   {answerKeySegments.map((seg) => (
                                     <line key={seg.id} x1={seg.x1} y1={seg.y1} x2={seg.x2} y2={seg.y2}
-                                      stroke={seg.color} strokeWidth={0.62} strokeLinecap="round" opacity={0.55} />
+                                      stroke={seg.color} strokeWidth={0.72} strokeLinecap="round" opacity={0.5} />
                                   ))}
                                   {puzzlePreview.grid.map((row, r) => row.map((letter, c) => (
                                     <text key={cellKey(r, c)} x={c + 0.5} y={r + 0.5} textAnchor="middle" dominantBaseline="central"
