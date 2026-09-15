@@ -1462,6 +1462,7 @@ function TebakCariKataGame({ onBack, teacher }) {
   const isMobile = useIsMobile();
 
   const [stage, setStage] = useState("setup"); // 'setup' | 'play'
+  const [showBackConfirm, setShowBackConfirm] = useState(false); // dialog konfirmasi kembali ke persiapan
   const [selectedMateri, setSelectedMateri] = useState("Gakkou no Seikatsu");
   const [dataByMateri, setDataByMateri] = useState(initialDataByMateri);
   const [loaded, setLoaded] = useState(false);
@@ -2501,6 +2502,43 @@ function TebakCariKataGame({ onBack, teacher }) {
 
 
 
+  /* ---------------- Modal: Konfirmasi Kembali ke Persiapan ---------------- */
+  function BackConfirmModal() {
+    return (
+      <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+        <div style={{ background: t.panel, borderRadius: 18, padding: "28px 24px", maxWidth: 380, width: "100%", boxShadow: "0 8px 40px rgba(0,0,0,0.25)" }}>
+          <div style={{ fontSize: 32, marginBottom: 12, textAlign: "center" }}>⚠️</div>
+          <div className="sgt" style={{ fontSize: 18, fontWeight: 800, color: t.text, marginBottom: 8, textAlign: "center" }}>Kembali ke Persiapan?</div>
+          <div style={{ fontSize: 13.5, color: t.dim, lineHeight: 1.7, marginBottom: 22, textAlign: "center" }}>
+            Permainan sedang berlangsung. Pilih salah satu tindakan sebelum keluar:
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <button onClick={() => { openSaveNamePrompt(); setShowBackConfirm(false); }}
+              style={{ display: "flex", alignItems: "center", gap: 10, background: "#F4B740", color: "#101B34", border: "none", borderRadius: 12, padding: "13px 18px", fontWeight: 700, fontSize: 14, cursor: "pointer", width: "100%" }}>
+              <span style={{ fontSize: 18 }}>💾</span>
+              <div style={{ textAlign: "left" }}>
+                <div>Simpan & Jeda</div>
+                <div style={{ fontSize: 11.5, fontWeight: 400, opacity: 0.75 }}>Progres tersimpan, bisa dilanjutkan nanti</div>
+              </div>
+            </button>
+            <button onClick={() => { endGame(); setShowBackConfirm(false); }}
+              style={{ display: "flex", alignItems: "center", gap: 10, background: "transparent", color: "#EF5B5B", border: "1.5px solid #EF5B5B", borderRadius: 12, padding: "13px 18px", fontWeight: 700, fontSize: 14, cursor: "pointer", width: "100%" }}>
+              <span style={{ fontSize: 18 }}>⏹</span>
+              <div style={{ textAlign: "left" }}>
+                <div>Akhiri Permainan</div>
+                <div style={{ fontSize: 11.5, fontWeight: 400, opacity: 0.75 }}>Skor tidak tersimpan, kembali ke persiapan</div>
+              </div>
+            </button>
+            <button onClick={() => setShowBackConfirm(false)}
+              style={{ background: "transparent", color: t.dim, border: `1px solid ${t.border}`, borderRadius: 12, padding: "11px 18px", fontWeight: 600, fontSize: 13.5, cursor: "pointer", width: "100%" }}>
+              Lanjutkan Permainan
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   /* ---------------- Modal: Simpan & Jeda (nama kelas) ---------------- */
   const SaveNameModal = () => (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 70 }} onClick={() => !savingSession && setSaveNameOpen(false)}>
@@ -2576,38 +2614,41 @@ function TebakCariKataGame({ onBack, teacher }) {
         <style>{fontImport}</style>
         {historyOpen && <HistoryModal />}
 
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 26, flexWrap: "wrap", gap: 12 }}>
+        {/* HEADER — judul kiri, aksi kanan */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 28, flexWrap: "wrap", gap: 12 }}>
           <div>
-            <div className="sgt page-title" style={{ fontSize: 28, fontWeight: 700 }}>Persiapan Permainan</div>
-            <div style={{ fontSize: 14, color: t.dim, marginTop: 2 }}>Susun materi & kosakata sebelum mulai bermain bersama siswa.</div>
+            <div className="sgt page-title" style={{ fontSize: 32, fontWeight: 800, letterSpacing: -0.5 }}>Persiapan Permainan</div>
+            <div style={{ fontSize: 13.5, color: t.dim, marginTop: 3 }}>Susun materi &amp; kosakata sebelum mulai bermain bersama siswa.</div>
           </div>
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-            {/* Tombol sekunder (cadangan, riwayat, tema) diringkas jadi ikon saja supaya toolbar
-                tidak ramai — teksnya tetap muncul sebagai tooltip saat disentuh/hover. */}
+            {/* Ikon utilitas */}
             <div style={{ display: "flex", gap: 2, background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, borderRadius: 10, padding: 3 }}>
               <button onClick={() => setHistoryOpen(true)} title="Riwayat sesi tersimpan" style={iconBtn}>
-                <span style={{ fontSize: 15, lineHeight: 1 }}>📜</span>
+                <span style={{ fontSize: 16, lineHeight: 1 }}>📜</span>
                 {historyList.length > 0 && <span style={{ position: "absolute", top: 1, right: 1, background: "#EF5B5B", color: "#fff", borderRadius: "50%", width: 15, height: 15, fontSize: 9, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>{historyList.length}</span>}
               </button>
-              <button onClick={exportBackup} title="Cadangkan semua materi & kosakata ke file .json" style={iconBtn}><span style={{ fontSize: 15, lineHeight: 1 }}>💾</span></button>
+              <button onClick={exportBackup} title="Cadangkan ke file .json" style={iconBtn}><span style={{ fontSize: 16, lineHeight: 1 }}>💾</span></button>
               <label title="Muat cadangan dari file .json" style={{ ...iconBtn, cursor: "pointer" }}>
-                <span style={{ fontSize: 15, lineHeight: 1 }}>📂</span>
+                <span style={{ fontSize: 16, lineHeight: 1 }}>📂</span>
                 <input type="file" accept="application/json,.json" onChange={(e) => { importBackup(e.target.files[0]); e.target.value = ""; }} style={{ display: "none" }} />
               </label>
               <ThemeToggleButton theme={theme} onToggle={() => setTheme(theme === "dark" ? "light" : "dark")} title="Ganti tema terang/gelap" style={iconBtn} />
             </div>
-            <button onClick={onBack} style={{ background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}>← Pilih Game</button>
+            {/* Tombol Pilih Game — lebih menonjol */}
+            <button onClick={onBack} style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: `1.5px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: "10px 18px", borderRadius: 10, cursor: "pointer", fontSize: 14, fontWeight: 600 }}>
+              <span style={{ fontSize: 15 }}>←</span> Pilih Game
+            </button>
           </div>
         </div>
 
         <StorageWarningBanner t={t} message={storageWarning} />
         <ImportMessageBanner t={t} msg={importMsg} onDismiss={() => setImportMsg(null)} />
 
-        <div style={{ background: t.panel, borderRadius: 16, padding: "18px 20px", marginBottom: 20, boxShadow: t.shadowSm }}>
+        <div style={{ background: t.panel, borderRadius: 18, padding: "22px 24px", marginBottom: 20, boxShadow: t.shadowSm }}>
           <SectionLabel n={1} faint={t.faint} hint={
             <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-              <span style={{ fontWeight: 700, color: "#D98A2B", background: "rgba(244,183,64,.16)", padding: "2px 8px", borderRadius: 999, fontSize: 10.5 }}>9 Materi</span>
-              (sesuai Prota Bahasa Jepang kelas XI Fase F)
+              <span style={{ fontWeight: 700, color: "#D98A2B", background: "rgba(244,183,64,.16)", padding: "2px 9px", borderRadius: 999, fontSize: 11 }}>9 Materi</span>
+              <span style={{ color: t.dim, fontSize: 13 }}>(sesuai Prota Bahasa Jepang kelas XI Fase F)</span>
             </span>
           }>Pilih materi</SectionLabel>
           {/* Dulu tiap materi berupa chip pil satu baris (cuma teks, deskripsi di tooltip).
@@ -2618,7 +2659,7 @@ function TebakCariKataGame({ onBack, teacher }) {
             onSelect={(name) => { setSelectedMateri(name); setDataByMateri((prev) => ensureMateri(prev, name)); setBabakId(1); setBabakPanelOpen(true); }} />
         </div>
 
-        <div style={{ background: t.panel, borderRadius: 16, padding: "18px 20px", marginBottom: 20, boxShadow: t.shadowSm }}>
+        <div style={{ background: t.panel, borderRadius: 18, padding: "22px 24px", marginBottom: 20, boxShadow: t.shadowSm }}>
           <SectionLabel n={2} hint="— edit, hapus, tambah, unggah audio" faint={t.faint}>Kosakata per babak</SectionLabel>
           {/* FIX (UX, seperti Educaplay): dulu Babak 1/2/3 berupa tab yang saling menggantikan
               konten di tempat yang sama, jadi tidak kelihatan sekilas berapa kosakata sudah
@@ -2634,14 +2675,14 @@ function TebakCariKataGame({ onBack, teacher }) {
               const meta = SEED_BABAK[id];
               const wordsForId = dataByMateri[selectedMateri]?.[id] || [];
               return (
-                <div key={id} style={{ border: `1px solid ${isOpen ? "#F4B740" : t.border}`, borderRadius: 12, overflow: "hidden", background: t.panel2, transition: "border-color .15s ease" }}>
+                <div key={id} style={{ border: `1.5px solid ${isOpen ? "#F4B740" : t.border}`, borderRadius: 14, overflow: "hidden", background: t.panel2, transition: "border-color .2s ease", boxShadow: isOpen ? "0 2px 12px rgba(244,183,64,0.15)" : t.shadowSm }}>
                   <button
                     onClick={() => {
                       if (babakId === id && babakPanelOpen) setBabakPanelOpen(false);
                       else { setBabakId(id); setBabakPanelOpen(true); }
                     }}
                     className="babak-acc-header"
-                    style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "14px 16px", background: "transparent", border: "none", cursor: "pointer", textAlign: "left" }}>
+                    style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "16px 20px", background: "transparent", border: "none", cursor: "pointer", textAlign: "left" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
                       <div style={{ width: 28, height: 28, borderRadius: "50%", background: isOpen ? "#F4B740" : t.panel, border: isOpen ? "none" : `1px solid ${t.border}`, color: isOpen ? "#101B34" : t.dim, fontWeight: 700, fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{id}</div>
                       <div style={{ minWidth: 0 }}>
@@ -2782,11 +2823,23 @@ function TebakCariKataGame({ onBack, teacher }) {
         </div>
 
 
-        <button onClick={startGame} disabled={!canStart} style={{
-          display: "flex", alignItems: "center", gap: 8, background: canStart ? "#F4B740" : t.panel2, color: canStart ? "#101B34" : t.faint,
-          border: "none", borderRadius: 12, padding: "14px 22px", fontWeight: 700, fontSize: 15, cursor: canStart ? "pointer" : "default",
-        }}>Mulai Permainan <span style={{ fontSize: 17, lineHeight: 1, color: 'inherit' }}>➡</span></button>
-        {!canStart && <div style={{ marginTop: 8, fontSize: 12.5, color: t.faint }}>Isi minimal satu kosakata di Babak 1, 2, dan 3 untuk mulai.</div>}
+        {/* Tombol Mulai Permainan — sticky di bawah, full prominence */}
+        <div style={{ position: "sticky", bottom: 20, display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 6, marginTop: 8, zIndex: 10 }}>
+          <button onClick={startGame} disabled={!canStart} style={{
+            display: "flex", alignItems: "center", gap: 10,
+            background: canStart ? "#F4B740" : t.panel2,
+            color: canStart ? "#101B34" : t.faint,
+            border: "none", borderRadius: 14,
+            padding: "16px 28px",
+            fontWeight: 800, fontSize: 17,
+            cursor: canStart ? "pointer" : "default",
+            boxShadow: canStart ? "0 4px 18px rgba(244,183,64,0.45)" : "none",
+            transition: "box-shadow .2s, background .2s",
+          }}>
+            Mulai Permainan <span style={{ fontSize: 20, lineHeight: 1, color: "inherit" }}>➡</span>
+          </button>
+          {!canStart && <div style={{ fontSize: 12.5, color: t.faint }}>Isi minimal satu kosakata di Babak 1, 2, dan 3 untuk mulai.</div>}
+        </div>
       </div>
     );
   }
@@ -2833,6 +2886,7 @@ function TebakCariKataGame({ onBack, teacher }) {
           <style>{fontImport}</style>
           <audio ref={audioRef} style={{ display: "none" }} />
           {saveNameOpen && <SaveNameModal />}
+      {showBackConfirm && <BackConfirmModal />}
           <CelebrationOverlay particles={confetti} />
           {renderHintOverlay()}
           {topOverlayButtons}
@@ -2883,6 +2937,7 @@ function TebakCariKataGame({ onBack, teacher }) {
         <style>{fontImport}</style>
         <audio ref={audioRef} style={{ display: "none" }} />
         {saveNameOpen && <SaveNameModal />}
+      {showBackConfirm && <BackConfirmModal />}
         <CelebrationOverlay particles={confetti} />
         {renderHintOverlay()}
         {topOverlayButtons}
@@ -2920,90 +2975,95 @@ function TebakCariKataGame({ onBack, teacher }) {
     );
   }
 
-  /* ---------------- STAGE: PLAY — Control view ---------------- */
+  /* ---------------- STAGE: PLAY — Control view (satu layar penuh, tanpa scroll) ---------------- */
   return (
-    <div className="app-screen" style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: t.bg, color: t.text, minHeight: "100vh", padding: 28, boxSizing: "border-box" }}>
+    <div className="app-screen" style={{
+      fontFamily: "'Work Sans', system-ui, sans-serif",
+      background: t.bg, color: t.text,
+      height: "100vh", width: "100vw",
+      boxSizing: "border-box",
+      display: "flex", flexDirection: "column",
+      overflow: "hidden", padding: "12px 16px 10px",
+    }}>
       <style>{fontImport}</style>
       <audio ref={audioRef} style={{ display: "none" }} />
       {saveNameOpen && <SaveNameModal />}
+      {showBackConfirm && <BackConfirmModal />}
       <CelebrationOverlay particles={confetti} />
       {renderHintOverlay()}
       <QrJoinModal open={qrOpen} onClose={() => setQrOpen(false)} roomCode={roomCode} joinedCount={Object.keys(joinedGroups).length} />
 
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 16, marginBottom: 14 }}>
+      {/* BARIS 1: Judul + navigasi babak */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 8, flexShrink: 0 }}>
         <div>
-          <div className="sgt page-title" style={{ fontSize: 30, fontWeight: 700, letterSpacing: -0.5 }}>Word Search</div>
-          <div style={{ fontSize: 14, color: t.dim, marginTop: 2 }}>{babak.label} · {babak.sub} · {babak.point} poin / soal</div>
+          <div className="sgt page-title" style={{ fontSize: 22, fontWeight: 700, letterSpacing: -0.3 }}>Word Search</div>
+          <div style={{ fontSize: 12, color: t.dim }}>{babak.label} · {babak.sub} · {babak.point} poin / soal</div>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-          <button onClick={() => setStage("setup")} style={{ background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}>← Persiapan</button>
-          <div style={{ display: "flex", gap: 6, background: t.panel, padding: 4, borderRadius: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <button onClick={() => setShowBackConfirm(true)} style={{ background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: "7px 12px", borderRadius: 8, cursor: "pointer", fontSize: 12 }}>← Persiapan</button>
+          <div style={{ display: "flex", gap: 4, background: t.panel, padding: 3, borderRadius: 8 }}>
             {[1, 2, 3].map((id) => (
-              <button key={id} onClick={() => switchBabak(id)} style={{ padding: "8px 16px", borderRadius: 7, border: "none", cursor: "pointer", background: babakId === id ? "#F4B740" : "transparent", color: babakId === id ? "#101B34" : t.text, fontWeight: 600, fontSize: 14 }}>Babak {id}</button>
+              <button key={id} onClick={() => switchBabak(id)} style={{ padding: "6px 12px", borderRadius: 6, border: "none", cursor: "pointer", background: babakId === id ? "#F4B740" : "transparent", color: babakId === id ? "#101B34" : t.text, fontWeight: 600, fontSize: 13 }}>Babak {id}</button>
             ))}
           </div>
         </div>
       </div>
 
-      {/* FIX (UX): toolbar ini dulu berisi 6 tombol berjajar tanpa pengelompokan yang jelas
-          (info room, tampilan, & aksi sesi bercampur begitu saja), jadi terasa penuh & kurang
-          rapi. Sekarang dikelompokkan jadi 3 bagian dengan pemisah tipis: (1) info room & join
-          siswa, (2) opsi tampilan (tema & proyektor), (3) kontrol sesi (simpan/akhiri) yang
-          didorong ke kanan. Tombol "Papan baru" (resetRound di tengah sesi) juga dihilangkan —
-          papan sengaja dikunci sejak Persiapan (lihat shufflePuzzlePreview) supaya tidak berubah
-          waktu siswa sedang bermain, jadi tombol ini pada praktiknya jarang benar-benar mengacak
-          ulang papan (hanya mereset progres soal yang sudah ditemukan). Kalau memang perlu susunan
-          baru, itu harus dilakukan di Persiapan lewat "Acak Ulang Posisi" SEBELUM permainan
-          dimulai — bukan di tengah sesi. */}
-      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 22 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, background: t.panel, padding: "6px 8px", borderRadius: 10 }}>
-            <span style={{ fontSize: 16, lineHeight: 1, color: t.dim }}>🔳</span><span style={{ fontSize: 13, color: t.dim }}>Kode Room</span>
-            <span className="sgt" style={{ fontSize: 16, fontWeight: 700, letterSpacing: 2 }}>{roomCode}</span>
-          </div>
-          <button onClick={() => setQrOpen(true)} style={{ display: "flex", alignItems: "center", gap: 6, background: "#3FBFAD", border: "none", color: "#0D1730", padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>📷</span> QR Gabung</button>
+      {/* BARIS 2: Toolbar (kode room, proyektor, simpan, akhiri) — compact */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8, flexShrink: 0 }}>
+        {/* Kode Room & QR */}
+        <div style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, padding: "5px 8px", borderRadius: 8 }}>
+          <span style={{ fontSize: 14, lineHeight: 1, color: t.dim }}>🔳</span>
+          <span style={{ fontSize: 12, color: t.dim }}>Kode Room</span>
+          <span className="sgt" style={{ fontSize: 14, fontWeight: 700, letterSpacing: 2 }}>{roomCode}</span>
         </div>
+        <button onClick={() => setQrOpen(true)} style={{ display: "flex", alignItems: "center", gap: 5, background: "#3FBFAD", border: "none", color: "#0D1730", padding: "7px 11px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontWeight: 700 }}><span style={{ fontSize: 13, lineHeight: 1 }}>📷</span> QR Gabung</button>
 
-        <div style={{ width: 1, alignSelf: "stretch", background: t.panel2, margin: "0 2px" }} />
+        <div style={{ width: 1, alignSelf: "stretch", background: t.border, margin: "0 2px" }} />
 
-        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-          <ThemeToggleButton theme={theme} onToggle={() => setTheme(theme === "dark" ? "light" : "dark")} style={{ background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: 10, borderRadius: 10, cursor: "pointer" }} />
-          <button onClick={() => setProjectorMode(true)} style={{ display: "flex", alignItems: "center", gap: 6, background: "#F4B740", border: "none", color: "#101B34", padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>⤢</span> Mode Proyektor</button>
-          <button onClick={openProjectorDisplayWindow} title="Buka jendela baru berisi papan SAJA (tanpa panel guru) — pindahkan jendela ini ke layar proyektor kalau laptop disetel mode Extend Display, supaya panel guru benar-benar tidak terlihat siswa" style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 600 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>🖥️</span> Layar Proyektor (Jendela Terpisah)</button>
-        </div>
+        <ThemeToggleButton theme={theme} onToggle={() => setTheme(theme === "dark" ? "light" : "dark")} style={{ background: t.panel, border: `1px solid ${t.border}`, color: t.text, padding: 7, borderRadius: 8, cursor: "pointer" }} />
+        <button onClick={() => setProjectorMode(true)} style={{ display: "flex", alignItems: "center", gap: 5, background: "#F4B740", border: "none", color: "#101B34", padding: "7px 11px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontWeight: 700 }}><span style={{ fontSize: 13, lineHeight: 1 }}>⤢</span> Mode Proyektor</button>
+        <button onClick={openProjectorDisplayWindow} style={{ display: "flex", alignItems: "center", gap: 5, background: t.panel, border: `1px solid ${t.border}`, color: t.text, padding: "7px 11px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontWeight: 600 }}><span style={{ fontSize: 13, lineHeight: 1 }}>🖥️</span> Layar Proyektor</button>
 
         <div style={{ flex: "1 0 auto" }} />
 
-        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-          <button onClick={openSaveNamePrompt} title="Simpan progres & jeda, lanjutkan nanti (mis. pindah ke kelas lain)" style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: "1px solid #F4B740", color: "#F4B740", padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>💾</span> Simpan & Jeda</button>
-          <button onClick={endGame} style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: "1px solid #EF5B5B", color: "#EF5B5B", padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>⏹</span> Akhiri Permainan</button>
-        </div>
+        <button onClick={openSaveNamePrompt} style={{ display: "flex", alignItems: "center", gap: 5, background: "transparent", border: "1px solid #F4B740", color: "#F4B740", padding: "7px 11px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontWeight: 700 }}><span style={{ fontSize: 13, lineHeight: 1 }}>💾</span> Simpan & Jeda</button>
+        <button onClick={endGame} style={{ display: "flex", alignItems: "center", gap: 5, background: "transparent", border: "1px solid #EF5B5B", color: "#EF5B5B", padding: "7px 11px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontWeight: 700 }}><span style={{ fontSize: 13, lineHeight: 1 }}>⏹</span> Akhiri Permainan</button>
       </div>
 
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
-        <span style={{ fontSize: 13, color: t.dim }}>Mode angkat tangan:</span>
-        <div style={{ display: "flex", background: t.panel, borderRadius: 10, padding: 4 }}>
-          <button onClick={() => switchInputMode("digital")} style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 14px", borderRadius: 7, border: "none", cursor: "pointer", background: mode === "digital" ? "#3FBFAD" : "transparent", color: mode === "digital" ? "#0D1730" : t.text, fontWeight: 600, fontSize: 13 }}><span style={{ fontSize: 14, lineHeight: 1, color: 'inherit' }}>📻</span> Digital</button>
-          <button onClick={() => switchInputMode("manual")} style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 14px", borderRadius: 7, border: "none", cursor: "pointer", background: mode === "manual" ? "#3FBFAD" : "transparent", color: mode === "manual" ? "#0D1730" : t.text, fontWeight: 600, fontSize: 13 }}><span style={{ fontSize: 14, lineHeight: 1, color: 'inherit' }}>✋</span> Manual</button>
+      {/* BARIS 3: Mode angkat tangan — compact */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, flexShrink: 0 }}>
+        <span style={{ fontSize: 12, color: t.dim }}>Mode angkat tangan:</span>
+        <div style={{ display: "flex", background: t.panel, borderRadius: 8, padding: 3 }}>
+          <button onClick={() => switchInputMode("digital")} style={{ display: "flex", alignItems: "center", gap: 5, padding: "5px 11px", borderRadius: 6, border: "none", cursor: "pointer", background: mode === "digital" ? "#3FBFAD" : "transparent", color: mode === "digital" ? "#0D1730" : t.text, fontWeight: 600, fontSize: 12 }}><span style={{ fontSize: 13, lineHeight: 1 }}>📻</span> Digital</button>
+          <button onClick={() => switchInputMode("manual")} style={{ display: "flex", alignItems: "center", gap: 5, padding: "5px 11px", borderRadius: 6, border: "none", cursor: "pointer", background: mode === "manual" ? "#3FBFAD" : "transparent", color: mode === "manual" ? "#0D1730" : t.text, fontWeight: 600, fontSize: 12 }}><span style={{ fontSize: 13, lineHeight: 1 }}>✋</span> Manual</button>
         </div>
-        <span style={{ fontSize: 12.5, color: t.faint }}>{mode === "digital" ? "Kelompok pencet tombol duluan untuk mengunci giliran." : "Guru klik kelompok sesuai urutan angkat tangan di kelas — bisa klik beberapa kelompok berurutan sekaligus."}</span>
+        <span style={{ fontSize: 11.5, color: t.faint }}>{mode === "digital" ? "Kelompok pencet tombol duluan untuk mengunci giliran." : "Guru klik kelompok sesuai urutan angkat tangan."}</span>
       </div>
 
-      <div style={{ display: "flex", gap: 22, flexWrap: "wrap", alignItems: "flex-start" }}>
-        <div style={{ flex: "1 1 520px", position: "relative" }}>
-          {renderGrid()}
+      {/* BARIS 4: Konten utama — papan kiri + panel kontrol kanan, flex grow */}
+      <div style={{ display: "flex", gap: 16, flex: 1, minHeight: 0, alignItems: "stretch" }}>
+        {/* Papan puzzle — kiri, mengisi sisa tinggi layar */}
+        <div style={{ flex: "1 1 0", minWidth: 0, position: "relative", display: "flex", flexDirection: "column" }}>
+          <div style={{ flex: 1, minHeight: 0 }}>
+            {renderGrid()}
+          </div>
           {puzzle && !currentWord && (
             autoNext !== null ? (
-              <div style={{ marginTop: 16, display: "flex", alignItems: "center", gap: 12, background: t.panel, padding: "10px 14px", borderRadius: 10, flexWrap: "wrap" }}>
-                <span style={{ fontSize: 14, color: t.text }}>🎉 Babak {babakId} selesai! Lanjut ke Babak {babakId + 1} dalam <b>{autoNext}</b> detik…</span>
-                <button onClick={cancelAutoNext} style={{ background: t.panel2, border: "none", color: t.dim, borderRadius: 7, padding: "6px 12px", cursor: "pointer", fontSize: 12.5, fontWeight: 600 }}>Batalkan</button>
+              <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 10, background: t.panel, padding: "8px 12px", borderRadius: 10, flexWrap: "wrap", flexShrink: 0 }}>
+                <span style={{ fontSize: 13, color: t.text }}>🎉 Babak {babakId} selesai! Lanjut ke Babak {babakId + 1} dalam <b>{autoNext}</b> detik…</span>
+                <button onClick={cancelAutoNext} style={{ background: t.panel2, border: "none", color: t.dim, borderRadius: 7, padding: "5px 10px", cursor: "pointer", fontSize: 12, fontWeight: 600 }}>Batalkan</button>
               </div>
             ) : (
-              <div style={{ marginTop: 16, fontSize: 14, color: t.dim }}>Semua kosakata di babak ini sudah ditemukan. Ganti babak untuk melanjutkan.</div>
+              <div style={{ marginTop: 10, fontSize: 13, color: t.dim, flexShrink: 0 }}>Semua kosakata di babak ini sudah ditemukan. Ganti babak untuk melanjutkan.</div>
             )
           )}
         </div>
-        <div style={{ flex: "1 1 280px" }}>{renderControlPanel()}</div>
+
+        {/* Panel kontrol — kanan, scroll sendiri jika kontennya panjang */}
+        <div style={{ width: 320, flexShrink: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: 12 }}>
+          {renderControlPanel()}
+        </div>
       </div>
     </div>
   );
@@ -3245,7 +3305,7 @@ function BukaKotakGame({ onBack }) {
           <div style={{ fontSize: 14, color: t.dim, marginTop: 2 }}>{selectedMateri} · {openedCount}/{items.length} kotak sudah dibuka · individu, tanpa skor</div>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <button onClick={() => setStage("setup")} style={{ background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}>← Persiapan</button>
+          <button onClick={() => setShowBackConfirm(true)} style={{ background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}>← Persiapan</button>
           <button onClick={resetBoard} style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: "10px 12px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>🔄</span> Reset papan</button>
           <button onClick={endGame} style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: "1px solid #EF5B5B", color: "#EF5B5B", padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>⏹</span> Akhiri Permainan</button>
           <ThemeToggleButton theme={theme} onToggle={() => setTheme(theme === "dark" ? "light" : "dark")} style={{ background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: 10, borderRadius: 10, cursor: "pointer" }} />
