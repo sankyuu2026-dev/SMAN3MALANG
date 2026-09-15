@@ -2664,13 +2664,13 @@ function TebakCariKataGame({ onBack, teacher }) {
                           Sekarang jadi 2 kolom DI DALAM accordion tiap babak: papan di kiri,
                           daftar kosakata (jawabannya) di kanan — sesuai babak yang sedang dibuka,
                           jadi guru bisa lihat kosakata & hasilnya di papan tanpa scroll bolak-balik. */}
-                      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "minmax(300px, 420px) 1fr", gap: 20, alignItems: "start" }}>
-                        {/* Kolom kiri: papan kotak / kunci jawaban */}
-                        <div>
-                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+                        {/* Papan & kunci jawaban — di atas, center, seperti Educaplay */}
+                        <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", flexWrap: "wrap", gap: 8, marginBottom: 8, width: "100%" }}>
                             <div className="sgt" style={{ fontSize: 12.5, fontWeight: 700, color: t.dim, textTransform: "uppercase", letterSpacing: 0.4 }}>Papan &amp; kunci jawaban</div>
                           </div>
-                          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+                          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10, justifyContent: "center" }}>
                             <button onClick={() => setShowAnswerKey((s) => !s)} style={{ display: "flex", alignItems: "center", gap: 6, background: showAnswerKey ? "#F4B740" : t.panel, color: showAnswerKey ? "#101B34" : t.text, border: "none", borderRadius: 8, padding: "7px 12px", cursor: "pointer", fontSize: 12.5, fontWeight: 600 }}>
                               <span style={{ fontSize: 13, lineHeight: 1, color: "inherit" }}>{showAnswerKey ? "🙈" : "👁"}</span> {showAnswerKey ? "Sembunyikan Kunci" : "Tampilkan Kunci"}
                             </button>
@@ -2679,8 +2679,9 @@ function TebakCariKataGame({ onBack, teacher }) {
                             </button>
                           </div>
 
+                          <div style={{ width: "100%", maxWidth: 420, display: "flex", flexDirection: "column", alignItems: "center" }}>
                           {!puzzlePreview ? (
-                            <div style={{ padding: 20, color: t.dim, fontSize: 13, textAlign: "center", background: t.panel2, borderRadius: 12 }}>
+                            <div style={{ padding: 20, color: t.dim, fontSize: 13, textAlign: "center", background: t.panel2, borderRadius: 12, width: "100%" }}>
                               {/* FIX: puzzlePreviewEntry.puzzle === null berarti kosakata sudah diisi tapi grid
                                   gagal dibangun (bukan sekadar belum diisi) — beri pesan & solusi yang berbeda. */}
                               {puzzlePreviewEntry && puzzlePreviewEntry.signature === babakWordsSig && puzzlePreviewEntry.puzzle === null
@@ -2689,7 +2690,7 @@ function TebakCariKataGame({ onBack, teacher }) {
                             </div>
                           ) : (
                             <>
-                              <div style={{ background: t.panel2, borderRadius: 12, padding: 10, boxSizing: "border-box" }}>
+                              <div style={{ background: t.panel2, borderRadius: 12, padding: 10, boxSizing: "border-box", width: "100%", maxWidth: 420 }}>
                                 <svg viewBox={`0 0 ${puzzlePreview.size} ${puzzlePreview.size}`} style={{ width: "100%", height: "auto", display: "block" }}>
                                   {/* Kotak per-sel bergaris (seperti papan Educaplay) — sebelumnya huruf
                                       cuma duduk di panel polos tanpa kotak. Digambar sebagai <rect> di
@@ -2725,10 +2726,11 @@ function TebakCariKataGame({ onBack, teacher }) {
                               )}
                             </>
                           )}
-                        </div>
+                          </div>{/* end maxWidth center wrapper */}
+                        </div>{/* end papan section */}
 
-                        {/* Kolom kanan: daftar kosakata (kata, petunjuk, audio) */}
-                        <div>
+                        {/* Daftar kosakata — di bawah papan, full width */}
+                        <div style={{ width: "100%" }}>
                           {/* Label kolom cukup ditulis SEKALI di sini. Sebelumnya tiap baris mengulang
                               "KATA / PETUNJUK / AUDIO" — 12 kata = 36 label, bikin halaman terasa penuh.
                               Disembunyikan di HP karena lebar kolom tetapnya (>500px total) pasti overflow
