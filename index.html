@@ -1082,14 +1082,20 @@ function CardsPlayArea({ roomCode, room, myGroup }) {
       }
       return arr;
     }
-    const imgDeck = shuffle(pairs.map((p) => ({ key: p.id + "-img", pairId: p.id, kind: "image", content: p.image, matched: false })));
-    const wordDeck = shuffle(pairs.map((p) => ({ key: p.id + "-word", pairId: p.id, kind: "word", content: p.word, matched: false })));
-    const combined = [...imgDeck, ...wordDeck];
-    setCards(combined);
+    // FIX (desain): dulu kartu gambar & kartu kata diacak TERPISAH lalu ditaruh di 2 kolom
+    // sendiri-sendiri (gambar semua di kiri, kata semua di kanan) — jadi kelihatan kayak 2
+    // daftar, bukan satu papan tercampur seperti game mencocokkan gambar buah yang dicontohkan.
+    // Sekarang semua kartu (gambar + kata) digabung jadi SATU tumpukan lalu diacak BERSAMA,
+    // supaya posisinya benar-benar tersebar acak di satu papan grid, sama seperti contohnya.
+    const deck = shuffle(pairs.flatMap((p) => [
+      { key: p.id + "-img", pairId: p.id, kind: "image", content: p.image, matched: false },
+      { key: p.id + "-word", pairId: p.id, kind: "word", content: p.word, matched: false },
+    ]));
+    setCards(deck);
     setSelected(null);
     setFinishedSent(false);
     startAtRef.current = Date.now();
-    saveCardsProgress(roomCode, myGroup, { roundId, cards: combined, finishedSent: false, startAt: startAtRef.current });
+    saveCardsProgress(roomCode, myGroup, { roundId, cards: deck, finishedSent: false, startAt: startAtRef.current });
   }, [roundId, pairsLoaded, pairs, roomCode, myGroup]);
 
   // Simpan progres tiap kali ada perubahan (kartu cocok, atau sudah kirim sinyal selesai) supaya
@@ -1174,13 +1180,10 @@ function CardsPlayArea({ roomCode, room, myGroup }) {
     );
   }
 
-  const imageCards = cards.filter((c) => c.kind === "image");
-  const wordCards = cards.filter((c) => c.kind === "word");
-
-  // Kartu dipercantik: gambar jadi kartu foto dengan sudut membulat & bayangan lembut,
-  // kata jadi "pil" putih besar yang gampang dibaca. State-nya dibedakan lewat cincin warna
-  // di tepi (kuning = dipilih, merah = baru terbukti salah) dan efek redup + centang hijau
-  // begitu sudah cocok — bukan lagi animasi buka-tutup kartu.
+  // Kartu dipercantik: gambar & kata SAMA-SAMA kotak seragam (kayak game mencocokkan gambar
+  // buah yang dicontohkan) — bukan gambar kotak vs kata pil memanjang seperti sebelumnya.
+  // State-nya dibedakan lewat cincin warna di tepi (kuning = dipilih, merah = baru terbukti
+  // salah) dan efek redup + centang hijau begitu sudah cocok.
   const CardTile = ({ c }) => {
     const isSelected = selected && selected.key === c.key;
     const isWrong = wrongKeys.includes(c.key);
@@ -1188,9 +1191,9 @@ function CardsPlayArea({ roomCode, room, myGroup }) {
     const isImage = c.kind === "image";
     return (
       <button onClick={() => tapCard(c)} disabled={c.matched || busy} style={{
-        position: "relative", width: "100%", padding: 0, border: "none", cursor: c.matched || busy ? "default" : "pointer",
-        aspectRatio: isImage ? "1 / 1" : undefined, minHeight: isImage ? undefined : 58,
+        position: "relative", width: "100%", height: "100%", padding: isImage ? 0 : 6, border: "none", cursor: c.matched || busy ? "default" : "pointer",
         borderRadius: 14, overflow: "hidden", boxSizing: "border-box",
+        display: "flex", alignItems: "center", justifyContent: "center",
         boxShadow: ring !== "transparent" ? `0 0 0 3px ${ring}` : "0 2px 8px rgba(28,32,51,.12)",
         opacity: c.matched ? 0.4 : 1,
         transform: isSelected ? "scale(1.03)" : "scale(1)",
@@ -1201,7 +1204,7 @@ function CardsPlayArea({ roomCode, room, myGroup }) {
         {isImage ? (
           <img src={c.content} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
         ) : (
-          <div className="sgt" style={{ padding: "12px 10px", fontSize: 15, fontWeight: 700, color: c.matched ? "#3FBFAD" : "#1E2233", textAlign: "center", wordBreak: "break-word", lineHeight: 1.3 }}>{c.content}</div>
+          <div className="sgt" style={{ fontSize: 13, fontWeight: 700, color: c.matched ? "#3FBFAD" : "#1E2233", textAlign: "center", wordBreak: "break-word", lineHeight: 1.25 }}>{c.content}</div>
         )}
         {c.matched && (
           <span style={{ position: "absolute", top: 6, right: 6, width: 22, height: 22, borderRadius: "50%", background: "#3FBFAD", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, boxShadow: "0 2px 4px rgba(0,0,0,.2)" }}>✓</span>
@@ -1210,18 +1213,30 @@ function CardsPlayArea({ roomCode, room, myGroup }) {
     );
   };
 
+  const gridCols = Math.min(5, Math.ceil(Math.sqrt(cards.length)));
+  const gridRows = Math.ceil(cards.length / gridCols);
+
+  // FIX (keadilan antar-perangkat): sebelumnya ukuran kartu cuma dibatasi LEBAR (maxWidth
+  // 460px), tingginya dibiarkan alami — jadi kalau layar HP-nya pendek (atau browser-nya makan
+  // banyak ruang buat address bar dkk), 20 kartu bisa kepanjangan sampai perlu di-scroll,
+  // sementara HP berlayar tinggi tidak perlu scroll sama sekali. Itu bikin lomba jadi tidak adil
+  // (kelompok yang HP-nya perlu scroll jelas lebih lambat). Sekarang papan diukur dari TINGGI
+  // layar yang tersedia juga (bukan cuma lebar) — grid selalu pas mengisi sisa layar setelah
+  // header teks, seluruh kartu SELALU langsung terlihat tanpa scroll di ukuran layar berapa pun.
   return (
-    <div style={wrap}>
+    <div style={{ ...wrap, height: "100vh", minHeight: "100vh", display: "flex", flexDirection: "column", overflow: "hidden", padding: 16 }}>
       <style>{fontImport}</style>
-      <div style={{ fontSize: 12.5, color: t.dim, marginBottom: 2, textAlign: "center" }}>Room {roomCode} · Kelompok {myGroup}</div>
-      <div style={{ fontSize: 12.5, color: t.dim, marginBottom: 4, textAlign: "center", fontWeight: 600 }}>{matchedCount}/{totalPairs} pasangan ketemu</div>
-      <div style={{ fontSize: 11.5, color: t.faint, marginBottom: 14, textAlign: "center" }}>Ketuk satu gambar lalu satu kata yang cocok</div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, maxWidth: 440, margin: "0 auto" }}>
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {imageCards.map((c) => <CardTile key={c.key} c={c} />)}
-        </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 10, justifyContent: "flex-start" }}>
-          {wordCards.map((c) => <CardTile key={c.key} c={c} />)}
+      <div style={{ flexShrink: 0, marginBottom: 8 }}>
+        <div style={{ fontSize: 12, color: t.dim, textAlign: "center" }}>Room {roomCode} · Kelompok {myGroup}</div>
+        <div style={{ fontSize: 12, color: t.dim, textAlign: "center", fontWeight: 600 }}>{matchedCount}/{totalPairs} pasangan ketemu</div>
+        <div style={{ fontSize: 11, color: t.faint, textAlign: "center" }}>Ketuk satu gambar lalu satu kata yang cocok</div>
+      </div>
+      <div style={{ flex: 1, minHeight: 0, display: "flex", justifyContent: "center" }}>
+        <div style={{
+          display: "grid", gridTemplateColumns: `repeat(${gridCols}, 1fr)`, gridTemplateRows: `repeat(${gridRows}, 1fr)`,
+          gap: 8, width: "100%", maxWidth: 520, height: "100%", boxSizing: "border-box",
+        }}>
+          {cards.map((c) => <CardTile key={c.key} c={c} />)}
         </div>
       </div>
     </div>
