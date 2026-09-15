@@ -400,44 +400,53 @@ function ensureMateri(data, materi) {
   return { ...data, [materi]: { 1: [], 2: [], 3: [] } };
 }
 
+// 9 materi = "kyuu" di SanKyuu (san = 3 game, kyuu = 9 materi) — makanya tiap materi dikasih
+// nomor urut, ikon, & warna aksen sendiri-sendiri (bukan cuma teks polos) supaya bagian
+// "Pilih materi" di halaman Persiapan terasa related dengan branding, bukan sekadar daftar
+// pilihan biasa.
 const MATERI_LIST = [
-  { name: "Aisatsu", desc: "Salam sapaan", available: true },
-  { name: "Jikoshoukai", desc: "Perkenalan diri", available: true },
-  { name: "Gakkou no Seikatsu", desc: "Kehidupan sekolah", available: true },
-  { name: "Jikan", desc: "Waktu", available: true },
-  { name: "Dekiru Koto", desc: "Kemampuan", available: true },
-  { name: "Kazoku", desc: "Keluarga", available: true },
-  { name: "Mainichi no Seikatsu", desc: "Kehidupan sehari-hari", available: true },
-  { name: "Uchi", desc: "Rumah", available: true },
-  { name: "Shumi to Himana Toki", desc: "Hobi dan waktu luang", available: true },
+  { name: "Aisatsu", desc: "Salam sapaan", icon: "👋", accent: "#3E7CB1", accentSoft: "#E8F1F8", available: true },
+  { name: "Jikoshoukai", desc: "Perkenalan diri", icon: "🙋", accent: "#D98A2B", accentSoft: "#FBF0E1", available: true },
+  { name: "Gakkou no Seikatsu", desc: "Kehidupan sekolah", icon: "🏫", accent: "#3FBFAD", accentSoft: "#E4F7F4", available: true },
+  { name: "Jikan", desc: "Waktu", icon: "⏰", accent: "#F4B740", accentSoft: "#FDF3DE", available: true },
+  { name: "Dekiru Koto", desc: "Kemampuan", icon: "💪", accent: "#C45B5B", accentSoft: "#FAEAEA", available: true },
+  { name: "Kazoku", desc: "Keluarga", icon: "👪", accent: "#8E7CC3", accentSoft: "#EFEAF9", available: true },
+  { name: "Mainichi no Seikatsu", desc: "Kehidupan sehari-hari", icon: "🗓️", accent: "#5DA9E9", accentSoft: "#E9F3FD", available: true },
+  { name: "Uchi", desc: "Rumah", icon: "🏠", accent: "#8FBF6B", accentSoft: "#EEF7E8", available: true },
+  { name: "Shumi to Himana Toki", desc: "Hobi dan waktu luang", icon: "🎨", accent: "#F2879E", accentSoft: "#FCEAEF", available: true },
 ];
 
-// FIX (dedup): daftar chip "Pilih materi" ini disalin persis di Word Search & Mystery Box
-// (beda tipis: Word Search juga menampilkan status "segera" utk materi yang belum tersedia +
-// baris deskripsi di bawahnya, Mystery Box tidak). Sekarang jadi satu komponen; `showDescription`
-// mengatur apakah baris deskripsi di bawah chip ikut ditampilkan.
-function MateriPicker({ t, selected, onSelect, showDescription }) {
+// FIX (dedup): kartu "Pilih materi" ini dipakai bareng di Word Search & Mystery Box.
+// Dulu berupa chip pil polos berjajar (cuma teks, satu warna kuning saat aktif) — sekarang
+// jadi kartu bernomor 1–9 dengan ikon & warna aksen masing-masing, mirip gaya kartu game di
+// halaman Pilih Game, supaya kelihatan jelas ada 9 materi (sesuai arti "kyuu" di SanKyuu) dan
+// halaman Persiapan terasa lebih menarik dilihat, bukan cuma daftar teks.
+function MateriPicker({ t, selected, onSelect }) {
   return (
-    <React.Fragment>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-        {MATERI_LIST.map((m) => {
-          const isSelected = selected === m.name;
-          return (
-            <button key={m.name} title={m.desc} onClick={() => { if (!m.available) return; onSelect(m.name); }} disabled={!m.available} style={{
-              display: "flex", alignItems: "center", gap: 7,
-              background: isSelected ? "#F4B740" : t.panel2, color: isSelected ? "#101B34" : t.text,
-              border: "1px solid " + (isSelected ? "#F4B740" : t.border), borderRadius: 999, padding: "9px 15px",
-              cursor: m.available ? "pointer" : "default", opacity: m.available ? 1 : 0.4,
-              fontWeight: isSelected ? 700 : 500, fontSize: 13, whiteSpace: "nowrap",
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(148px, 1fr))", gap: 10 }}>
+      {MATERI_LIST.map((m, i) => {
+        const isSelected = selected === m.name;
+        return (
+          <button key={m.name} title={m.desc} onClick={() => { if (!m.available) return; onSelect(m.name); }} disabled={!m.available}
+            className="materi-card"
+            style={{
+              position: "relative", display: "flex", flexDirection: "column", alignItems: "flex-start", textAlign: "left",
+              gap: 6, padding: "12px 12px 11px", borderRadius: 14, cursor: m.available ? "pointer" : "default",
+              background: isSelected ? m.accentSoft : t.panel2, border: `1.5px solid ${isSelected ? m.accent : t.border}`,
+              opacity: m.available ? 1 : 0.45, boxShadow: isSelected ? `0 4px 14px -6px ${m.accent}66` : "none",
+              transition: "border-color .15s ease, background .15s ease, box-shadow .15s ease, transform .1s ease",
             }}>
-              {m.name}
-              {!m.available && <span style={{ fontSize: 10.5, color: t.faint }}>segera</span>}
-            </button>
-          );
-        })}
-      </div>
-      {showDescription && <div style={{ fontSize: 12, color: t.faint, marginTop: 10 }}>{(MATERI_LIST.find((m) => m.name === selected) || {}).desc}</div>}
-    </React.Fragment>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%" }}>
+              <div style={{ width: 26, height: 26, borderRadius: 8, background: isSelected ? m.accent : t.panel, color: isSelected ? "#fff" : t.faint, fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{i + 1}</div>
+              <span style={{ fontSize: 17, lineHeight: 1 }}>{m.icon}</span>
+            </div>
+            <div className="sgt" style={{ fontSize: 13, fontWeight: 700, color: isSelected ? "#101B34" : t.text, lineHeight: 1.25 }}>{m.name}</div>
+            <div style={{ fontSize: 11, color: isSelected ? "#3A3220" : t.faint, lineHeight: 1.3 }}>{m.desc}{!m.available ? " · segera" : ""}</div>
+            {isSelected && <span style={{ position: "absolute", top: 8, right: 8, width: 16, height: 16, borderRadius: "50%", background: m.accent, color: "#fff", fontSize: 9, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>✓</span>}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
@@ -814,6 +823,17 @@ const fontImport = `
   .list-row .row-del { transition: color .15s ease, background .15s ease; }
   .list-row:hover .row-del { color: #EF5B5B; }
   .list-row .row-del:hover { background: rgba(239,91,91,.14); }
+  /* Accordion "Kosakata per babak": header disorot halus saat disentuh (beda dari babak
+     yang lagi terbuka, yang disorot lewat garis kiri kuning + background t.panel di JS),
+     dan isi babak yang baru dibuka muncul dengan fade+geser tipis supaya terasa "hidup"
+     tanpa perlu animasi tinggi (max-height) yang rumit dihitung. */
+  .babak-acc-header:hover { background: rgba(127,127,127,.08) !important; }
+  .babak-acc-body { animation: headerFade .18s ease both; }
+  /* Kartu "Pilih materi" (9 materi SanKyuu): sedikit terangkat & border makin pekat saat
+     disentuh, supaya terasa interaktif seperti kartu game di halaman Pilih Game — tapi
+     gerakannya lebih halus (bukan grid utama) supaya tidak mengalihkan perhatian dari isian
+     kosakata di bawahnya. */
+  .materi-card:hover:not(:disabled) { transform: translateY(-2px); }
   .pilih-game-header { animation: headerFade .45s ease both; }
   /* Optimasi layar HP untuk "Pilih Game": versi desktop dirancang dengan padding lebar, judul
      besar, dan motif kanji dekoratif berukuran penuh — semuanya terasa sesak di layar sempit.
@@ -1501,6 +1521,12 @@ function TebakCariKataGame({ onBack, teacher }) {
   const [queue, setQueue] = useState([]);
   const [foundMap, setFoundMap] = useState({});
   const [clueRevealed, setClueRevealed] = useState(false);
+  // Panel "Kosakata per babak" mana yang lagi terbuka di layar Persiapan. Terpisah dari babakId
+  // (yang tetap dipakai untuk tahu babak mana yang sedang diedit/dilihat), supaya SEMUA panel
+  // babak bisa ditutup sekaligus (klik header yang lagi terbuka lagi = tutup) tanpa membuat
+  // babakId jadi tidak valid untuk bagian lain (Section 3 pratinjau papan tetap butuh babakId
+  // yang selalu terisi 1/2/3).
+  const [babakPanelOpen, setBabakPanelOpen] = useState(true);
   // Overlay teks petunjuk besar di tengah layar — HANYA dipakai saat mode audio "Nonaktif".
   // Tampil singkat (3 detik) lalu hilang sendiri, supaya beda jelas dari mode "Audio" (yang
   // hanya memutar suara, tanpa teks apa pun yang tertinggal di layar).
@@ -2578,12 +2604,18 @@ function TebakCariKataGame({ onBack, teacher }) {
         <ImportMessageBanner t={t} msg={importMsg} onDismiss={() => setImportMsg(null)} />
 
         <div style={{ background: t.panel, borderRadius: 16, padding: "18px 20px", marginBottom: 20, boxShadow: t.shadowSm }}>
-          <SectionLabel n={1} hint="(sesuai Prota Bahasa Jepang kelas XI Fase F)" faint={t.faint}>Pilih materi</SectionLabel>
-          {/* Dulu tiap materi berupa kartu besar 2 baris — 9 kartu memakan hampir sepertiga
-              layar padahal cuma dipilih sekali di awal. Sekarang jadi chip satu baris yang
-              jauh lebih ringkas; deskripsinya pindah ke tooltip. */}
-          <MateriPicker t={t} selected={selectedMateri} showDescription
-            onSelect={(name) => { setSelectedMateri(name); setDataByMateri((prev) => ensureMateri(prev, name)); setBabakId(1); }} />
+          <SectionLabel n={1} faint={t.faint} hint={
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontWeight: 700, color: "#D98A2B", background: "rgba(244,183,64,.16)", padding: "2px 8px", borderRadius: 999, fontSize: 10.5 }}>9 Materi</span>
+              (sesuai Prota Bahasa Jepang kelas XI Fase F)
+            </span>
+          }>Pilih materi</SectionLabel>
+          {/* Dulu tiap materi berupa chip pil satu baris (cuma teks, deskripsi di tooltip).
+              Sekarang jadi kartu bernomor 1–9 dengan ikon & warna sendiri-sendiri — sesuai
+              nama "SanKyuu" (san = 3 game, kyuu = 9 materi) supaya lebih menarik dilihat &
+              jumlah materinya langsung kelihatan sekilas, bukan cuma dibaca dari tooltip. */}
+          <MateriPicker t={t} selected={selectedMateri}
+            onSelect={(name) => { setSelectedMateri(name); setDataByMateri((prev) => ensureMateri(prev, name)); setBabakId(1); setBabakPanelOpen(true); }} />
         </div>
 
         <div style={{ background: t.panel, borderRadius: 16, padding: "18px 20px", marginBottom: 20, boxShadow: t.shadowSm }}>
@@ -2598,25 +2630,31 @@ function TebakCariKataGame({ onBack, teacher }) {
               Ini bikin halaman lebih rapi & enak dipandang, terutama saat sudah 3 babak terisi. */}
           <div style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 10 }}>
             {[1, 2, 3].map((id) => {
-              const isOpen = babakId === id;
+              const isOpen = babakId === id && babakPanelOpen;
               const meta = SEED_BABAK[id];
               const wordsForId = dataByMateri[selectedMateri]?.[id] || [];
               return (
-                <div key={id} style={{ border: `1px solid ${t.border}`, borderRadius: 12, overflow: "hidden", background: t.panel2 }}>
-                  <button onClick={() => setBabakId(id)} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "14px 16px", background: "transparent", border: "none", cursor: "pointer", textAlign: "left" }}>
+                <div key={id} style={{ border: `1px solid ${isOpen ? "#F4B740" : t.border}`, borderRadius: 12, overflow: "hidden", background: t.panel2, transition: "border-color .15s ease" }}>
+                  <button
+                    onClick={() => {
+                      if (babakId === id && babakPanelOpen) setBabakPanelOpen(false);
+                      else { setBabakId(id); setBabakPanelOpen(true); }
+                    }}
+                    className="babak-acc-header"
+                    style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "14px 16px", background: "transparent", border: "none", cursor: "pointer", textAlign: "left" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
-                      <div style={{ width: 28, height: 28, borderRadius: "50%", background: isOpen ? "#F4B740" : t.panel, color: isOpen ? "#101B34" : t.dim, fontWeight: 700, fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{id}</div>
+                      <div style={{ width: 28, height: 28, borderRadius: "50%", background: isOpen ? "#F4B740" : t.panel, border: isOpen ? "none" : `1px solid ${t.border}`, color: isOpen ? "#101B34" : t.dim, fontWeight: 700, fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{id}</div>
                       <div style={{ minWidth: 0 }}>
                         <div className="sgt" style={{ fontWeight: 700, fontSize: 14, color: t.text }}>Babak {id}</div>
-                        <div style={{ fontSize: 12, color: t.faint }}>{meta.sub} · {meta.point} poin / soal · {wordsForId.length} kosakata</div>
+                        <div style={{ fontSize: 12, color: t.faint, marginTop: 1 }}>{meta.sub} · {meta.point} poin / soal · {wordsForId.length} kosakata</div>
                       </div>
                     </div>
-                    <span style={{ fontSize: 15, color: t.dim, flexShrink: 0, transform: isOpen ? "rotate(180deg)" : "none", transition: "transform .15s ease" }}>▾</span>
+                    <span style={{ width: 26, height: 26, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, color: isOpen ? "#101B34" : t.dim, background: isOpen ? "#F4B740" : "transparent", flexShrink: 0, transform: isOpen ? "rotate(180deg)" : "none", transition: "transform .15s ease, background .15s ease" }}>▾</span>
                   </button>
 
                   {isOpen && (
-                    <div style={{ padding: "0 16px 16px" }}>
-                      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>
+                    <div className="babak-acc-body" style={{ padding: "0 16px 16px", borderTop: `1px solid ${t.border}` }}>
+                      <div style={{ display: "flex", justifyContent: "flex-end", margin: "12px 0" }}>
                         <button onClick={() => setBulkAddOpen(true)} style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: `1px dashed ${t.border}`, color: t.dim, borderRadius: 8, padding: "8px 14px", cursor: "pointer", fontSize: 13 }}><span style={{ fontSize: 14, lineHeight: 1, color: 'inherit' }}>📋</span> Tambah Banyak Sekaligus</button>
                       </div>
 
@@ -3127,7 +3165,7 @@ function BukaKotakGame({ onBack }) {
         <ImportMessageBanner t={t} msg={importMsg} onDismiss={() => setImportMsg(null)} />
 
         <div style={{ background: t.panel, borderRadius: 16, padding: "18px 20px", marginBottom: 20, boxShadow: t.shadowSm }}>
-          <SectionLabel n={1} faint={t.faint}>Pilih materi</SectionLabel>
+          <SectionLabel n={1} faint={t.faint} hint={<span style={{ fontWeight: 700, color: "#D98A2B", background: "rgba(244,183,64,.16)", padding: "2px 8px", borderRadius: 999, fontSize: 10.5 }}>9 Materi</span>}>Pilih materi</SectionLabel>
           <MateriPicker t={t} selected={selectedMateri}
             onSelect={(name) => { setSelectedMateri(name); setDataByMateri((prev) => ensureBoxMateri(prev, name)); }} />
         </div>
@@ -3674,6 +3712,99 @@ function JapaneseBackdrop({ theme }) {
   );
 }
 
+// Tombol ⚙ di halaman Pilih Game — berisi Panduan pemakaian, info Pengembang, dan hal
+// teknis lainnya (versi, tumpukan teknologi, dsb). Dipisah jadi 3 tab supaya tidak jadi satu
+// halaman panjang yang harus di-scroll; guru tinggal klik bagian yang relevan.
+const SETTINGS_TABS = [
+  { id: "panduan", label: "Panduan", icon: "📖" },
+  { id: "pengembang", label: "Pengembang", icon: "🧑\u200d💻" },
+  { id: "teknis", label: "Teknis", icon: "⚙️" },
+];
+function SettingsModal({ open, onClose, t }) {
+  const [tab, setTab] = useState("panduan");
+  if (!open) return null;
+  const rowLabel = { fontSize: 11.5, fontWeight: 700, color: t.faint, textTransform: "uppercase", letterSpacing: 0.4 };
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 70, padding: 16, boxSizing: "border-box" }} onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()} className="modal-pop" style={{ width: "min(560px, 94vw)", maxHeight: "84vh", display: "flex", flexDirection: "column", background: t.modalBg, borderRadius: 20, boxShadow: "0 20px 60px rgba(0,0,0,.4)", overflow: "hidden" }}>
+        <div style={{ padding: "22px 24px 0" }}>
+          <div className="sgt" style={{ fontSize: 18, fontWeight: 700, color: t.text, marginBottom: 2 }}>Panduan &amp; Info Aplikasi</div>
+          <div style={{ fontSize: 12.5, color: t.faint, marginBottom: 14 }}>SanKyuu — 3 Game · 9 Materi Bahasa Jepang Kelas XI</div>
+          <div style={{ display: "flex", gap: 6, background: t.panel2, padding: 4, borderRadius: 10 }}>
+            {SETTINGS_TABS.map((s) => (
+              <button key={s.id} onClick={() => setTab(s.id)} style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "8px 10px", borderRadius: 7, border: "none", cursor: "pointer", background: tab === s.id ? "#F4B740" : "transparent", color: tab === s.id ? "#101B34" : t.text, fontWeight: 600, fontSize: 12.5 }}>
+                <span style={{ fontSize: 13, lineHeight: 1 }}>{s.icon}</span> {s.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div style={{ padding: "18px 24px 4px", overflowY: "auto", flex: 1 }}>
+          {tab === "panduan" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              {[
+                { t: "Pilih Materi & Susun Kosakata", d: "Buka \"Persiapan\", pilih salah satu dari 9 materi, lalu isi kosakata di Babak 1–3 (kata, petunjuk, dan audio opsional)." },
+                { t: "Mulai Permainan", d: "Klik \"Mulai Permainan\" — kode Room & QR untuk siswa join otomatis dibuat." },
+                { t: "Atur Mode Kelas", d: "Pilih mode angkat tangan (Digital/Manual) dan mode petunjuk (Audio/Nonaktif) sesuai kondisi kelas." },
+                { t: "Proyeksikan ke Layar", d: "Gunakan \"Mode Proyektor\" atau \"Jendela Proyektor (Terpisah)\" supaya siswa hanya melihat papan permainan, bukan panel guru." },
+                { t: "Simpan & Lanjutkan", d: "Progres bisa disimpan lewat \"Simpan & Jeda\", lalu dibuka lagi kapan saja lewat menu Riwayat Sesi." },
+              ].map((step, i) => (
+                <div key={i} style={{ display: "flex", gap: 12 }}>
+                  <div style={{ width: 24, height: 24, borderRadius: "50%", background: t.panel2, color: t.text, fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{i + 1}</div>
+                  <div>
+                    <div style={{ fontSize: 13.5, fontWeight: 700, color: t.text, marginBottom: 2 }}>{step.t}</div>
+                    <div style={{ fontSize: 12.5, color: t.dim, lineHeight: 1.5 }}>{step.d}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {tab === "pengembang" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <div style={{ width: 44, height: 44, borderRadius: "50%", background: "linear-gradient(135deg,#F4B740,#D98A2B)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, flexShrink: 0 }}>🧑‍🏫</div>
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: t.text }}>Agus Heru Kuswanto</div>
+                  <div style={{ fontSize: 12.5, color: t.faint }}>Mahasiswa Program Studi Pendidikan Bahasa Jepang, Fakultas Ilmu Budaya, Universitas Brawijaya Malang</div>
+                </div>
+              </div>
+              <div style={{ fontSize: 12.5, color: t.dim, lineHeight: 1.6 }}>
+                SanKyuu dibuat untuk membantu pembelajaran kosakata Bahasa Jepang kelas XI supaya lebih interaktif lewat permainan kelompok di kelas — namanya sendiri singkatan dari 3 (san) Game dan 9 (kyuu) Materi yang tersedia.
+              </div>
+              <div>
+                <div style={rowLabel}>Kontak / masukan</div>
+                <div style={{ fontSize: 12.5, color: t.text, marginTop: 4 }}>📧 agusheru@student.ub.ac.id</div>
+              </div>
+            </div>
+          )}
+
+          {tab === "teknis" && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              {[
+                ["Versi", "SanKyuu v1.0"],
+                ["Dibangun dengan", "React 18 + Firebase (Auth & Firestore) — satu file HTML statis, tanpa proses build"],
+                ["Kompatibilitas", "Browser modern (Chrome, Edge, Firefox versi terbaru); Chrome disarankan untuk pengalaman terbaik"],
+                ["Penyimpanan data", "Materi & kosakata disimpan per akun guru di Firestore — datanya tidak bercampur antar guru"],
+                ["Koneksi internet", "Dibutuhkan untuk login, sinkronisasi buzzer real-time antar perangkat, dan unggah audio petunjuk"],
+              ].map(([k, v], i, arr) => (
+                <div key={k} style={{ paddingBottom: 12, borderBottom: i < arr.length - 1 ? `1px solid ${t.border}` : "none" }}>
+                  <div style={rowLabel}>{k}</div>
+                  <div style={{ fontSize: 12.5, color: t.text, marginTop: 3, lineHeight: 1.5 }}>{v}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div style={{ padding: "16px 24px 22px", textAlign: "right" }}>
+          <button onClick={onClose} style={{ background: t.panel2, border: "none", color: t.text, padding: "9px 18px", borderRadius: 8, cursor: "pointer", fontSize: 13, fontWeight: 600 }}>Tutup</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const [activeGame, setActiveGame] = useState(() => {
     try { return localStorage.getItem("app-active-game") || null; } catch (e) { return null; }
@@ -3683,6 +3814,7 @@ function App() {
   const [pickerTheme, setPickerTheme] = useState(() => {
     try { return localStorage.getItem("app-theme") || "light"; } catch (e) { return "light"; }
   });
+  const [settingsOpen, setSettingsOpen] = useState(false);
   useEffect(() => {
     try { localStorage.setItem("app-theme", pickerTheme); } catch (e) {}
   }, [pickerTheme]);
@@ -3769,16 +3901,26 @@ function App() {
           <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
             <div className="sgt pilih-game-avatar" style={{ width: 46, height: 46, borderRadius: "50%", background: "linear-gradient(135deg,#F4B740,#D98A2B)", color: "#101B34", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, fontWeight: 700, boxShadow: "0 3px 10px rgba(217,138,43,.35)", flexShrink: 0 }}>{initial}</div>
             <div>
-              <div className="sgt pilih-game-title" style={{ fontSize: 30, fontWeight: 700, letterSpacing: -0.4 }}>Pilih Game</div>
+              {/* Nama produk "SanKyuu" (san = 3, kyuu = 9) = 3 game yang bisa dimainkan &
+                  9 materi kelas XI yang dipelajari — dijadikan judul utama, "Pilih Game" turun
+                  jadi overline kecil di atasnya, dan artinya dijelaskan lewat chip singkat +
+                  kalimat deskripsi di bawah supaya guru yang baru pertama buka langsung paham. */}
+              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.2, textTransform: "uppercase", color: pt.faint }}>Pilih Game</div>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+                <div className="sgt pilih-game-title" style={{ fontSize: 30, fontWeight: 700, letterSpacing: -0.4 }}>SanKyuu</div>
+                <span style={{ fontSize: 11.5, fontWeight: 700, color: "#D98A2B", background: "rgba(244,183,64,.16)", padding: "3px 10px", borderRadius: 999, letterSpacing: 0.2 }}>3 Game · 9 Materi</span>
+              </div>
               <div style={{ fontSize: 13, color: pt.dim, marginTop: 2 }}>{greetingByHour()}, {firstName} 👋</div>
             </div>
           </div>
           <div className="pilih-game-actions" style={{ display: "flex", gap: 8 }}>
+            <button onClick={() => setSettingsOpen(true)} title="Panduan, pengembang & info teknis" style={{ background: pt.panel, border: `1px solid ${pt.border}`, color: pt.text, padding: 10, borderRadius: 10, cursor: "pointer", boxShadow: "0 2px 10px rgba(0,0,0,.06)" }}><span style={{ fontSize: 16, lineHeight: 1 }}>⚙️</span></button>
             <ThemeToggleButton theme={pickerTheme} onToggle={() => setPickerTheme((th) => th === "dark" ? "light" : "dark")} style={{ background: pt.panel, border: `1px solid ${pt.border}`, color: pt.text, padding: 10, borderRadius: 10, cursor: "pointer", boxShadow: "0 2px 10px rgba(0,0,0,.06)" }} />
             <button onClick={() => signOutTeacher()} style={{ background: pt.panel, border: `1px solid ${pt.border}`, color: pt.dim, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, boxShadow: "0 2px 10px rgba(0,0,0,.06)" }}>Keluar</button>
           </div>
         </div>
-        <div style={{ fontSize: 14, color: pt.dim, marginBottom: 26, maxWidth: 520 }}>Web interaktif siswa SMA — pilih salah satu permainan di bawah ini untuk mulai sesi.</div>
+        <div style={{ fontSize: 14, color: pt.dim, marginBottom: 26, maxWidth: 560 }}>Web interaktif siswa SMA berisi 3 game & 9 materi Bahasa Jepang kelas XI — pilih salah satu permainan di bawah ini untuk mulai sesi.</div>
+        <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} t={pt} />
         <div className="game-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 230px))", gap: 20, justifyContent: "center", perspective: 1200 }}>
           {GAMES.map((g, i) => (
             <button
