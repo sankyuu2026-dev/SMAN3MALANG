@@ -319,6 +319,59 @@ const MATERI_LIST = [
   { name: "Shumi to Himana Toki", desc: "Hobi dan waktu luang", available: true },
 ];
 
+// FIX (dedup): daftar chip "Pilih materi" ini disalin persis di Word Search & Mystery Box
+// (beda tipis: Word Search juga menampilkan status "segera" utk materi yang belum tersedia +
+// baris deskripsi di bawahnya, Mystery Box tidak). Sekarang jadi satu komponen; `showDescription`
+// mengatur apakah baris deskripsi di bawah chip ikut ditampilkan.
+function MateriPicker({ t, selected, onSelect, showDescription }) {
+  return (
+    <React.Fragment>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+        {MATERI_LIST.map((m) => {
+          const isSelected = selected === m.name;
+          return (
+            <button key={m.name} title={m.desc} onClick={() => { if (!m.available) return; onSelect(m.name); }} disabled={!m.available} style={{
+              display: "flex", alignItems: "center", gap: 7,
+              background: isSelected ? "#F4B740" : t.panel2, color: isSelected ? "#101B34" : t.text,
+              border: "1px solid " + (isSelected ? "#F4B740" : t.border), borderRadius: 999, padding: "9px 15px",
+              cursor: m.available ? "pointer" : "default", opacity: m.available ? 1 : 0.4,
+              fontWeight: isSelected ? 700 : 500, fontSize: 13, whiteSpace: "nowrap",
+            }}>
+              {m.name}
+              {!m.available && <span style={{ fontSize: 10.5, color: t.faint }}>segera</span>}
+            </button>
+          );
+        })}
+      </div>
+      {showDescription && <div style={{ fontSize: 12, color: t.faint, marginTop: 10 }}>{(MATERI_LIST.find((m) => m.name === selected) || {}).desc}</div>}
+    </React.Fragment>
+  );
+}
+
+// FIX (dedup): dua banner ini ("Data belum tersimpan" & pesan hasil ekspor/impor cadangan)
+// disalin persis di ketiga game. Sekarang jadi komponen bersama.
+function StorageWarningBanner({ t, message }) {
+  if (!message) return null;
+  return (
+    <div style={{ display: "flex", alignItems: "flex-start", gap: 10, background: "rgba(239,91,91,.12)", border: "1px solid #EF5B5B", color: t.text, borderRadius: 12, padding: "12px 14px", marginBottom: 16 }}>
+      <span style={{ fontSize: 16, lineHeight: 1.2 }}>⚠</span>
+      <div style={{ fontSize: 13, lineHeight: 1.5 }}>
+        <b style={{ color: "#EF5B5B" }}>Data belum tersimpan.</b> {message}
+        <div style={{ marginTop: 6, color: t.dim, fontSize: 12.5 }}>Terpakai sekarang: {formatBytes(estimateStorageUsage())} dari kuota browser (biasanya ±5 MB).</div>
+      </div>
+    </div>
+  );
+}
+function ImportMessageBanner({ t, msg, onDismiss }) {
+  if (!msg) return null;
+  return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, background: msg.ok ? "rgba(63,191,173,.14)" : "rgba(239,91,91,.12)", border: `1px solid ${msg.ok ? "#3FBFAD" : "#EF5B5B"}`, borderRadius: 12, padding: "10px 14px", marginBottom: 16, fontSize: 13 }}>
+      <span>{msg.ok ? "✅" : "⚠"} {msg.text}</span>
+      <button onClick={onDismiss} style={{ background: "transparent", border: "none", color: t.dim, cursor: "pointer", fontSize: 15 }}>✕</button>
+    </div>
+  );
+}
+
 const GROUP_COLORS = ["#F4B740", "#EF5B5B", "#3FBFAD", "#F2879E", "#5DA9E9", "#8FBF6B"];
 const GROUP_NAMES = [1, 2, 3, 4, 5, 6];
 // Palet khusus untuk kunci jawaban di layar Persiapan — perlu lebih banyak warna dari GROUP_COLORS
@@ -1871,54 +1924,28 @@ function TebakCariKataGame({ onBack, teacher }) {
           </div>
         </div>
 
-        {storageWarning && (
-          <div style={{ display: "flex", alignItems: "flex-start", gap: 10, background: "rgba(239,91,91,.12)", border: "1px solid #EF5B5B", color: t.text, borderRadius: 12, padding: "12px 14px", marginBottom: 16 }}>
-            <span style={{ fontSize: 16, lineHeight: 1.2 }}>⚠</span>
-            <div style={{ fontSize: 13, lineHeight: 1.5 }}>
-              <b style={{ color: "#EF5B5B" }}>Data belum tersimpan.</b> {storageWarning}
-              <div style={{ marginTop: 6, color: t.dim, fontSize: 12.5 }}>Terpakai sekarang: {formatBytes(estimateStorageUsage())} dari kuota browser (biasanya ±5 MB).</div>
-            </div>
-          </div>
-        )}
-        {importMsg && (
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, background: importMsg.ok ? "rgba(63,191,173,.14)" : "rgba(239,91,91,.12)", border: `1px solid ${importMsg.ok ? "#3FBFAD" : "#EF5B5B"}`, borderRadius: 12, padding: "10px 14px", marginBottom: 16, fontSize: 13 }}>
-            <span>{importMsg.ok ? "✅" : "⚠"} {importMsg.text}</span>
-            <button onClick={() => setImportMsg(null)} style={{ background: "transparent", border: "none", color: t.dim, cursor: "pointer", fontSize: 15 }}>✕</button>
-          </div>
-        )}
+        <StorageWarningBanner t={t} message={storageWarning} />
+        <ImportMessageBanner t={t} msg={importMsg} onDismiss={() => setImportMsg(null)} />
 
         <div style={{ background: t.panel, borderRadius: 16, padding: "18px 20px", marginBottom: 20, boxShadow: t.shadowSm }}>
           <SectionLabel n={1} hint="(sesuai Prota Bahasa Jepang kelas XI Fase F)" faint={t.faint}>Pilih materi</SectionLabel>
           {/* Dulu tiap materi berupa kartu besar 2 baris — 9 kartu memakan hampir sepertiga
               layar padahal cuma dipilih sekali di awal. Sekarang jadi chip satu baris yang
               jauh lebih ringkas; deskripsinya pindah ke tooltip. */}
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-            {MATERI_LIST.map((m) => {
-              const isSelected = selectedMateri === m.name;
-              return (
-                <button key={m.name} title={m.desc} onClick={() => { if (!m.available) return; setSelectedMateri(m.name); setDataByMateri((prev) => ensureMateri(prev, m.name)); setBabakId(1); }} disabled={!m.available} style={{
-                  display: "flex", alignItems: "center", gap: 7,
-                  background: isSelected ? "#F4B740" : t.panel2, color: isSelected ? "#101B34" : t.text,
-                  border: "1px solid " + (isSelected ? "#F4B740" : t.border), borderRadius: 999, padding: "9px 15px",
-                  cursor: m.available ? "pointer" : "default", opacity: m.available ? 1 : 0.4,
-                  fontWeight: isSelected ? 700 : 500, fontSize: 13, whiteSpace: "nowrap",
-                }}>
-                  {m.name}
-                  {!m.available && <span style={{ fontSize: 10.5, color: t.faint }}>segera</span>}
-                </button>
-              );
-            })}
-          </div>
-          <div style={{ fontSize: 12, color: t.faint, marginTop: 10 }}>{(MATERI_LIST.find((m) => m.name === selectedMateri) || {}).desc}</div>
+          <MateriPicker t={t} selected={selectedMateri} showDescription
+            onSelect={(name) => { setSelectedMateri(name); setDataByMateri((prev) => ensureMateri(prev, name)); setBabakId(1); }} />
         </div>
 
         <div style={{ background: t.panel, borderRadius: 16, padding: "18px 20px", marginBottom: 20, boxShadow: t.shadowSm }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
             <SectionLabel n={2} hint="— edit, hapus, tambah, unggah audio" faint={t.faint}>Kosakata per babak</SectionLabel>
-            <div style={{ display: "flex", gap: 6, background: t.panel2, padding: 4, borderRadius: 10 }}>
-              {[1, 2, 3].map((id) => (
-                <button key={id} onClick={() => setBabakId(id)} style={{ padding: "7px 14px", borderRadius: 7, border: "none", cursor: "pointer", background: babakId === id ? "#F4B740" : "transparent", color: babakId === id ? "#101B34" : t.text, fontWeight: 600, fontSize: 13 }}>Babak {id}</button>
-              ))}
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <button onClick={() => setBulkAddOpen(true)} style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: `1px dashed ${t.border}`, color: t.dim, borderRadius: 8, padding: "8px 14px", cursor: "pointer", fontSize: 13 }}><span style={{ fontSize: 14, lineHeight: 1, color: 'inherit' }}>📋</span> Tambah Banyak Sekaligus</button>
+              <div style={{ display: "flex", gap: 6, background: t.panel2, padding: 4, borderRadius: 10 }}>
+                {[1, 2, 3].map((id) => (
+                  <button key={id} onClick={() => setBabakId(id)} style={{ padding: "7px 14px", borderRadius: 7, border: "none", cursor: "pointer", background: babakId === id ? "#F4B740" : "transparent", color: babakId === id ? "#101B34" : t.text, fontWeight: 600, fontSize: 13 }}>Babak {id}</button>
+                ))}
+              </div>
             </div>
           </div>
 
@@ -1956,7 +1983,14 @@ function TebakCariKataGame({ onBack, teacher }) {
             ))}
           </div>
           <button onClick={() => addWord(babakId)} style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 6, background: t.panel2, border: "none", color: t.text, borderRadius: 8, padding: "9px 14px", cursor: "pointer", fontSize: 13 }}><span style={{ fontSize: 14, lineHeight: 1, color: 'inherit' }}>➕</span> Tambah Kosakata</button>
-          <button onClick={() => setBulkAddOpen(true)} style={{ marginTop: 14, marginLeft: 8, display: "inline-flex", alignItems: "center", gap: 6, background: "transparent", border: `1px dashed ${t.border}`, color: t.dim, borderRadius: 8, padding: "9px 14px", cursor: "pointer", fontSize: 13 }}><span style={{ fontSize: 14, lineHeight: 1, color: 'inherit' }}>📋</span> Tambah Banyak Sekaligus</button>
+          <BulkAddModal
+            open={bulkAddOpen}
+            onClose={() => setBulkAddOpen(false)}
+            onAdd={(text) => addWordsBulk(babakId, text)}
+            title={`Tambah Banyak Kosakata Sekaligus — Babak ${babakId}`}
+            formatHint={'Satu kosakata per baris, format: kata/petunjuk (dipisah tanda garis miring "/"). Baris yang tidak punya "/" akan dilewati.'}
+            placeholder={"gomibako/Wadah penampung barang bekas atau sisa pakai yang sudah tidak digunakan\nkarendaa/Lembaran penanggalan yang menunjukkan susunan hari, tanggal, dan bulan dalam setahun"}
+          />
         </div>
 
         <div style={{ background: t.panel, borderRadius: 16, padding: "18px 20px", marginBottom: 20, boxShadow: t.shadowSm }}>
@@ -1985,7 +2019,7 @@ function TebakCariKataGame({ onBack, teacher }) {
               <div style={{ fontSize: 12, color: t.faint, marginBottom: 10, lineHeight: 1.5 }}>
                 Susunan huruf di bawah ini yang akan dipakai persis saat "Mulai Permainan" untuk Babak {babakId} — bukan diacak ulang otomatis. Klik "Acak Ulang Posisi" kalau ingin susunan lain sebelum sesi dimulai bersama siswa.
               </div>
-              <div style={{ background: t.panel2, borderRadius: 12, padding: 10, maxWidth: 440, boxSizing: "border-box" }}>
+              <div style={{ background: t.panel2, borderRadius: 12, padding: 10, maxWidth: 440, margin: "0 auto", boxSizing: "border-box" }}>
                 <svg viewBox={`0 0 ${puzzlePreview.size} ${puzzlePreview.size}`} style={{ width: "100%", height: "auto", display: "block" }}>
                   {answerKeySegments.map((seg) => (
                     <line key={seg.id} x1={seg.x1} y1={seg.y1} x2={seg.x2} y2={seg.y2}
@@ -2070,14 +2104,6 @@ function TebakCariKataGame({ onBack, teacher }) {
       {phonePreview && <PhonePreview />}
       {saveNameOpen && <SaveNameModal />}
       <QrJoinModal open={qrOpen} onClose={() => setQrOpen(false)} roomCode={roomCode} joinedCount={Object.keys(joinedGroups).length} />
-      <BulkAddModal
-        open={bulkAddOpen}
-        onClose={() => setBulkAddOpen(false)}
-        onAdd={(text) => addWordsBulk(babakId, text)}
-        title={`Tambah Banyak Kosakata Sekaligus — Babak ${babakId}`}
-        formatHint={'Satu kosakata per baris, format: kata/petunjuk (dipisah tanda garis miring "/"). Baris yang tidak punya "/" akan dilewati.'}
-        placeholder={"gomibako/Wadah penampung barang bekas atau sisa pakai yang sudah tidak digunakan\nkarendaa/Lembaran penanggalan yang menunjukkan susunan hari, tanggal, dan bulan dalam setahun"}
-      />
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 16, marginBottom: 14 }}>
         <div>
@@ -2339,37 +2365,13 @@ function BukaKotakGame({ onBack }) {
           </div>
         </div>
 
-        {storageWarning && (
-          <div style={{ display: "flex", alignItems: "flex-start", gap: 10, background: "rgba(239,91,91,.12)", border: "1px solid #EF5B5B", color: t.text, borderRadius: 12, padding: "12px 14px", marginBottom: 16 }}>
-            <span style={{ fontSize: 16, lineHeight: 1.2 }}>⚠</span>
-            <div style={{ fontSize: 13, lineHeight: 1.5 }}>
-              <b style={{ color: "#EF5B5B" }}>Data belum tersimpan.</b> {storageWarning}
-              <div style={{ marginTop: 6, color: t.dim, fontSize: 12.5 }}>Terpakai sekarang: {formatBytes(estimateStorageUsage())} dari kuota browser (biasanya ±5 MB).</div>
-            </div>
-          </div>
-        )}
-        {importMsg && (
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, background: importMsg.ok ? "rgba(63,191,173,.14)" : "rgba(239,91,91,.12)", border: `1px solid ${importMsg.ok ? "#3FBFAD" : "#EF5B5B"}`, borderRadius: 12, padding: "10px 14px", marginBottom: 16, fontSize: 13 }}>
-            <span>{importMsg.ok ? "✅" : "⚠"} {importMsg.text}</span>
-            <button onClick={() => setImportMsg(null)} style={{ background: "transparent", border: "none", color: t.dim, cursor: "pointer", fontSize: 15 }}>✕</button>
-          </div>
-        )}
+        <StorageWarningBanner t={t} message={storageWarning} />
+        <ImportMessageBanner t={t} msg={importMsg} onDismiss={() => setImportMsg(null)} />
 
         <div style={{ background: t.panel, borderRadius: 16, padding: "18px 20px", marginBottom: 20, boxShadow: t.shadowSm }}>
           <SectionLabel n={1} faint={t.faint}>Pilih materi</SectionLabel>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-            {MATERI_LIST.map((m) => {
-              const isSelected = selectedMateri === m.name;
-              return (
-                <button key={m.name} title={m.desc} onClick={() => { setSelectedMateri(m.name); setDataByMateri((prev) => ensureBoxMateri(prev, m.name)); }} style={{
-                  display: "flex", alignItems: "center", gap: 7,
-                  background: isSelected ? "#F4B740" : t.panel2, color: isSelected ? "#101B34" : t.text,
-                  border: "1px solid " + (isSelected ? "#F4B740" : t.border), borderRadius: 999, padding: "9px 15px",
-                  cursor: "pointer", fontWeight: isSelected ? 700 : 500, fontSize: 13, whiteSpace: "nowrap",
-                }}>{m.name}</button>
-              );
-            })}
-          </div>
+          <MateriPicker t={t} selected={selectedMateri}
+            onSelect={(name) => { setSelectedMateri(name); setDataByMateri((prev) => ensureBoxMateri(prev, name)); }} />
         </div>
 
         <div style={{ background: t.panel, borderRadius: 14, padding: 16, marginBottom: 20, boxShadow: t.shadowSm }}>
@@ -2703,21 +2705,8 @@ function CocokkanKartuGame({ onBack }) {
           </div>
         </div>
 
-        {storageWarning && (
-          <div style={{ display: "flex", alignItems: "flex-start", gap: 10, background: "rgba(239,91,91,.12)", border: "1px solid #EF5B5B", color: t.text, borderRadius: 12, padding: "12px 14px", marginBottom: 16 }}>
-            <span style={{ fontSize: 16, lineHeight: 1.2 }}>⚠</span>
-            <div style={{ fontSize: 13, lineHeight: 1.5 }}>
-              <b style={{ color: "#EF5B5B" }}>Data belum tersimpan.</b> {storageWarning}
-              <div style={{ marginTop: 6, color: t.dim, fontSize: 12.5 }}>Terpakai sekarang: {formatBytes(estimateStorageUsage())} dari kuota browser (biasanya ±5 MB).</div>
-            </div>
-          </div>
-        )}
-        {importMsg && (
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, background: importMsg.ok ? "rgba(63,191,173,.14)" : "rgba(239,91,91,.12)", border: `1px solid ${importMsg.ok ? "#3FBFAD" : "#EF5B5B"}`, borderRadius: 12, padding: "10px 14px", marginBottom: 16, fontSize: 13 }}>
-            <span>{importMsg.ok ? "✅" : "⚠"} {importMsg.text}</span>
-            <button onClick={() => setImportMsg(null)} style={{ background: "transparent", border: "none", color: t.dim, cursor: "pointer", fontSize: 15 }}>✕</button>
-          </div>
-        )}
+        <StorageWarningBanner t={t} message={storageWarning} />
+        <ImportMessageBanner t={t} msg={importMsg} onDismiss={() => setImportMsg(null)} />
 
         <div style={{ background: t.panel, borderRadius: 16, padding: "18px 20px", marginBottom: 20, boxShadow: t.shadowSm }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
