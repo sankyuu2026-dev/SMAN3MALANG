@@ -887,12 +887,26 @@ function StudentJoinScreen({ roomCode }) {
     if (!room) return;
     setErr(""); setBusy(true);
     const ref = db.collection("rooms").doc(roomCode);
-    ref.set({ groups: { [g]: { name: `Kelompok ${g}`, joinedAt: firebase.firestore.FieldValue.serverTimestamp() } } }, { merge: true })
+    // BUGFIX: dulu langsung set({...}, {merge:true}) tanpa transaksi — cek "isTaken" di render
+    // cuma berdasar snapshot lokal yang belum tentu terbaru, jadi kalau dua HP menekan nomor
+    // kelompok yang sama nyaris bersamaan, KEDUANYA bisa lolos dan sama-sama merasa berhasil
+    // jadi kelompok itu (data yang tersimpan tertimpa jadi satu, tapi kedua HP tetap lanjut main
+    // seolah-olah mereka kelompok yang sama). Sekarang dicek ulang di dalam transaksi — kalau pas
+    // transaksi dijalankan slot itu ternyata sudah keburu diambil HP lain, join ini digagalkan.
+    db.runTransaction((tx) => tx.get(ref).then((snap) => {
+      const data = snap.data() || {};
+      const groups = data.groups || {};
+      if (groups[g]) throw new Error("kelompok-sudah-dipakai");
+      tx.set(ref, { groups: { [g]: { name: `Kelompok ${g}`, joinedAt: firebase.firestore.FieldValue.serverTimestamp() } } }, { merge: true });
+    }))
       .then(() => {
         setMyGroup(g);
         try { sessionStorage.setItem(`join-group-${roomCode}`, String(g)); } catch (e) {}
       })
-      .catch(() => setErr("Gagal gabung, coba lagi."))
+      .catch((err) => {
+        if (err && err.message === "kelompok-sudah-dipakai") setErr("Kelompok ini baru saja diambil orang lain — pilih nomor lain.");
+        else setErr("Gagal gabung, coba lagi.");
+      })
       .finally(() => setBusy(false));
   }
 
@@ -907,9 +921,20 @@ function StudentJoinScreen({ roomCode }) {
       const data = snap.data() || {};
       if (data.roundId !== roundId) throw new Error("ronde-berubah");
       const order = Array.isArray(data.buzzOrder) ? data.buzzOrder : [];
-      if (order.some((o) => o.group === myGroup)) return; // sudah pernah angkat tangan di soal ini
+      const alreadyQueued = order.some((o) => o.group === myGroup);
+      // BUGFIX: dulu kelompok yang sudah pernah masuk buzzOrder (termasuk yang sudah dinilai
+      // salah lalu diberi kesempatan retry oleh guru) TIDAK PERNAH bisa angkat tangan lagi di HP
+      // asli — beda dengan panel guru yang sudah dibetulkan mengizinkan retry. Sekarang dicek
+      // sama seperti di panel guru: kalau grup sudah pernah dinilai salah (triedGroups) DAN guru
+      // sedang membuka kesempatan lagi (openToAll), entri lama dihapus & ditambahkan ulang.
+      const triedGroups = Array.isArray(data.triedGroups) ? data.triedGroups : [];
+      const canRetry = triedGroups.includes(myGroup) && !!data.openToAll;
+      if (alreadyQueued && !canRetry) return; // masih menunggu giliran / belum boleh coba lagi
       const name = (data.groups && data.groups[myGroup] && data.groups[myGroup].name) || `Kelompok ${myGroup}`;
-      tx.set(ref, { buzzOrder: [...order, { group: myGroup, name }] }, { merge: true });
+      const newOrder = alreadyQueued
+        ? [...order.filter((o) => o.group !== myGroup), { group: myGroup, name }]
+        : [...order, { group: myGroup, name }];
+      tx.set(ref, { buzzOrder: newOrder }, { merge: true });
     })).catch(() => { /* biarkan diam — status ditentukan lewat snapshot room.buzzOrder */ }).finally(() => setBusy(false));
   }
 
@@ -977,12 +1002,18 @@ function StudentJoinScreen({ roomCode }) {
   // Sekarang dibaca dari activeTurnGroup yang disiarkan ulang oleh guru setiap kali giliran
   // berpindah (termasuk setelah kelompok di depan salah jawab).
   const isMyTurn = room.activeTurnGroup === myGroup;
-  const canBuzz = !isManualMode && !!roundId && myPosition === null;
+  // BUGFIX: dulu canBuzz cuma true kalau belum pernah tercatat di buzzOrder sama sekali (myPosition
+  // === null), jadi tombol ANGKAT TANGAN di HP asli terkunci permanen begitu kelompok pernah
+  // mencoba — walau guru sudah membuka kesempatan retry (openToAll, lihat sinkronisasi di atas).
+  const triedGroups = Array.isArray(room.triedGroups) ? room.triedGroups : [];
+  const canRetry = triedGroups.includes(myGroup) && !!room.openToAll;
+  const canBuzz = !isManualMode && !!roundId && (myPosition === null || canRetry);
 
   let title = "Menunggu soal dari guru…";
   let sub = "Dengarkan petunjuknya dulu.";
   if (isManualMode) { title = "Mode Manual"; sub = "Angkat tangan langsung di kelas — guru yang menilai siapa duluan, tombol ini tidak dipakai."; }
   else if (isMyTurn) { title = "Giliranmu sekarang! 🎉"; sub = "Maju ke depan, jawab pertanyaannya."; }
+  else if (canRetry) { title = "Boleh coba lagi!"; sub = "Tidak ada yang menjawab — angkat tangan lagi kalau mau coba."; }
   else if (myPosition) { title = `Kamu urutan ke-${myPosition}`; sub = "Tunggu giliranmu kalau yang di depan salah."; }
   else if (roundId) { title = "Soal aktif — siap?"; sub = "Tekan tombol kalau sudah tahu jawabannya."; }
 
@@ -997,7 +1028,7 @@ function StudentJoinScreen({ roomCode }) {
           width: 180, height: 180, borderRadius: "50%", border: "none", cursor: canBuzz ? "pointer" : "default",
           background: isMyTurn ? "#3FBFAD" : canBuzz ? GROUP_COLORS[myGroup - 1] : t.panel2, color: "#101B34",
           fontWeight: 700, fontSize: 16, opacity: canBuzz || myPosition ? 1 : 0.45,
-        }}>{isMyTurn ? <span style={{ fontSize: 46, lineHeight: 1, color: "inherit" }}>✅</span> : myPosition ? `#${myPosition}` : "ANGKAT\nTANGAN"}</button>
+        }}>{isMyTurn ? <span style={{ fontSize: 46, lineHeight: 1, color: "inherit" }}>✅</span> : canRetry ? "ANGKAT\nTANGAN" : myPosition ? `#${myPosition}` : "ANGKAT\nTANGAN"}</button>
       )}
 
       {/* FIX: dulu papan skor cuma muncul di "Pratinjau HP Siswa" milik guru (karena modal itu
@@ -1434,7 +1465,6 @@ function TebakCariKataGame({ onBack, teacher }) {
   const [roomCode, setRoomCode] = useState(makeRoomCode());
   const [projectorMode, setProjectorMode] = useState(false);
   const [controlsOpen, setControlsOpen] = useState(true);
-  const [phonePreview, setPhonePreview] = useState(null); // group number or null
   const [qrOpen, setQrOpen] = useState(false);
   const [bulkAddOpen, setBulkAddOpen] = useState(false);
   const [joinedGroups, setJoinedGroups] = useState({});
@@ -1471,13 +1501,17 @@ function TebakCariKataGame({ onBack, teacher }) {
   const [queue, setQueue] = useState([]);
   const [foundMap, setFoundMap] = useState({});
   const [clueRevealed, setClueRevealed] = useState(false);
+  // Overlay teks petunjuk besar di tengah layar — HANYA dipakai saat mode audio "Nonaktif".
+  // Tampil singkat (3 detik) lalu hilang sendiri, supaya beda jelas dari mode "Audio" (yang
+  // hanya memutar suara, tanpa teks apa pun yang tertinggal di layar).
+  const [hintOverlayVisible, setHintOverlayVisible] = useState(false);
+  const hintOverlayTimerRef = useRef(null);
   const [activeGroup, setActiveGroup] = useState(null);
   const [selStart, setSelStart] = useState(null);
   const [flash, setFlash] = useState(null);
   const [speaking, setSpeaking] = useState(false);
   const [triedSet, setTriedSet] = useState(new Set());
   const [openToAll, setOpenToAll] = useState(false);
-  const [justWonPulse, setJustWonPulse] = useState(false);
   const [confetti, setConfetti] = useState(null);
   const confettiTimerRef = useRef(null);
   const [autoNext, setAutoNext] = useState(null); // detik tersisa sebelum otomatis pindah babak, atau null kalau tidak aktif
@@ -1797,14 +1831,6 @@ function TebakCariKataGame({ onBack, teacher }) {
   }
 
   useEffect(() => () => { clearRetryTimer(); if (confettiTimerRef.current) clearTimeout(confettiTimerRef.current); if (autoNextIntervalRef.current) clearInterval(autoNextIntervalRef.current); }, []);
-  useEffect(() => {
-    if (activeGroup && activeGroup === phonePreview) {
-      setJustWonPulse(true);
-      if (typeof navigator !== "undefined" && navigator.vibrate) navigator.vibrate(200);
-      const tm = setTimeout(() => setJustWonPulse(false), 900);
-      return () => clearTimeout(tm);
-    }
-  }, [activeGroup, phonePreview]);
 
   const currentWord = queue.length > 0 ? babak.words.find((w) => w.id === queue[0]) : null;
   const totalWords = queue.length + Object.keys(foundMap).length;
@@ -1843,6 +1869,19 @@ function TebakCariKataGame({ onBack, teacher }) {
     db.collection("rooms").doc(roomCode).set({ scores }, { merge: true }).catch(() => {});
   }, [stage, roomCode, scores]);
 
+  // BUGFIX: triedSet & openToAll dulu murni state lokal guru — dipakai buat mengunci/membuka
+  // tombol di panel guru & "Pratinjau HP Siswa", tapi TIDAK PERNAH dikirim ke Firestore. Akibatnya
+  // HP siswa ASLI (StudentJoinScreen, bukan pratinjau) tidak pernah tahu kapan kelompoknya boleh
+  // angkat tangan lagi setelah salah — tombol ANGKAT TANGAN di HP mereka jadi terkunci permanen
+  // untuk soal itu walau guru sudah membuka kesempatan retry. Disiarkan di sini supaya pressBuzz()
+  // di HP siswa bisa membaca status yang sama persis dengan yang dipakai panel guru.
+  useEffect(() => {
+    if (stage !== "play") return;
+    db.collection("rooms").doc(roomCode).set({
+      triedGroups: Array.from(triedSet), openToAll,
+    }, { merge: true }).catch(() => {});
+  }, [stage, roomCode, triedSet, openToAll]);
+
   // Dengarkan kelompok yang join & angkat tangan dari HP siswa, tambahkan ke urutan lokal
   // (buzzOrder-nya diabaikan kalau mode sedang Manual — di mode itu HP siswa memang dikunci,
   // tapi status "sudah join" tetap dipantau terus supaya titik hijau di tombol kelompok akurat)
@@ -1874,16 +1913,34 @@ function TebakCariKataGame({ onBack, teacher }) {
     clearRetryTimer();
     if (audioMode !== "guru") return;
     retryTimerRef.current = setTimeout(() => {
-      if (activeGroup !== null) return;
+      // BUGFIX: sebelumnya cek ini pakai state `activeGroup` langsung, yang di dalam closure
+      // setTimeout ini selalu bernilai kelompok yang BARU SAJA menjawab salah (nilai lama dari
+      // render saat scheduleRetry() dipanggil), bukan status terkini — akibatnya kondisi ini
+      // SELALU true dan retry (putar ulang audio + buka kesempatan lagi) tidak pernah jalan.
+      // activeGroupRef.current selalu disinkron ke nilai terbaru (lihat useEffect di atas),
+      // jadi aman dibaca di dalam callback async seperti ini.
+      if (activeGroupRef.current !== null) return;
       const src = currentWord?.audioUrl;
       if (src && audioRef.current) { audioRef.current.currentTime = 0; audioRef.current.play(); setSpeaking(true); }
       if (babakId !== 1) setOpenToAll(true);
     }, 5000);
   }
 
+  function clearHintOverlayTimer() { if (hintOverlayTimerRef.current) { clearTimeout(hintOverlayTimerRef.current); hintOverlayTimerRef.current = null; } }
+
   function playClue() {
     if (!currentWord) return;
-    if (audioMode === "off" || !currentWord.audioUrl) { setClueRevealed(true); return; }
+    // Mode Nonaktif: TIDAK ada audio yang diputar — teks petunjuk ditampilkan besar di
+    // tengah layar selama 3 detik saja lalu hilang otomatis (lihat hintOverlayVisible).
+    if (audioMode === "off" || !currentWord.audioUrl) {
+      setClueRevealed(true);
+      clearHintOverlayTimer();
+      setHintOverlayVisible(true);
+      hintOverlayTimerRef.current = setTimeout(() => setHintOverlayVisible(false), 3000);
+      return;
+    }
+    // Mode Audio: HANYA suara yang diputar — sengaja tidak ada teks petunjuk yang ditampilkan
+    // sama sekali (lihat renderControlPanel, teks "..." di bawah tombol sudah dihapus).
     setClueRevealed(true);
     const el = audioRef.current;
     el.src = currentWord.audioUrl; el.currentTime = 0; el.play(); setSpeaking(true);
@@ -1893,8 +1950,20 @@ function TebakCariKataGame({ onBack, teacher }) {
 
   function buzz(group) {
     if (!currentWord || !clueRevealedRef.current || !isEligible(group)) return;
-    if (buzzOrderRef.current.some((o) => o.group === group)) return; // sudah pernah angkat tangan di soal ini
-    const newOrder = [...buzzOrderRef.current, { group }];
+    const alreadyQueued = buzzOrderRef.current.some((o) => o.group === group);
+    // BUGFIX: dulu grup yang sudah pernah masuk buzzOrder (baik sedang antre MAUPUN sudah pernah
+    // salah & selesai) dikunci PERMANEN untuk soal ini — walau isEligible() di atas sudah bilang
+    // grup ini boleh coba lagi (babak≠1 & openToAll aktif setelah 5 detik tidak ada yang jawab).
+    // Sekarang: kalau grup memang sedang MENUNGGU giliran (belum pernah dinilai salah/benar),
+    // tetap diblokir seperti biasa — tidak ada gunanya angkat tangan dua kali sebelum gilirannya.
+    // Tapi kalau grup ini sudah PERNAH DINILAI SALAH (ada di triedSet) dan retry sedang diizinkan,
+    // entri lamanya dihapus dulu lalu ditambahkan ulang di akhir antrean — supaya benar-benar bisa
+    // "angkat tangan lagi" sesuai yang dijanjikan di teks UI.
+    const isRetry = triedSetRef.current.has(group) && openToAllRef.current;
+    if (alreadyQueued && !isRetry) return;
+    const newOrder = alreadyQueued
+      ? [...buzzOrderRef.current.filter((o) => o.group !== group), { group }]
+      : [...buzzOrderRef.current, { group }];
     buzzOrderRef.current = newOrder;
     setBuzzOrder(newOrder);
     if (activeGroupRef.current === null) {
@@ -1907,6 +1976,19 @@ function TebakCariKataGame({ onBack, teacher }) {
   }
 
   function releaseTurn() { activeGroupRef.current = null; setActiveGroup(null); setSelStart(null); }
+
+  // BUGFIX: dulu tombol Digital/Manual cuma panggil releaseTurn() (batalkan giliran AKTIF saja).
+  // Tapi kalau ganti mode DI TENGAH soal yang sudah ada kelompok lain yang sempat angkat tangan
+  // lebih dulu (buzzOrder tidak kosong), kelompok-kelompok itu tetap tersimpan di buzzOrder —
+  // tombol mereka jadi TERKUNCI PERMANEN ("sudah pernah angkat tangan") untuk sisa soal ini,
+  // padahal giliran mereka baru saja dibatalkan paksa oleh pergantian mode, bukan karena mereka
+  // menjawab salah. triedSet (kelompok yang BENAR-BENAR sudah menjawab salah) sengaja TIDAK ikut
+  // direset di sini — aturan "tidak bisa mencoba lagi" untuk jawaban yang memang salah tetap berlaku.
+  function switchInputMode(newMode) {
+    setMode(newMode);
+    activeGroupRef.current = null; setActiveGroup(null); setSelStart(null);
+    buzzOrderRef.current = []; setBuzzOrder([]);
+  }
 
   function triggerCelebration(group) {
     const accent = GROUP_COLORS[(group - 1 + GROUP_COLORS.length) % GROUP_COLORS.length];
@@ -1923,6 +2005,7 @@ function TebakCariKataGame({ onBack, teacher }) {
     setBuzzOrder([]);
     buzzOrderRef.current = []; triedSetRef.current = new Set(); openToAllRef.current = false;
     if (audioRef.current) audioRef.current.pause();
+    clearHintOverlayTimer(); setHintOverlayVisible(false);
   }
   function skipWord() {
     if (!currentWord) return;
@@ -2264,13 +2347,27 @@ function TebakCariKataGame({ onBack, teacher }) {
     </div>
   ); }
 
+  // Overlay teks petunjuk besar di tengah layar — HANYA muncul saat mode audio "Nonaktif",
+  // tampil 3 detik lalu hilang sendiri (lihat playClue & hintOverlayTimerRef). Di mode "Audio"
+  // overlay ini tidak pernah dipakai sama sekali, supaya benar-benar cuma suara yang diputar.
+  function renderHintOverlay() {
+    if (!hintOverlayVisible || audioMode !== "off" || !currentWord) return null;
+    return (
+      <div style={{ position: "fixed", inset: 0, zIndex: 90, display: "flex", alignItems: "center", justifyContent: "center", padding: 24, boxSizing: "border-box", pointerEvents: "none" }}>
+        <div style={{ background: t.panel, color: t.text, borderRadius: 20, padding: "36px 48px", maxWidth: "82%", textAlign: "center", boxShadow: "0 12px 44px rgba(0,0,0,.35)", fontSize: "clamp(20px, 3.4vw, 34px)", fontWeight: 700, lineHeight: 1.45 }}>
+          "{currentWord.clue}"
+        </div>
+      </div>
+    );
+  }
+
   function renderBuzzIndicator({ big } = {}) { return (
     <div style={{ textAlign: "center", padding: big ? "18px 0" : "10px 0", borderRadius: 14, background: activeGroup ? GROUP_COLORS[activeGroup - 1] : t.panel, color: activeGroup ? "#101B34" : t.dim, fontWeight: 700, fontSize: big ? 22 : 14, transition: "background .2s ease" }}>
       {activeGroup ? `Kelompok ${activeGroup} mengangkat tangan duluan!` : "Menunggu ada yang mengangkat tangan…"}
     </div>
   ); }
 
-  function renderControlPanel({ hideScoreboard } = {}) { return (
+  function renderControlPanel({ hideScoreboard, hideBuzzOrder } = {}) { return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       {puzzle && (
         <div style={{ background: t.panel, borderRadius: 14, padding: "12px 18px", boxShadow: t.shadowSm, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
@@ -2309,7 +2406,13 @@ function TebakCariKataGame({ onBack, teacher }) {
             {audioMode === "guru" && currentWord.audioUrl ? (speaking ? "Memutar…" : "Putar Petunjuk") : "Tampilkan teks (dibacakan guru)"}
           </button>
         )}
-        {clueRevealed && currentWord && <div style={{ marginTop: 12, fontSize: 14, lineHeight: 1.5, color: t.text }}>"{currentWord.clue}"</div>}
+        {/* Sengaja TIDAK ada teks petunjuk permanen di sini lagi, di kedua mode:
+            - Mode Audio: hanya suara yang diputar, tidak ada teks apa pun yang tertinggal di layar.
+            - Mode Nonaktif: teksnya tampil sebagai overlay besar di tengah layar selama 3 detik
+              saja (lihat hintOverlayVisible), lalu hilang sendiri — bukan teks statis di panel ini. */}
+        {audioMode === "off" && clueRevealed && !hintOverlayVisible && currentWord && (
+          <div style={{ marginTop: 10, fontSize: 11.5, color: t.faint }}>Teks petunjuk sudah ditampilkan (3 detik) di tengah layar. Klik lagi tombol di atas untuk menampilkannya ulang.</div>
+        )}
         {audioMode === "guru" && <div style={{ marginTop: 10, fontSize: 11.5, color: t.faint }}>Kalau tidak ada yang angkat tangan 5 detik setelah audio selesai, audio diputar ulang otomatis.</div>}
       </div>
 
@@ -2335,7 +2438,11 @@ function TebakCariKataGame({ onBack, teacher }) {
             const eligible = isEligible(g);
             const buzzPos = buzzOrder.findIndex((o) => o.group === g);
             const alreadyBuzzed = buzzPos >= 0;
-            const locked = !currentWord || !clueRevealed || !eligible || alreadyBuzzed;
+            // BUGFIX: alreadyBuzzed dulu mengunci tombol ini SELAMANYA untuk soal ini, walau grup
+            // sudah pernah salah & retry sedang diizinkan (openToAll). Sekarang kunci "sudah pernah
+            // angkat tangan" cuma berlaku kalau grup itu memang belum boleh mencoba lagi.
+            const canRetryNow = triedSet.has(g) && openToAll;
+            const locked = !currentWord || !clueRevealed || !eligible || (alreadyBuzzed && !canRetryNow);
             return (
               <button key={g} className="grp-btn" onClick={() => buzz(g)} disabled={locked}
                 style={{ position: "relative", padding: "12px 0", borderRadius: 10, border: "none", cursor: locked ? "default" : "pointer", background: isActive ? GROUP_COLORS[g - 1] : t.panel2, color: isActive ? "#0D1730" : t.text, fontWeight: 700, fontSize: 14, opacity: locked && !isActive ? 0.4 : 1, boxShadow: isActive ? `0 0 0 2px ${GROUP_COLORS[g - 1]}` : "none" }}>
@@ -2346,7 +2453,7 @@ function TebakCariKataGame({ onBack, teacher }) {
             );
           })}
         </div>
-        {buzzOrder.length > 0 && (
+        {!hideBuzzOrder && buzzOrder.length > 0 && (
           <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 4 }}>
             <div style={{ fontSize: 11.5, color: t.faint }}>Urutan angkat tangan:</div>
             {buzzOrder.map((o, i) => (
@@ -2363,60 +2470,10 @@ function TebakCariKataGame({ onBack, teacher }) {
       </div>
 
       {!hideScoreboard && renderScoreboard()}
-
-      <button onClick={() => setPhonePreview(1)} style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "center", background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, borderRadius: 10, padding: "10px 12px", cursor: "pointer", fontSize: 13 }}>
-        <span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>📱</span> Pratinjau HP Siswa
-      </button>
     </div>
   );
 
-  /* ---------------- Phone preview modal ---------------- */
-  const PhonePreview = () => {
-    const g = phonePreview;
-    const eligible = isEligible(g);
-    const won = activeGroup === g;
-    const myPos = buzzOrder.findIndex((o) => o.group === g);
-    const alreadyBuzzed = myPos >= 0;
-    const lost = alreadyBuzzed && !won;
-    let title = "Menunggu ronde berikutnya…";
-    let sub = "Dengarkan petunjuk dari gurumu.";
-    let btnDisabled = true;
-    if (currentWord && !clueRevealed) { title = "Menunggu petunjuk…"; sub = "Guru belum menampilkan soal ini."; }
-    else if (currentWord) {
-      if (mode === "manual") { title = "Angkat tanganmu langsung"; sub = "Guru menilai kelompok mana yang paling cepat."; }
-      else if (won) { title = "Giliranmu!"; sub = "Maju ke depan, tunjuk & bacakan katanya."; }
-      else if (lost) { title = `Kamu urutan ke-${myPos + 1}`; sub = "Tunggu giliranmu kalau yang di depan salah."; }
-      else if (!eligible) { title = "Kelompokmu sudah mencoba"; sub = "Tunggu kelompok lain dulu."; }
-      else { title = "Ronde berjalan"; sub = "Sudah tahu jawabannya? Angkat tangan sekarang!"; btnDisabled = false; }
-    }
-    return (
-      <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50 }} onClick={() => setPhonePreview(null)}>
-        <div onClick={(e) => e.stopPropagation()} style={{ width: "min(300px, 88vw)", background: t.modalBg, borderRadius: 32, padding: "20px 16px", boxShadow: "0 20px 60px rgba(0,0,0,.5)", position: "relative", transform: justWonPulse ? "scale(1.03)" : "scale(1)", transition: "transform .2s ease" }}>
-          <button onClick={() => setPhonePreview(null)} style={{ position: "absolute", top: 10, right: 12, background: "none", border: "none", color: t.dim, cursor: "pointer" }}><span style={{ fontSize: 18, lineHeight: 1, color: 'inherit' }}>✕</span></button>
-          <div style={{ display: "flex", justifyContent: "center", gap: 6, marginBottom: 14 }}>
-            {GROUP_NAMES.map((n) => (
-              <button key={n} onClick={() => setPhonePreview(n)} style={{ width: 26, height: 26, borderRadius: 7, border: "none", cursor: "pointer", background: n === g ? GROUP_COLORS[n - 1] : t.panel2, color: n === g ? "#101B34" : t.text, fontSize: 11, fontWeight: 700 }}>{n}</button>
-            ))}
-          </div>
-          <div style={{ textAlign: "center", fontSize: 12, color: t.dim, marginBottom: 2 }}>Layar HP — Kelompok {g}</div>
-          <div style={{ background: t.panel, borderRadius: 20, padding: 22, minHeight: 260, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 14, animation: justWonPulse ? "wonPulse .6s ease" : "none" }}>
-            <div style={{ width: 14, height: 14, borderRadius: 5, background: GROUP_COLORS[g - 1] }} />
-            <div className="sgt" style={{ fontSize: 18, fontWeight: 700, textAlign: "center", color: won ? GROUP_COLORS[g - 1] : t.text }}>{title}</div>
-            <div style={{ fontSize: 12.5, color: t.dim, textAlign: "center" }}>{sub}</div>
-            {mode === "digital" && (
-              <button disabled={btnDisabled || alreadyBuzzed} onClick={() => buzz(g)} style={{
-                width: 140, height: 140, borderRadius: "50%", border: "none", cursor: (btnDisabled || alreadyBuzzed) ? "default" : "pointer",
-                background: won ? GROUP_COLORS[g - 1] : (btnDisabled || alreadyBuzzed) ? t.panel2 : GROUP_COLORS[g - 1],
-                color: "#101B34", fontWeight: 700, fontSize: 15, opacity: (btnDisabled || alreadyBuzzed) && !won ? 0.35 : 1,
-                display: "flex", alignItems: "center", justifyContent: "center", textAlign: "center",
-              }}>{won ? <span style={{ fontSize: 40, lineHeight: 1, color: 'inherit' }}>✅</span> : alreadyBuzzed ? `#${myPos + 1}` : "ANGKAT\nTANGAN"}</button>
-            )}
-          </div>
-          <div style={{ marginTop: 12 }}>{renderScoreboard({ compact: true, highlight: g })}</div>
-        </div>
-      </div>
-    );
-  };
+
 
   /* ---------------- Modal: Simpan & Jeda (nama kelas) ---------------- */
   const SaveNameModal = () => (
@@ -2690,9 +2747,9 @@ function TebakCariKataGame({ onBack, teacher }) {
         <div style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: t.bg, color: t.text, height: "100vh", width: "100vw", boxSizing: "border-box", overflow: "hidden", display: "grid", gridTemplateColumns: "220px minmax(0,1fr) 320px", gap: 16, padding: "58px 16px 16px" }}>
           <style>{fontImport}</style>
           <audio ref={audioRef} style={{ display: "none" }} />
-          {phonePreview && <PhonePreview />}
           {saveNameOpen && <SaveNameModal />}
           <CelebrationOverlay particles={confetti} />
+          {renderHintOverlay()}
           {topOverlayButtons}
 
           <div style={{ overflowY: "auto", minHeight: 0, display: "flex", flexDirection: "column", gap: 12 }}>
@@ -2729,7 +2786,8 @@ function TebakCariKataGame({ onBack, teacher }) {
 
           <div style={{ overflowY: "auto", minHeight: 0 }}>
             <div style={{ fontSize: 11, color: t.faint, marginBottom: 8, textAlign: "center" }}>Panel ini hanya guru yang lihat</div>
-            {renderControlPanel({ hideScoreboard: true })}
+            {/* hideBuzzOrder: daftar urutan angkat tangan sudah ditampilkan di kolom kiri (atas), lihat di atas */}
+            {renderControlPanel({ hideScoreboard: true, hideBuzzOrder: true })}
           </div>
         </div>
       );
@@ -2739,9 +2797,9 @@ function TebakCariKataGame({ onBack, teacher }) {
       <div style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: t.bg, color: t.text, minHeight: "100vh", boxSizing: "border-box", position: "relative", overflowX: "hidden" }}>
         <style>{fontImport}</style>
         <audio ref={audioRef} style={{ display: "none" }} />
-        {phonePreview && <PhonePreview />}
         {saveNameOpen && <SaveNameModal />}
         <CelebrationOverlay particles={confetti} />
+        {renderHintOverlay()}
         {topOverlayButtons}
 
         <div style={{ maxWidth: "100%", margin: "0 auto", padding: "28px 20px 100px", boxSizing: "border-box" }}>
@@ -2769,7 +2827,8 @@ function TebakCariKataGame({ onBack, teacher }) {
         {controlsOpen && (
           <div style={{ position: "fixed", top: 0, right: 0, bottom: 0, left: 0, padding: "16px 16px 76px", overflowY: "auto", background: t.modalBg, boxShadow: "-8px 0 30px rgba(0,0,0,.3)", zIndex: 25, boxSizing: "border-box" }}>
             <div style={{ fontSize: 12, color: t.faint, marginBottom: 10, textAlign: "center" }}>Panel ini hanya guru yang lihat</div>
-            {renderControlPanel()}
+            {/* hideBuzzOrder: daftar urutan angkat tangan sudah ditampilkan di atas papan, lihat di atas */}
+            {renderControlPanel({ hideBuzzOrder: true })}
           </div>
         )}
       </div>
@@ -2781,9 +2840,9 @@ function TebakCariKataGame({ onBack, teacher }) {
     <div className="app-screen" style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: t.bg, color: t.text, minHeight: "100vh", padding: 28, boxSizing: "border-box" }}>
       <style>{fontImport}</style>
       <audio ref={audioRef} style={{ display: "none" }} />
-      {phonePreview && <PhonePreview />}
       {saveNameOpen && <SaveNameModal />}
       <CelebrationOverlay particles={confetti} />
+      {renderHintOverlay()}
       <QrJoinModal open={qrOpen} onClose={() => setQrOpen(false)} roomCode={roomCode} joinedCount={Object.keys(joinedGroups).length} />
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 16, marginBottom: 14 }}>
@@ -2839,8 +2898,8 @@ function TebakCariKataGame({ onBack, teacher }) {
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
         <span style={{ fontSize: 13, color: t.dim }}>Mode angkat tangan:</span>
         <div style={{ display: "flex", background: t.panel, borderRadius: 10, padding: 4 }}>
-          <button onClick={() => { setMode("digital"); releaseTurn(); }} style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 14px", borderRadius: 7, border: "none", cursor: "pointer", background: mode === "digital" ? "#3FBFAD" : "transparent", color: mode === "digital" ? "#0D1730" : t.text, fontWeight: 600, fontSize: 13 }}><span style={{ fontSize: 14, lineHeight: 1, color: 'inherit' }}>📻</span> Digital</button>
-          <button onClick={() => { setMode("manual"); releaseTurn(); }} style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 14px", borderRadius: 7, border: "none", cursor: "pointer", background: mode === "manual" ? "#3FBFAD" : "transparent", color: mode === "manual" ? "#0D1730" : t.text, fontWeight: 600, fontSize: 13 }}><span style={{ fontSize: 14, lineHeight: 1, color: 'inherit' }}>✋</span> Manual</button>
+          <button onClick={() => switchInputMode("digital")} style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 14px", borderRadius: 7, border: "none", cursor: "pointer", background: mode === "digital" ? "#3FBFAD" : "transparent", color: mode === "digital" ? "#0D1730" : t.text, fontWeight: 600, fontSize: 13 }}><span style={{ fontSize: 14, lineHeight: 1, color: 'inherit' }}>📻</span> Digital</button>
+          <button onClick={() => switchInputMode("manual")} style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 14px", borderRadius: 7, border: "none", cursor: "pointer", background: mode === "manual" ? "#3FBFAD" : "transparent", color: mode === "manual" ? "#0D1730" : t.text, fontWeight: 600, fontSize: 13 }}><span style={{ fontSize: 14, lineHeight: 1, color: 'inherit' }}>✋</span> Manual</button>
         </div>
         <span style={{ fontSize: 12.5, color: t.faint }}>{mode === "digital" ? "Kelompok pencet tombol duluan untuk mengunci giliran." : "Guru klik kelompok sesuai urutan angkat tangan di kelas — bisa klik beberapa kelompok berurutan sekaligus."}</span>
       </div>
