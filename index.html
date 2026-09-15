@@ -2658,40 +2658,104 @@ function TebakCariKataGame({ onBack, teacher }) {
                         <button onClick={() => setBulkAddOpen(true)} style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: `1px dashed ${t.border}`, color: t.dim, borderRadius: 8, padding: "8px 14px", cursor: "pointer", fontSize: 13 }}><span style={{ fontSize: 14, lineHeight: 1, color: 'inherit' }}>📋</span> Tambah Banyak Sekaligus</button>
                       </div>
 
-                      {/* Label kolom cukup ditulis SEKALI di sini. Sebelumnya tiap baris mengulang
-                          "KATA / PETUNJUK / AUDIO" — 12 kata = 36 label, bikin halaman terasa penuh.
-                          Disembunyikan di HP karena lebar kolom tetapnya (>500px total) pasti overflow
-                          di layar sempit, dan sudah tergantikan oleh placeholder tiap input. */}
-                      {!isMobile && babak.words.length > 0 && (
-                        <div style={{ display: "flex", gap: 12, alignItems: "center", padding: "0 14px 8px", ...fieldLabelStyle }}>
-                          <span style={{ width: 24, flexShrink: 0 }} />
-                          <span style={{ width: 160, flexShrink: 0 }}>Kata (jawaban)</span>
-                          <span style={{ flex: 1, minWidth: 220 }}>Petunjuk (Bahasa Indonesia)</span>
-                          <span style={{ width: 44, textAlign: "center", flexShrink: 0 }}>Audio</span>
-                          <span style={{ width: 32, flexShrink: 0 }} />
-                        </div>
-                      )}
-
-                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                        {babak.words.map((w, idx) => (
-                          <div key={w.id} className="list-row" style={{ display: "flex", gap: 12, alignItems: "center", background: t.panel, borderRadius: 12, padding: "10px 14px", flexWrap: "wrap" }}>
-                            <div style={{ width: 24, height: 24, borderRadius: "50%", background: t.panel2, color: t.faint, fontSize: 11.5, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{idx + 1}</div>
-                            <input value={w.letters} onChange={(e) => updateWord(babakId, w.id, "letters", e.target.value)} placeholder="mis. BOTORU"
-                              style={{ width: 160, flexShrink: 0, padding: "9px 10px", borderRadius: 8, border: `1px solid ${t.border}`, background: t.panel2, color: t.text, fontSize: 13, fontWeight: 600 }} />
-                            <textarea value={w.clue} onChange={(e) => updateWord(babakId, w.id, "clue", e.target.value)} placeholder="Jelaskan kata ini dengan bahasa Indonesia" rows={1}
-                              style={{ flex: 1, minWidth: 220, padding: "9px 10px", borderRadius: 8, border: `1px solid ${t.border}`, background: t.panel2, color: t.text, fontSize: 13, resize: "vertical", fontFamily: "inherit", lineHeight: 1.45 }} />
-                            <div style={{ width: 44, display: "flex", flexDirection: "column", alignItems: "center", gap: 3, flexShrink: 0 }}>
-                              <label title={uploadingAudio[w.id] ? "Sedang mengunggah…" : w.audioUrl ? "Audio sudah diunggah — klik untuk ganti" : "Unggah audio"} style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 36, height: 36, background: t.panel2, border: `1px solid ${t.border}`, borderRadius: 8, color: uploadingAudio[w.id] ? "#F4B740" : w.audioUrl ? "#3FBFAD" : t.faint, cursor: uploadingAudio[w.id] ? "default" : "pointer", opacity: uploadingAudio[w.id] ? 0.6 : 1 }}>
-                                {uploadingAudio[w.id] ? <span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>⏳</span> : w.audioUrl ? <span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>🎵</span> : <span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>⬆</span>}
-                                <input type="file" accept="audio/*" disabled={uploadingAudio[w.id]} onChange={(e) => uploadAudio(babakId, w.id, e.target.files[0])} style={{ display: "none" }} />
-                              </label>
-                              {audioUploadError[w.id] && <div style={{ fontSize: 10, color: "#EF5B5B", textAlign: "center", lineHeight: 1.3 }}>{audioUploadError[w.id]}</div>}
-                            </div>
-                            <button onClick={() => removeWord(babakId, w.id)} title="Hapus kosakata ini" className="row-del" style={{ width: 32, height: 32, flexShrink: 0, background: "transparent", border: "none", color: t.faint, cursor: "pointer", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center" }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>🗑</span></button>
+                      {/* FIX (seperti Educaplay): kunci jawaban & papan kotak dulu jadi Section 3
+                          TERPISAH di bawah accordion ini, cuma menampilkan 1 babak lewat state
+                          global (babakId) — jadi terasa lepas dari babak yang sedang diedit.
+                          Sekarang jadi 2 kolom DI DALAM accordion tiap babak: papan di kiri,
+                          daftar kosakata (jawabannya) di kanan — sesuai babak yang sedang dibuka,
+                          jadi guru bisa lihat kosakata & hasilnya di papan tanpa scroll bolak-balik. */}
+                      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "minmax(300px, 420px) 1fr", gap: 20, alignItems: "start" }}>
+                        {/* Kolom kiri: papan kotak / kunci jawaban */}
+                        <div>
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
+                            <div className="sgt" style={{ fontSize: 12.5, fontWeight: 700, color: t.dim, textTransform: "uppercase", letterSpacing: 0.4 }}>Papan &amp; kunci jawaban</div>
                           </div>
-                        ))}
+                          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+                            <button onClick={() => setShowAnswerKey((s) => !s)} style={{ display: "flex", alignItems: "center", gap: 6, background: showAnswerKey ? "#F4B740" : t.panel, color: showAnswerKey ? "#101B34" : t.text, border: "none", borderRadius: 8, padding: "7px 12px", cursor: "pointer", fontSize: 12.5, fontWeight: 600 }}>
+                              <span style={{ fontSize: 13, lineHeight: 1, color: "inherit" }}>{showAnswerKey ? "🙈" : "👁"}</span> {showAnswerKey ? "Sembunyikan Kunci" : "Tampilkan Kunci"}
+                            </button>
+                            <button onClick={shufflePuzzlePreview} disabled={!babakWordsSig} style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: "none", color: t.text, borderRadius: 8, padding: "7px 12px", cursor: babakWordsSig ? "pointer" : "default", fontSize: 12.5, fontWeight: 600, opacity: babakWordsSig ? 1 : 0.5 }}>
+                              <span style={{ fontSize: 13, lineHeight: 1, color: "inherit" }}>🔀</span> Acak Ulang
+                            </button>
+                          </div>
+
+                          {!puzzlePreview ? (
+                            <div style={{ padding: 20, color: t.dim, fontSize: 13, textAlign: "center", background: t.panel2, borderRadius: 12 }}>
+                              {/* FIX: puzzlePreviewEntry.puzzle === null berarti kosakata sudah diisi tapi grid
+                                  gagal dibangun (bukan sekadar belum diisi) — beri pesan & solusi yang berbeda. */}
+                              {puzzlePreviewEntry && puzzlePreviewEntry.signature === babakWordsSig && puzzlePreviewEntry.puzzle === null
+                                ? `Papan gagal disusun — coba kurangi jumlah kata atau perpendek beberapa kata, lalu klik "Acak Ulang".`
+                                : `Isi kosakata di samping dulu untuk melihat pratinjau papan.`}
+                            </div>
+                          ) : (
+                            <>
+                              <div style={{ background: t.panel2, borderRadius: 12, padding: 10, boxSizing: "border-box" }}>
+                                <svg viewBox={`0 0 ${puzzlePreview.size} ${puzzlePreview.size}`} style={{ width: "100%", height: "auto", display: "block" }}>
+                                  {answerKeySegments.map((seg) => (
+                                    <line key={seg.id} x1={seg.x1} y1={seg.y1} x2={seg.x2} y2={seg.y2}
+                                      stroke={seg.color} strokeWidth={0.62} strokeLinecap="round" opacity={0.55} />
+                                  ))}
+                                  {puzzlePreview.grid.map((row, r) => row.map((letter, c) => (
+                                    <text key={cellKey(r, c)} x={c + 0.5} y={r + 0.5} textAnchor="middle" dominantBaseline="central"
+                                      fontSize={0.44} fontWeight={700} fill={t.cellText} style={{ fontFamily: "'Work Sans', system-ui, sans-serif" }}>{letter}</text>
+                                  )))}
+                                </svg>
+                              </div>
+                              <div style={{ fontSize: 11, color: t.faint, marginTop: 8, lineHeight: 1.5 }}>
+                                Papan ini persis yang dipakai saat "Mulai Permainan" — bukan diacak ulang otomatis.
+                              </div>
+                              {showAnswerKey && (
+                                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 10 }}>
+                                  {babak.words.filter((w) => w.letters.trim()).map((w) => (
+                                    <div key={w.id} style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel2, borderRadius: 8, padding: "4px 9px" }}>
+                                      <span style={{ width: 9, height: 9, borderRadius: 3, background: answerKeyColorByWordId[w.id], flexShrink: 0 }} />
+                                      <span style={{ fontSize: 11.5, fontWeight: 600 }}>{w.letters}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </>
+                          )}
+                        </div>
+
+                        {/* Kolom kanan: daftar kosakata (kata, petunjuk, audio) */}
+                        <div>
+                          {/* Label kolom cukup ditulis SEKALI di sini. Sebelumnya tiap baris mengulang
+                              "KATA / PETUNJUK / AUDIO" — 12 kata = 36 label, bikin halaman terasa penuh.
+                              Disembunyikan di HP karena lebar kolom tetapnya (>500px total) pasti overflow
+                              di layar sempit, dan sudah tergantikan oleh placeholder tiap input. */}
+                          {!isMobile && babak.words.length > 0 && (
+                            <div style={{ display: "flex", gap: 12, alignItems: "center", padding: "0 14px 8px", ...fieldLabelStyle }}>
+                              <span style={{ width: 24, flexShrink: 0 }} />
+                              <span style={{ width: 160, flexShrink: 0 }}>Kata (jawaban)</span>
+                              <span style={{ flex: 1, minWidth: 220 }}>Petunjuk (Bahasa Indonesia)</span>
+                              <span style={{ width: 44, textAlign: "center", flexShrink: 0 }}>Audio</span>
+                              <span style={{ width: 32, flexShrink: 0 }} />
+                            </div>
+                          )}
+
+                          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                            {babak.words.map((w, idx) => (
+                              <div key={w.id} className="list-row" style={{ display: "flex", gap: 12, alignItems: "center", background: t.panel, borderRadius: 12, padding: "10px 14px", flexWrap: "wrap" }}>
+                                <div style={{ width: 24, height: 24, borderRadius: "50%", background: t.panel2, color: t.faint, fontSize: 11.5, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{idx + 1}</div>
+                                <input value={w.letters} onChange={(e) => updateWord(babakId, w.id, "letters", e.target.value)} placeholder="mis. BOTORU"
+                                  style={{ width: 160, flexShrink: 0, padding: "9px 10px", borderRadius: 8, border: `1px solid ${t.border}`, background: t.panel2, color: t.text, fontSize: 13, fontWeight: 600 }} />
+                                <textarea value={w.clue} onChange={(e) => updateWord(babakId, w.id, "clue", e.target.value)} placeholder="Jelaskan kata ini dengan bahasa Indonesia" rows={1}
+                                  style={{ flex: 1, minWidth: 220, padding: "9px 10px", borderRadius: 8, border: `1px solid ${t.border}`, background: t.panel2, color: t.text, fontSize: 13, resize: "vertical", fontFamily: "inherit", lineHeight: 1.45 }} />
+                                <div style={{ width: 44, display: "flex", flexDirection: "column", alignItems: "center", gap: 3, flexShrink: 0 }}>
+                                  <label title={uploadingAudio[w.id] ? "Sedang mengunggah…" : w.audioUrl ? "Audio sudah diunggah — klik untuk ganti" : "Unggah audio"} style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 36, height: 36, background: t.panel2, border: `1px solid ${t.border}`, borderRadius: 8, color: uploadingAudio[w.id] ? "#F4B740" : w.audioUrl ? "#3FBFAD" : t.faint, cursor: uploadingAudio[w.id] ? "default" : "pointer", opacity: uploadingAudio[w.id] ? 0.6 : 1 }}>
+                                    {uploadingAudio[w.id] ? <span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>⏳</span> : w.audioUrl ? <span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>🎵</span> : <span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>⬆</span>}
+                                    <input type="file" accept="audio/*" disabled={uploadingAudio[w.id]} onChange={(e) => uploadAudio(babakId, w.id, e.target.files[0])} style={{ display: "none" }} />
+                                  </label>
+                                  {audioUploadError[w.id] && <div style={{ fontSize: 10, color: "#EF5B5B", textAlign: "center", lineHeight: 1.3 }}>{audioUploadError[w.id]}</div>}
+                                </div>
+                                <button onClick={() => removeWord(babakId, w.id)} title="Hapus kosakata ini" className="row-del" style={{ width: 32, height: 32, flexShrink: 0, background: "transparent", border: "none", color: t.faint, cursor: "pointer", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center" }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>🗑</span></button>
+                              </div>
+                            ))}
+                          </div>
+                          <button onClick={() => addWord(babakId)} style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 6, background: t.panel, border: "none", color: t.text, borderRadius: 8, padding: "9px 14px", cursor: "pointer", fontSize: 13 }}><span style={{ fontSize: 14, lineHeight: 1, color: 'inherit' }}>➕</span> Tambah Kosakata</button>
+                        </div>
                       </div>
-                      <button onClick={() => addWord(babakId)} style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 6, background: t.panel, border: "none", color: t.text, borderRadius: 8, padding: "9px 14px", cursor: "pointer", fontSize: 13 }}><span style={{ fontSize: 14, lineHeight: 1, color: 'inherit' }}>➕</span> Tambah Kosakata</button>
                     </div>
                   )}
                 </div>
@@ -2708,58 +2772,6 @@ function TebakCariKataGame({ onBack, teacher }) {
           />
         </div>
 
-
-        <div style={{ background: t.panel, borderRadius: 16, padding: "18px 20px", marginBottom: 20, boxShadow: t.shadowSm }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
-            <SectionLabel n={3} hint="— papan ini persis yang dipakai saat Mulai Permainan" faint={t.faint}>Kunci jawaban &amp; acak posisi — Babak {babakId}</SectionLabel>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <button onClick={() => setShowAnswerKey((s) => !s)} style={{ display: "flex", alignItems: "center", gap: 6, background: showAnswerKey ? "#F4B740" : t.panel2, color: showAnswerKey ? "#101B34" : t.text, border: "none", borderRadius: 8, padding: "8px 14px", cursor: "pointer", fontSize: 13, fontWeight: 600 }}>
-                <span style={{ fontSize: 14, lineHeight: 1, color: "inherit" }}>{showAnswerKey ? "🙈" : "👁"}</span> {showAnswerKey ? "Sembunyikan Kunci" : "Tampilkan Kunci Jawaban"}
-              </button>
-              <button onClick={shufflePuzzlePreview} disabled={!babakWordsSig} style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel2, border: "none", color: t.text, borderRadius: 8, padding: "8px 14px", cursor: babakWordsSig ? "pointer" : "default", fontSize: 13, fontWeight: 600, opacity: babakWordsSig ? 1 : 0.5 }}>
-                <span style={{ fontSize: 14, lineHeight: 1, color: "inherit" }}>🔀</span> Acak Ulang Posisi
-              </button>
-            </div>
-          </div>
-
-          {!puzzlePreview ? (
-            <div style={{ padding: 20, color: t.dim, fontSize: 13.5, textAlign: "center" }}>
-              {/* FIX: puzzlePreviewEntry.puzzle === null berarti kosakata sudah diisi tapi grid
-                  gagal dibangun (bukan sekadar belum diisi) — beri pesan & solusi yang berbeda. */}
-              {puzzlePreviewEntry && puzzlePreviewEntry.signature === babakWordsSig && puzzlePreviewEntry.puzzle === null
-                ? `Papan gagal disusun dari kosakata Babak ${babakId} — coba kurangi jumlah kata atau perpendek beberapa kata, lalu klik "Acak Ulang Posisi" lagi.`
-                : `Isi kosakata Babak ${babakId} dulu untuk melihat pratinjau papan.`}
-            </div>
-          ) : (
-            <>
-              <div style={{ fontSize: 12, color: t.faint, marginBottom: 10, lineHeight: 1.5 }}>
-                Susunan huruf di bawah ini yang akan dipakai persis saat "Mulai Permainan" untuk Babak {babakId} — bukan diacak ulang otomatis. Klik "Acak Ulang Posisi" kalau ingin susunan lain sebelum sesi dimulai bersama siswa.
-              </div>
-              <div style={{ background: t.panel2, borderRadius: 12, padding: 10, maxWidth: 440, margin: "0 auto", boxSizing: "border-box" }}>
-                <svg viewBox={`0 0 ${puzzlePreview.size} ${puzzlePreview.size}`} style={{ width: "100%", height: "auto", display: "block" }}>
-                  {answerKeySegments.map((seg) => (
-                    <line key={seg.id} x1={seg.x1} y1={seg.y1} x2={seg.x2} y2={seg.y2}
-                      stroke={seg.color} strokeWidth={0.62} strokeLinecap="round" opacity={0.55} />
-                  ))}
-                  {puzzlePreview.grid.map((row, r) => row.map((letter, c) => (
-                    <text key={cellKey(r, c)} x={c + 0.5} y={r + 0.5} textAnchor="middle" dominantBaseline="central"
-                      fontSize={0.44} fontWeight={700} fill={t.cellText} style={{ fontFamily: "'Work Sans', system-ui, sans-serif" }}>{letter}</text>
-                  )))}
-                </svg>
-              </div>
-              {showAnswerKey && (
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12 }}>
-                  {babak.words.filter((w) => w.letters.trim()).map((w) => (
-                    <div key={w.id} style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel2, borderRadius: 8, padding: "5px 10px" }}>
-                      <span style={{ width: 10, height: 10, borderRadius: 3, background: answerKeyColorByWordId[w.id], flexShrink: 0 }} />
-                      <span style={{ fontSize: 12, fontWeight: 600 }}>{w.letters}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </>
-          )}
-        </div>
 
         <button onClick={startGame} disabled={!canStart} style={{
           display: "flex", alignItems: "center", gap: 8, background: canStart ? "#F4B740" : t.panel2, color: canStart ? "#101B34" : t.faint,
