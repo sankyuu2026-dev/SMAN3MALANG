@@ -598,14 +598,25 @@ async function ensureUniqueRoomCode(currentCode) {
 // Karena tidak ada Cloud Functions terjadwal di setup ini, kita sapu room yang basi
 // (tidak ter-update lagi selama ROOM_STALE_MS) secara best-effort setiap kali web ini dibuka.
 const ROOM_STALE_MS = 4 * 60 * 60 * 1000; // 4 jam — sesi kelas wajar tidak akan sepanjang ini
+// BUGFIX: menghapus dokumen room TIDAK otomatis menghapus subcollection di dalamnya (gotcha umum
+// Firestore) — room Card Rush punya subcollection "cardPairs" berisi gambar kartu yang harus
+// dihapus manual dulu, kalau tidak akan jadi sampah permanen di Firestore. Dipakai bareng oleh
+// cleanupStaleRooms (di bawah) & endGame() Card Rush.
+async function deleteRoomWithSubcollections(roomRef) {
+  const cardPairs = await roomRef.collection("cardPairs").get();
+  if (!cardPairs.empty) {
+    const batch = db.batch();
+    cardPairs.docs.forEach((d) => batch.delete(d.ref));
+    await batch.commit();
+  }
+  await roomRef.delete();
+}
 function cleanupStaleRooms() {
   const cutoff = new Date(Date.now() - ROOM_STALE_MS);
   db.collection("rooms").where("updatedAt", "<", cutoff).get()
     .then((snap) => {
       if (snap.empty) return;
-      const batch = db.batch();
-      snap.docs.forEach((d) => batch.delete(d.ref));
-      return batch.commit();
+      return Promise.all(snap.docs.map((d) => deleteRoomWithSubcollections(d.ref).catch(() => {})));
     })
     .catch(() => { /* mis. sedang offline — biarkan, akan dicoba lagi lain kali web dibuka */ });
 }
@@ -744,6 +755,16 @@ const fontImport = `
   @keyframes cardRise { from { opacity:0; transform: translateY(14px) scale(.97); } to { opacity:1; transform: translateY(0) scale(1); } }
   @keyframes cardFlipIn { 0% { opacity:0; transform: perspective(1000px) rotateY(-100deg) scale(.85); } 55% { opacity:1; } 100% { opacity:1; transform: perspective(1000px) rotateY(0deg) scale(1); } }
   @keyframes headerFade { from { opacity:0; transform: translateY(-6px); } to { opacity:1; transform: translateY(0); } }
+  /* Animasi baru: kotak misteri terbuka, kartu Card Rush membalik & cocok/tidak cocok,
+     skor "melompat" saat bertambah, dan modal muncul dengan pop lembut — dipakai bareng
+     di ketiga game supaya aksi (klik, cocok, skor naik) selalu terasa "hidup". */
+  @keyframes boxPop { 0%{transform:scale(1) rotate(0);} 35%{transform:scale(1.16) rotate(-4deg);} 62%{transform:scale(.93) rotate(3deg);} 100%{transform:scale(1) rotate(0);} }
+  @keyframes modalPop { 0%{opacity:0; transform:scale(.92) translateY(8px);} 100%{opacity:1; transform:scale(1) translateY(0);} }
+  @keyframes scoreBump { 0%{transform:scale(1);} 45%{transform:scale(1.4); color:#3FBFAD;} 100%{transform:scale(1);} }
+  @keyframes matchGlow { 0%{box-shadow:0 0 0 0 rgba(63,191,173,.65);} 70%{box-shadow:0 0 0 12px rgba(63,191,173,0);} 100%{box-shadow:0 0 0 0 rgba(63,191,173,0);} }
+  @keyframes cardShakeX { 0%,100%{transform:translateX(0);} 20%{transform:translateX(-6px);} 40%{transform:translateX(6px);} 60%{transform:translateX(-4px);} 80%{transform:translateX(4px);} }
+  .modal-pop { animation: modalPop .22s cubic-bezier(.25,.9,.35,1.15) both; }
+  .score-bump { animation: scoreBump .4s ease; display: inline-block; }
   .game-card { position: relative; overflow: hidden; animation: cardFlipIn .7s cubic-bezier(.22,1,.36,1) both; transform-style: preserve-3d; backface-visibility: hidden; transition: transform .22s cubic-bezier(.22,1,.36,1), box-shadow .22s ease, border-color .22s ease; }
   .game-card::before { content: ""; position: absolute; inset: 0; opacity: 0; transition: opacity .25s ease; pointer-events: none; background: linear-gradient(160deg, var(--accent-soft, transparent) 0%, transparent 55%); }
   .game-card:hover { transform: translateY(-6px) scale(1.015); box-shadow: 0 14px 30px -10px var(--accent-shadow, rgba(28,32,51,.18)) !important; border-color: var(--accent, #E7E1D2) !important; }
@@ -789,6 +810,8 @@ function StudentJoinScreen({ roomCode }) {
   const [theme] = useState("light");
   const t = THEMES[theme];
   const [room, setRoom] = useState(undefined); // undefined = loading, null = tidak ada
+  const prevScoresRef = useRef({});
+  const [bumpedGroup, setBumpedGroup] = useState(null); // kelompok yang skornya baru saja naik, buat animasi angka "melompat"
   const [myGroup, setMyGroup] = useState(() => {
     try { return Number(sessionStorage.getItem(`join-group-${roomCode}`)) || null; } catch (e) { return null; }
   });
@@ -804,6 +827,17 @@ function StudentJoinScreen({ roomCode }) {
     );
     return () => unsub();
   }, [roomCode]);
+
+  useEffect(() => {
+    const scores = (room && room.scores) || {};
+    const prev = prevScoresRef.current;
+    const changed = GROUP_NAMES.find((g) => (scores[g] || 0) > (prev[g] || 0));
+    prevScoresRef.current = scores;
+    if (!changed) return;
+    setBumpedGroup(changed);
+    const tm = setTimeout(() => setBumpedGroup(null), 500);
+    return () => clearTimeout(tm);
+  }, [room && room.scores]);
 
   function joinGroup(g) {
     if (!room) return;
@@ -928,7 +962,7 @@ function StudentJoinScreen({ roomCode }) {
                   <span style={{ fontSize: 13, fontWeight: 600, color: g === myGroup ? "#101B34" : t.text }}>{(room.groups && room.groups[g] && room.groups[g].name) || `Kelompok ${g}`}</span>
                   {(scores[g] || 0) === leaderScore && leaderScore > 0 && <span style={{ fontSize: 14, lineHeight: 1 }}>👑</span>}
                 </div>
-                <span className="sgt" style={{ fontWeight: 700, fontSize: 14, color: g === myGroup ? "#101B34" : t.text }}>{scores[g] || 0}</span>
+                <span className={`sgt${g === bumpedGroup ? " score-bump" : ""}`} style={{ fontWeight: 700, fontSize: 14, color: g === myGroup ? "#101B34" : t.text }}>{scores[g] || 0}</span>
               </div>
             ));
           })()}
@@ -945,6 +979,22 @@ function StudentJoinScreen({ roomCode }) {
    diambil dari sub-koleksi rooms/{roomCode}/cardPairs yang
    ditulis guru saat menekan "Mulai Babak Ini".
 =========================================================== */
+// BUGFIX: dulu papan kartu diacak ulang total dari nol setiap komponen ini remount (mis. HP
+// siswa di-refresh) walau roundId-nya sama persis — appliedRoundRef balik ke null padahal
+// ronde belum ganti, jadi kartu yang sudah cocok hilang dan siswa harus mulai dari awal lagi.
+// Dua fungsi ini menyimpan/memulihkan progres (susunan kartu + status) lewat sessionStorage,
+// supaya refresh di tengah ronde tidak menghapus progres — sessionStorage otomatis kosong
+// sendiri kalau tab ditutup, jadi tidak perlu dibersihkan manual.
+function loadCardsProgress(roomCode, myGroup) {
+  try {
+    const raw = sessionStorage.getItem(`cards-progress-${roomCode}-${myGroup}`);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) { return null; }
+}
+function saveCardsProgress(roomCode, myGroup, data) {
+  try { sessionStorage.setItem(`cards-progress-${roomCode}-${myGroup}`, JSON.stringify(data)); } catch (e) {}
+}
+
 function CardsPlayArea({ roomCode, room, myGroup }) {
   const [theme] = useState("light");
   const t = THEMES[theme];
@@ -954,6 +1004,8 @@ function CardsPlayArea({ roomCode, room, myGroup }) {
   const [flipped, setFlipped] = useState([]);
   const [busy, setBusy] = useState(false);
   const [finishedSent, setFinishedSent] = useState(false);
+  const [mismatchKeys, setMismatchKeys] = useState([]); // 2 key kartu yang baru saja terbukti tidak cocok, buat animasi shake
+  const [confetti, setConfetti] = useState(null);
   const appliedRoundRef = useRef(null);
   const startAtRef = useRef(null);
 
@@ -975,6 +1027,20 @@ function CardsPlayArea({ roomCode, room, myGroup }) {
     if (!roundId || !pairsLoaded || pairs.length === 0) return;
     if (appliedRoundRef.current === roundId) return;
     appliedRoundRef.current = roundId;
+
+    // Kalau ada progres tersimpan untuk ronde yang SAMA (bukan sisa ronde lama), pulihkan itu
+    // dulu — jangan langsung mengacak papan baru. expectedCount menjaga-jaga kalau jumlah
+    // pasangan kartu berubah sejak progres itu disimpan (mis. guru edit data di tengah jalan).
+    const saved = loadCardsProgress(roomCode, myGroup);
+    const expectedCount = pairs.length * 2;
+    if (saved && saved.roundId === roundId && Array.isArray(saved.cards) && saved.cards.length === expectedCount) {
+      setCards(saved.cards);
+      setFlipped([]);
+      setFinishedSent(!!saved.finishedSent);
+      startAtRef.current = saved.startAt || Date.now();
+      return;
+    }
+
     const deck = [];
     pairs.forEach((p) => {
       deck.push({ key: p.id + "-img", pairId: p.id, kind: "image", content: p.image });
@@ -984,11 +1050,20 @@ function CardsPlayArea({ roomCode, room, myGroup }) {
       const j = Math.floor(Math.random() * (i + 1));
       [deck[i], deck[j]] = [deck[j], deck[i]];
     }
-    setCards(deck.map((c) => ({ ...c, matched: false })));
+    const shuffled = deck.map((c) => ({ ...c, matched: false }));
+    setCards(shuffled);
     setFlipped([]);
     setFinishedSent(false);
     startAtRef.current = Date.now();
-  }, [roundId, pairsLoaded, pairs]);
+    saveCardsProgress(roomCode, myGroup, { roundId, cards: shuffled, finishedSent: false, startAt: startAtRef.current });
+  }, [roundId, pairsLoaded, pairs, roomCode, myGroup]);
+
+  // Simpan progres tiap kali ada perubahan (kartu cocok, atau sudah kirim sinyal selesai) supaya
+  // refresh sesudahnya bisa dipulihkan lewat effect di atas.
+  useEffect(() => {
+    if (!roundId || cards.length === 0) return;
+    saveCardsProgress(roomCode, myGroup, { roundId, cards, finishedSent, startAt: startAtRef.current });
+  }, [cards, finishedSent, roundId, roomCode, myGroup]);
 
   function flipCard(key) {
     if (busy || finishedSent) return;
@@ -1009,7 +1084,8 @@ function CardsPlayArea({ roomCode, room, myGroup }) {
         }, 450);
       } else {
         setBusy(true);
-        setTimeout(() => { setFlipped([]); setBusy(false); }, 700);
+        setMismatchKeys([firstKey, key]);
+        setTimeout(() => { setFlipped([]); setBusy(false); setMismatchKeys([]); }, 700);
       }
     }
   }
@@ -1023,6 +1099,7 @@ function CardsPlayArea({ roomCode, room, myGroup }) {
   useEffect(() => {
     if (!allMatched || finishedSent || !roundId) return;
     setFinishedSent(true);
+    setConfetti(makeConfettiBurst(GROUP_COLORS[myGroup - 1]));
     const elapsedMs = Date.now() - (startAtRef.current || Date.now());
     const ref = db.collection("rooms").doc(roomCode);
     db.runTransaction((tx) => tx.get(ref).then((snap) => {
@@ -1057,7 +1134,8 @@ function CardsPlayArea({ roomCode, room, myGroup }) {
     return (
       <div style={centerWrap}>
         <style>{fontImport}</style>
-        <div style={{ fontSize: 46, marginBottom: 8 }}>🎉</div>
+        <CelebrationOverlay particles={confetti} />
+        <div style={{ fontSize: 46, marginBottom: 8, animation: "wonPulse .8s ease" }}>🎉</div>
         <div className="sgt" style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>Selesai!</div>
         <div style={{ fontSize: 13.5, color: t.dim }}>Semua pasangan sudah ketemu. Tunggu kelompok lain, ya.</div>
       </div>
@@ -1073,19 +1151,29 @@ function CardsPlayArea({ roomCode, room, myGroup }) {
       <div style={{ display: "grid", gridTemplateColumns: `repeat(${cols}, 1fr)`, gap: 8, maxWidth: 440, margin: "0 auto" }}>
         {cards.map((c) => {
           const isFaceUp = c.matched || flipped.includes(c.key);
+          const isShaking = mismatchKeys.includes(c.key);
           return (
             <button key={c.key} onClick={() => flipCard(c.key)} disabled={c.matched || busy} style={{
-              aspectRatio: "3 / 4", borderRadius: 10, border: "none", padding: 4,
-              background: c.matched ? "#3FBFAD55" : isFaceUp ? "#FFFFFF" : "#5DA9E9",
-              cursor: c.matched || busy ? "default" : "pointer",
-              display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden",
-              boxShadow: isFaceUp ? "0 2px 6px rgba(0,0,0,.15)" : "none",
+              aspectRatio: "3 / 4", borderRadius: 10, border: "none", padding: 0, background: "transparent",
+              cursor: c.matched || busy ? "default" : "pointer", perspective: 700,
             }}>
-              {isFaceUp ? (
-                c.kind === "image"
-                  ? <img src={c.content} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: 6 }} />
-                  : <span className="sgt" style={{ fontSize: 13, fontWeight: 700, color: "#101B34", textAlign: "center", wordBreak: "break-word" }}>{c.content}</span>
-              ) : null}
+              <div style={{
+                position: "relative", width: "100%", height: "100%", borderRadius: 10,
+                transformStyle: "preserve-3d", transition: "transform .45s cubic-bezier(.4,.15,.2,1)",
+                transform: isFaceUp ? "rotateY(180deg)" : "rotateY(0deg)",
+                animation: isShaking ? "cardShakeX .4s ease" : c.matched ? "matchGlow .7s ease" : "none",
+              }}>
+                {/* Sisi belakang (tertutup) */}
+                <div style={{ position: "absolute", inset: 0, backfaceVisibility: "hidden", borderRadius: 10, background: "#5DA9E9", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 2px 4px rgba(0,0,0,.12)" }}>
+                  <span style={{ fontSize: 17, opacity: .8 }}>❓</span>
+                </div>
+                {/* Sisi depan (terbuka) */}
+                <div style={{ position: "absolute", inset: 0, backfaceVisibility: "hidden", transform: "rotateY(180deg)", borderRadius: 10, background: c.matched ? "#DFF6F1" : "#FFFFFF", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", boxShadow: "0 2px 6px rgba(0,0,0,.15)" }}>
+                  {c.kind === "image"
+                    ? <img src={c.content} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                    : <span className="sgt" style={{ fontSize: 13, fontWeight: 700, color: "#101B34", textAlign: "center", wordBreak: "break-word", padding: 4 }}>{c.content}</span>}
+                </div>
+              </div>
             </button>
           );
         })}
@@ -1112,6 +1200,17 @@ function TebakCariKataGame({ onBack, teacher }) {
   const [mode, setMode] = useState("digital");
   const [audioMode, setAudioMode] = useState("guru");
   const [scores, setScores] = useState({ 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 });
+  const prevScoresRef = useRef({ 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 });
+  const [bumpedGroup, setBumpedGroup] = useState(null); // kelompok yang skornya baru saja naik, buat animasi angka "melompat"
+  useEffect(() => {
+    const prev = prevScoresRef.current;
+    const changed = GROUP_NAMES.find((g) => (scores[g] || 0) > (prev[g] || 0));
+    prevScoresRef.current = scores;
+    if (!changed) return;
+    setBumpedGroup(changed);
+    const tm = setTimeout(() => setBumpedGroup(null), 500);
+    return () => clearTimeout(tm);
+  }, [scores]);
   const [roomCode, setRoomCode] = useState(makeRoomCode());
   const [projectorMode, setProjectorMode] = useState(false);
   const [controlsOpen, setControlsOpen] = useState(true);
@@ -1765,7 +1864,8 @@ function TebakCariKataGame({ onBack, teacher }) {
       // tidak muncul sama sekali.
       boxShadow: activeGroup ? `0 0 0 3px ${GROUP_COLORS[activeGroup - 1]}, 0 0 22px 4px ${GROUP_COLORS[activeGroup - 1]}99` : "none",
       transition: "box-shadow .25s ease",
-    }}>
+      animation: "cardRise .3s ease",
+    }} key={currentWord ? currentWord.id : "kosong"}>
       <svg viewBox={`0 0 ${puzzle.size} ${puzzle.size}`} style={{ position: "absolute", top: 10, left: 10, right: 10, bottom: 10, pointerEvents: "none" }}>
         {foundSegments.map((seg) => (
           <line key={seg.id} x1={seg.x1} y1={seg.y1} x2={seg.x2} y2={seg.y2}
@@ -1813,7 +1913,7 @@ function TebakCariKataGame({ onBack, teacher }) {
               <span style={{ fontSize: big ? 16 : compact ? 12.5 : 14, fontWeight: 600, color: g === highlight ? "#101B34" : t.text }}>Kelompok {g}</span>
               {scores[g] === leaderScore && leaderScore > 0 && <span style={{ fontSize: 16, lineHeight: 1, color: g === highlight ? "#101B34" : "#F4B740" }}>👑</span>}
             </div>
-            <span className="sgt" style={{ fontWeight: 700, fontSize: big ? 22 : compact ? 13 : 15, color: g === highlight ? "#101B34" : t.text }}>{scores[g]}</span>
+            <span className={`sgt${g === bumpedGroup ? " score-bump" : ""}`} style={{ fontWeight: 700, fontSize: big ? 22 : compact ? 13 : 15, color: g === highlight ? "#101B34" : t.text }}>{scores[g]}</span>
           </div>
         ))}
       </div>
@@ -2484,7 +2584,10 @@ function BukaKotakGame({ onBack }) {
         </div>
 
         <div style={{ background: t.panel, borderRadius: 14, padding: 16, marginBottom: 20, boxShadow: t.shadowSm }}>
-          <SectionLabel n={2} hint={`— ${items.length} kotak`} faint={t.faint}>Daftar perintah</SectionLabel>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
+            <SectionLabel n={2} hint={`— ${items.length} kotak`} faint={t.faint}>Daftar perintah</SectionLabel>
+            <button onClick={() => setBulkAddOpen(true)} style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: `1px dashed ${t.border}`, color: t.dim, borderRadius: 8, padding: "8px 14px", cursor: "pointer", fontSize: 13 }}><span style={{ fontSize: 14, lineHeight: 1, color: 'inherit' }}>📋</span> Tambah Banyak Sekaligus</button>
+          </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {items.map((it, i) => (
               <div key={it.id} className="list-row" style={{ display: "flex", gap: 8, alignItems: "flex-start", background: t.panel2, borderRadius: 10, padding: 10 }}>
@@ -2496,7 +2599,6 @@ function BukaKotakGame({ onBack }) {
             ))}
           </div>
           <button onClick={addItem} style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 6, background: t.panel2, border: "none", color: t.text, borderRadius: 8, padding: "9px 14px", cursor: "pointer", fontSize: 13 }}><span style={{ fontSize: 14, lineHeight: 1, color: 'inherit' }}>➕</span> Tambah Perintah</button>
-          <button onClick={() => setBulkAddOpen(true)} style={{ marginTop: 12, marginLeft: 8, display: "inline-flex", alignItems: "center", gap: 6, background: "transparent", border: `1px dashed ${t.border}`, color: t.dim, borderRadius: 8, padding: "9px 14px", cursor: "pointer", fontSize: 13 }}><span style={{ fontSize: 14, lineHeight: 1, color: 'inherit' }}>📋</span> Tambah Banyak Sekaligus</button>
         </div>
 
         <BulkAddModal
@@ -2522,7 +2624,7 @@ function BukaKotakGame({ onBack }) {
 
       {activeBox && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50 }} onClick={() => setActiveBox(null)}>
-          <div onClick={(e) => e.stopPropagation()} style={{ width: "min(520px, 90vw)", background: "#F2879E", borderRadius: 20, padding: "36px 30px", boxShadow: "0 20px 60px rgba(0,0,0,.4)", position: "relative" }}>
+          <div onClick={(e) => e.stopPropagation()} className="modal-pop" style={{ width: "min(520px, 90vw)", background: "#F2879E", borderRadius: 20, padding: "36px 30px", boxShadow: "0 20px 60px rgba(0,0,0,.4)", position: "relative" }}>
             <button onClick={() => setActiveBox(null)} style={{ position: "absolute", top: 12, right: 14, background: "none", border: "none", color: "#101B34", cursor: "pointer" }}><span style={{ fontSize: 20, lineHeight: 1, color: 'inherit' }}>✕</span></button>
             <div className="sgt" style={{ fontSize: 20, fontWeight: 700, color: "#101B34", textAlign: "center", lineHeight: 1.5 }}>{activeBox.text}</div>
           </div>
@@ -2563,6 +2665,7 @@ function BukaKotakGame({ onBack }) {
                   fontWeight: 800, fontSize: 19, display: "flex", alignItems: "center", justifyContent: "center",
                   opacity: isOpen ? 0.45 : 1, boxShadow: isOpen ? "none" : "0 3px 0 rgba(0,0,0,.16)",
                   transform: isOpen ? "scale(.94)" : "scale(1)", transition: "transform .15s ease, opacity .15s ease",
+                  animation: isOpen ? "boxPop .5s cubic-bezier(.3,1.5,.4,1) both" : "none",
                 }} className="sgt">{isOpen ? <span style={{ fontSize: 20, lineHeight: 1, color: 'inherit' }}>✓</span> : i + 1}</button>
               );
             })}
@@ -2661,8 +2764,8 @@ function CocokkanKartuGame({ onBack }) {
     // Beda dari audio di Game 1: gambar ini WAJIB tersinkron ke Firestore (bukan cuma
     // localStorage guru), karena tiap HP siswa perlu benar-benar menampilkannya. Batas ketat
     // supaya ringan diunduh serentak oleh banyak HP sekaligus & jauh dari batas ukuran dokumen.
-    if (file.size > 150 * 1024) {
-      setImageUploadError((e) => ({ ...e, [pairId]: "Gambar maksimal 150KB. Kompres/perkecil dulu gambarnya." }));
+    if (file.size > 250 * 1024) {
+      setImageUploadError((e) => ({ ...e, [pairId]: "Gambar maksimal 250KB. Kompres/perkecil dulu gambarnya." }));
       return;
     }
     setImageUploadError((e) => { const n = { ...e }; delete n[pairId]; return n; });
@@ -2682,7 +2785,12 @@ function CocokkanKartuGame({ onBack }) {
   function validPairs(b) { return b.pairs.filter((p) => p.word.trim() && p.image); }
   const canStart = babaks.length > 0 && babaks.every((b) => validPairs(b).length >= 10);
 
-  function startSession() { setScores({}); setBabakIdx(0); setStage("play"); }
+  async function startSession() {
+    // Sama seperti Word Search: pastikan roomCode belum dipakai kelas lain sebelum dipakai QR join.
+    const uniqueCode = await ensureUniqueRoomCode(roomCode);
+    if (uniqueCode !== roomCode) setRoomCode(uniqueCode);
+    setScores({}); setBabakIdx(0); setStage("play");
+  }
 
   useEffect(() => {
     if (stage !== "play") return;
@@ -2764,7 +2872,9 @@ function CocokkanKartuGame({ onBack }) {
 
   function endGame() {
     if (!window.confirm("Akhiri permainan ini? Skor akan dihapus.")) return;
-    db.collection("rooms").doc(roomCode).delete().catch(() => {});
+    // BUGFIX: dulu cuma db.collection("rooms").doc(roomCode).delete() — subcollection "cardPairs"
+    // (gambar-gambar kartu babak terakhir) tidak ikut terhapus & jadi sampah permanen di Firestore.
+    deleteRoomWithSubcollections(db.collection("rooms").doc(roomCode)).catch(() => {});
     setScores({}); setStage("setup"); setBabakIdx(0);
     onBack();
   }
@@ -2823,8 +2933,11 @@ function CocokkanKartuGame({ onBack }) {
             </div>
           </div>
 
-          <div style={{ fontSize: 12.5, color: validPairs(babak).length >= 10 ? "#3FBFAD" : t.faint, marginBottom: 12, fontWeight: 600 }}>
-            {validPairs(babak).length} / {babak.pairs.length} pasangan siap{!isMobile ? " (minimal 10 pasangan lengkap kata + gambar)" : ""}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: 12 }}>
+            <div style={{ fontSize: 12.5, color: validPairs(babak).length >= 10 ? "#3FBFAD" : t.faint, fontWeight: 600 }}>
+              {validPairs(babak).length} / {babak.pairs.length} pasangan siap{!isMobile ? " (minimal 10 pasangan lengkap kata + gambar)" : ""}
+            </div>
+            <button onClick={() => setBulkAddOpen(true)} style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: `1px dashed ${t.border}`, color: t.dim, borderRadius: 8, padding: "8px 14px", cursor: "pointer", fontSize: 13 }}>📋 Tambah Banyak Sekaligus</button>
           </div>
 
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -2846,7 +2959,6 @@ function CocokkanKartuGame({ onBack }) {
             ))}
           </div>
           <button onClick={() => addPair(babakIdx)} style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 6, background: t.panel2, border: "none", color: t.text, borderRadius: 8, padding: "9px 14px", cursor: "pointer", fontSize: 13 }}>➕ Tambah Pasangan</button>
-          <button onClick={() => setBulkAddOpen(true)} style={{ marginTop: 14, marginLeft: 8, display: "inline-flex", alignItems: "center", gap: 6, background: "transparent", border: `1px dashed ${t.border}`, color: t.dim, borderRadius: 8, padding: "9px 14px", cursor: "pointer", fontSize: 13 }}>📋 Tambah Banyak Sekaligus</button>
 
           <BulkAddModal
             open={bulkAddOpen}
