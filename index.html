@@ -1593,6 +1593,7 @@ function TebakCariKataGame({ onBack, teacher }) {
         if (p.foundMap) setFoundMap(p.foundMap);
         if (p.triedSet) setTriedSet(new Set(p.triedSet));
         if (p.puzzle) setPuzzle(p.puzzle);
+        if (p.clueRevealed) setClueRevealed(p.clueRevealed);
       }
     } catch (e) { /* belum ada progres tersimpan, atau data korup */ }
     setLoaded(true);
@@ -1606,7 +1607,7 @@ function TebakCariKataGame({ onBack, teacher }) {
     const tm = setTimeout(() => {
       const res = safeSetItem("tck-progress", JSON.stringify({
         stage, babakId, mode, audioMode, scores, roomCode, queue, foundMap,
-        triedSet: Array.from(triedSet), puzzle,
+        triedSet: Array.from(triedSet), puzzle, clueRevealed,
       }));
       setStorageWarning(res.ok ? null : res.message);
     }, 500);
@@ -1639,15 +1640,19 @@ function TebakCariKataGame({ onBack, teacher }) {
     setImportMsg,
   });
 
-  function endGame() {
-    if (!window.confirm("Akhiri permainan ini? Skor & progres babak yang sedang berjalan akan dihapus.")) return;
+  function endGameDirect() {
+    // Akhiri tanpa dialog — dipanggil dari BackConfirmModal yang sudah punya konfirmasi sendiri
     try { localStorage.removeItem("tck-progress"); } catch (e) {}
     db.collection("rooms").doc(roomCode).delete().catch(() => {});
     setScores({ 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 });
     setFoundMap({}); setQueue([]); setTriedSet(new Set()); setPuzzle(null);
     babakSnapshotsRef.current = {};
+    setShowBackConfirm(false);
     setStage("setup"); setProjectorMode(false);
-    onBack();
+  }
+  function endGame() {
+    if (!window.confirm("Akhiri permainan ini? Skor & progres babak yang sedang berjalan akan dihapus.")) return;
+    endGameDirect();
   }
 
   // Simpan editan setiap kali berubah (setelah data awal selesai dimuat)
@@ -1725,6 +1730,9 @@ function TebakCariKataGame({ onBack, teacher }) {
   // saat ditinggalkan — bukan dibangun ulang — sampai permainan ini diakhiri.
   function switchBabak(id) {
     if (id === babakId) return;
+    // FIX: clear hitung mundur otomatis sebelum pindah babak — cegah double-trigger
+    if (autoNextIntervalRef.current) { clearInterval(autoNextIntervalRef.current); autoNextIntervalRef.current = null; }
+    setAutoNext(null);
     babakSnapshotsRef.current[babakId] = {
       queue, foundMap, triedSet: Array.from(triedSet), puzzle, clueRevealed, activeGroup, buzzOrder, selStart, openToAll,
     };
@@ -1838,6 +1846,7 @@ function TebakCariKataGame({ onBack, teacher }) {
     setClueRevealed(false); setActiveGroup(null); setSelStart(null); setBuzzOrder([]);
     activeGroupRef.current = null; buzzOrderRef.current = []; triedSetRef.current = new Set(); openToAllRef.current = false;
     setHistoryOpen(false);
+    setShowBackConfirm(false); // FIX: reset dialog konfirmasi jika sedang terbuka
     setStage("play");
     // Sesi yang sudah dilanjutkan dianggap "dipakai" — dihapus dari daftar riwayat.
     // Kalau nanti dijeda lagi, akan tersimpan sebagai entri baru.
@@ -2501,44 +2510,6 @@ function TebakCariKataGame({ onBack, teacher }) {
   );
 
 
-
-  /* ---------------- Modal: Konfirmasi Kembali ke Persiapan ---------------- */
-  function BackConfirmModal() {
-    return (
-      <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
-        <div style={{ background: t.panel, borderRadius: 18, padding: "28px 24px", maxWidth: 380, width: "100%", boxShadow: "0 8px 40px rgba(0,0,0,0.25)" }}>
-          <div style={{ fontSize: 32, marginBottom: 12, textAlign: "center" }}>⚠️</div>
-          <div className="sgt" style={{ fontSize: 18, fontWeight: 800, color: t.text, marginBottom: 8, textAlign: "center" }}>Kembali ke Persiapan?</div>
-          <div style={{ fontSize: 13.5, color: t.dim, lineHeight: 1.7, marginBottom: 22, textAlign: "center" }}>
-            Permainan sedang berlangsung. Pilih salah satu tindakan sebelum keluar:
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            <button onClick={() => { openSaveNamePrompt(); setShowBackConfirm(false); }}
-              style={{ display: "flex", alignItems: "center", gap: 10, background: "#F4B740", color: "#101B34", border: "none", borderRadius: 12, padding: "13px 18px", fontWeight: 700, fontSize: 14, cursor: "pointer", width: "100%" }}>
-              <span style={{ fontSize: 18 }}>💾</span>
-              <div style={{ textAlign: "left" }}>
-                <div>Simpan & Jeda</div>
-                <div style={{ fontSize: 11.5, fontWeight: 400, opacity: 0.75 }}>Progres tersimpan, bisa dilanjutkan nanti</div>
-              </div>
-            </button>
-            <button onClick={() => { endGame(); setShowBackConfirm(false); }}
-              style={{ display: "flex", alignItems: "center", gap: 10, background: "transparent", color: "#EF5B5B", border: "1.5px solid #EF5B5B", borderRadius: 12, padding: "13px 18px", fontWeight: 700, fontSize: 14, cursor: "pointer", width: "100%" }}>
-              <span style={{ fontSize: 18 }}>⏹</span>
-              <div style={{ textAlign: "left" }}>
-                <div>Akhiri Permainan</div>
-                <div style={{ fontSize: 11.5, fontWeight: 400, opacity: 0.75 }}>Skor tidak tersimpan, kembali ke persiapan</div>
-              </div>
-            </button>
-            <button onClick={() => setShowBackConfirm(false)}
-              style={{ background: "transparent", color: t.dim, border: `1px solid ${t.border}`, borderRadius: 12, padding: "11px 18px", fontWeight: 600, fontSize: 13.5, cursor: "pointer", width: "100%" }}>
-              Lanjutkan Permainan
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   /* ---------------- Modal: Simpan & Jeda (nama kelas) ---------------- */
   const SaveNameModal = () => (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 70 }} onClick={() => !savingSession && setSaveNameOpen(false)}>
@@ -2587,6 +2558,44 @@ function TebakCariKataGame({ onBack, teacher }) {
       </div>
     </div>
   ); }
+
+
+  /* ---------------- Modal: Konfirmasi Kembali ke Persiapan ---------------- */
+  function BackConfirmModal() {
+    return (
+      <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+        <div style={{ background: t.panel, borderRadius: 18, padding: "28px 24px", maxWidth: 380, width: "100%", boxShadow: "0 8px 40px rgba(0,0,0,0.25)" }}>
+          <div style={{ fontSize: 32, marginBottom: 12, textAlign: "center" }}>⚠️</div>
+          <div className="sgt" style={{ fontSize: 18, fontWeight: 800, color: t.text, marginBottom: 8, textAlign: "center" }}>Kembali ke Persiapan?</div>
+          <div style={{ fontSize: 13.5, color: t.dim, lineHeight: 1.7, marginBottom: 22, textAlign: "center" }}>
+            Permainan sedang berlangsung. Pilih salah satu tindakan sebelum keluar:
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <button onClick={() => { openSaveNamePrompt(); setShowBackConfirm(false); }}
+              style={{ display: "flex", alignItems: "center", gap: 10, background: "#F4B740", color: "#101B34", border: "none", borderRadius: 12, padding: "13px 18px", fontWeight: 700, fontSize: 14, cursor: "pointer", width: "100%" }}>
+              <span style={{ fontSize: 18 }}>💾</span>
+              <div style={{ textAlign: "left" }}>
+                <div>Simpan &amp; Jeda</div>
+                <div style={{ fontSize: 11.5, fontWeight: 400, opacity: 0.75 }}>Progres tersimpan, bisa dilanjutkan nanti</div>
+              </div>
+            </button>
+            <button onClick={() => endGameDirect()}
+              style={{ display: "flex", alignItems: "center", gap: 10, background: "transparent", color: "#EF5B5B", border: "1.5px solid #EF5B5B", borderRadius: 12, padding: "13px 18px", fontWeight: 700, fontSize: 14, cursor: "pointer", width: "100%" }}>
+              <span style={{ fontSize: 18 }}>⏹</span>
+              <div style={{ textAlign: "left" }}>
+                <div>Akhiri Permainan</div>
+                <div style={{ fontSize: 11.5, fontWeight: 400, opacity: 0.75 }}>Skor tidak tersimpan, kembali ke persiapan</div>
+              </div>
+            </button>
+            <button onClick={() => setShowBackConfirm(false)}
+              style={{ background: "transparent", color: t.dim, border: `1px solid ${t.border}`, borderRadius: 12, padding: "11px 18px", fontWeight: 600, fontSize: 13.5, cursor: "pointer", width: "100%" }}>
+              Lanjutkan Permainan
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   /* ---------------- STAGE: SETUP (Persiapan) ---------------- */
   if (stage === "setup") {
@@ -2838,7 +2847,7 @@ function TebakCariKataGame({ onBack, teacher }) {
           }}>
             Mulai Permainan <span style={{ fontSize: 20, lineHeight: 1, color: "inherit" }}>➡</span>
           </button>
-          {!canStart && <div style={{ fontSize: 12.5, color: t.faint }}>Isi minimal satu kosakata di Babak 1, 2, dan 3 untuk mulai.</div>}
+          {!canStart && <div style={{ fontSize: 12.5, color: t.faint }}>Isi minimal satu kosakata di salah satu babak untuk mulai.</div>}
         </div>
       </div>
     );
@@ -3044,8 +3053,8 @@ function TebakCariKataGame({ onBack, teacher }) {
       {/* BARIS 4: Konten utama — papan kiri + panel kontrol kanan, flex grow */}
       <div style={{ display: "flex", gap: 16, flex: 1, minHeight: 0, alignItems: "stretch" }}>
         {/* Papan puzzle — kiri, mengisi sisa tinggi layar */}
-        <div style={{ flex: "1 1 0", minWidth: 0, position: "relative", display: "flex", flexDirection: "column" }}>
-          <div style={{ flex: 1, minHeight: 0 }}>
+        <div style={{ flex: "1 1 0", minWidth: 0, minHeight: 0, position: "relative", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+          <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
             {renderGrid()}
           </div>
           {puzzle && !currentWord && (
