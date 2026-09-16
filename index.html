@@ -1529,7 +1529,9 @@ function TebakCariKataGame({ onBack, teacher }) {
   const [importMsg, setImportMsg] = useState(null); // { ok, text } hasil ekspor/impor cadangan
   const [babakId, setBabakId] = useState(1);
   const [mode, setMode] = useState("digital");
-  const [audioMode, setAudioMode] = useState("guru");
+  const [audioMode, setAudioMode] = useState("guru"); // "guru" = Audio, "off" = Teks, "bebas" = Guru Bebas
+  const [teksDurasiDetik, setTeksDurasiDetik] = useState(3); // durasi tampil mode Teks, guru bisa atur (dulu dipatok 3)
+  const [skipPickerOpen, setSkipPickerOpen] = useState(false); // mode Guru Bebas: daftar pilih kata yang mau dilewati
   const [scores, setScores] = useState({ 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 });
   const prevScoresRef = useRef({ 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 });
   const [bumpedGroup, setBumpedGroup] = useState(null); // kelompok yang skornya baru saja naik, buat animasi angka "melompat"
@@ -1614,6 +1616,15 @@ function TebakCariKataGame({ onBack, teacher }) {
 
   const audioRef = useRef(null);
   const retryTimerRef = useRef(null);
+  // BUGFIX: dulu switchBabak() men-clearRetryTimer() saat MENINGGALKAN babak (benar, supaya
+  // timer babak lama tidak nyasar), tapi tidak pernah menjadwalkan ulang timer itu saat balik
+  // LAGI ke babak yang tadi ditinggalkan di tengah jeda retry (kelompok sudah salah jawab,
+  // openToAll belum sempat menyala). Akibatnya kelompok itu terkunci permanen untuk soal itu.
+  // Tidak bisa langsung panggil scheduleRetry() di dalam switchBabak() (closure-nya masih
+  // memegang `currentWord` babak LAMA, sebelum re-render) — jadi ditandai lewat ref ini dulu,
+  // baru scheduleRetry() dipanggil dari useEffect di bawah setelah babakId benar-benar berganti
+  // & currentWord sudah merujuk ke babak yang baru.
+  const rearmRetryOnBabakRef = useRef(false);
 
   // Ref-ref ini selalu disinkron ke state terbaru, supaya listener Firestore
   // (yang closure-nya bisa "basi"/stale) tetap membaca nilai yang benar saat ada
@@ -1647,6 +1658,7 @@ function TebakCariKataGame({ onBack, teacher }) {
         if (p.babakId) setBabakId(p.babakId);
         if (p.mode) setMode(p.mode);
         if (p.audioMode) setAudioMode(p.audioMode);
+        if (p.teksDurasiDetik) setTeksDurasiDetik(p.teksDurasiDetik);
         if (p.scores) setScores(p.scores);
         if (p.roomCode) setRoomCode(p.roomCode);
         if (p.queue) setQueue(p.queue);
@@ -1666,13 +1678,13 @@ function TebakCariKataGame({ onBack, teacher }) {
     if (!loaded) return;
     const tm = setTimeout(() => {
       const res = safeSetItem("tck-progress", JSON.stringify({
-        stage, babakId, mode, audioMode, scores, roomCode, queue, foundMap,
+        stage, babakId, mode, audioMode, teksDurasiDetik, scores, roomCode, queue, foundMap,
         triedSet: Array.from(triedSet), puzzle, clueRevealed,
       }));
       setStorageWarning(res.ok ? null : res.message);
     }, 500);
     return () => clearTimeout(tm);
-  }, [stage, babakId, mode, audioMode, scores, roomCode, queue, foundMap, triedSet, puzzle, loaded]);
+  }, [stage, babakId, mode, audioMode, teksDurasiDetik, scores, roomCode, queue, foundMap, triedSet, puzzle, loaded]);
 
   // Ambil daftar sesi tersimpan (Riwayat) dari Firestore setiap kali guru ada di layar Persiapan.
   useEffect(() => {
@@ -1815,6 +1827,12 @@ function TebakCariKataGame({ onBack, teacher }) {
       clearRetryTimer();
       if (audioRef.current) audioRef.current.pause();
       setSpeaking(false);
+      // BUGFIX: kalau babak yang dipulihkan ini ditinggal persis di tengah jeda retry (sudah ada
+      // kelompok yang salah jawab & giliran sudah dilepas, tapi kesempatan "coba lagi" belum
+      // sempat menyala otomatis), jadwalkan ulang timer 5 detiknya — lihat rearmRetryOnBabakRef
+      // & useEffect terkait di atas.
+      const hasPendingWord = saved.queue && saved.queue.length > 0;
+      rearmRetryOnBabakRef.current = !!(saved.clueRevealed && saved.activeGroup === null && !saved.openToAll && hasPendingWord);
     } else {
       resetRound(id);
     }
@@ -1863,7 +1881,7 @@ function TebakCariKataGame({ onBack, teacher }) {
     const snapshot = {
       className,
       materi: selectedMateri,
-      babakId, mode, audioMode, scores, roomCode,
+      babakId, mode, audioMode, teksDurasiDetik, scores, roomCode,
       materiWordsSnapshot: wordsWithoutAudio,
       queue, foundMap,
       triedSet: Array.from(triedSet),
@@ -1910,6 +1928,7 @@ function TebakCariKataGame({ onBack, teacher }) {
     setBabakId(item.babakId || 1);
     setMode(item.mode || "digital");
     setAudioMode(item.audioMode || "guru");
+    setTeksDurasiDetik(item.teksDurasiDetik || 3);
     setScores(item.scores || { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 });
     setRoomCode(item.roomCode || makeRoomCode());
     setQueue(item.queue || []);
@@ -1949,16 +1968,23 @@ function TebakCariKataGame({ onBack, teacher }) {
   // setelah guru menampilkan/memutar petunjuk, supaya tidak ada yang buzz duluan sebelum soal dibacakan.
   // buzzMode ikut disiarkan supaya HP siswa tahu kalau guru sedang pakai mode Manual (guru yang
   // menunjuk langsung) — di mode itu, tombol angkat tangan di HP harus nonaktif total.
+  // BUGFIX: roundId dulu cuma pakai currentWord.id (kata PERTAMA di antrean). Ini aman di mode
+  // Audio/Teks karena antrean selalu dijawab berurutan dari depan, jadi id-nya selalu berubah tiap
+  // soal. Tapi di mode Guru Bebas, kata yang dijawab bisa saja BUKAN kata pertama di antrean —
+  // kalau begitu, "kata pertama"-nya (dan roundId) tetap sama di soal berikutnya, sistem salah
+  // kira masih ronde yang sama, dan kelompok yang angkat tangan lagi lewat HP tidak akan pernah
+  // terdeteksi guru. Digabung dengan queue.length (selalu berkurang 1 tiap soal selesai, di mode
+  // manapun) supaya roundId dijamin selalu beda antar ronde.
   useEffect(() => {
     if (stage !== "play") return;
-    const roundId = currentWord && clueRevealed ? currentWord.id : null;
+    const roundId = currentWord && clueRevealed ? `${currentWord.id}:${queue.length}` : null;
     db.collection("rooms").doc(roomCode).set({
       mode: "tck", materi: selectedMateri, babakId, roundId, buzzMode: mode,
       buzzOrder: [],
       buzz: firebase.firestore.FieldValue.delete(),
       updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
     }, { merge: true }).catch(() => {});
-  }, [stage, roomCode, currentWord?.id, selectedMateri, babakId, clueRevealed, mode]);
+  }, [stage, roomCode, currentWord?.id, selectedMateri, babakId, clueRevealed, mode, queue.length]);
 
   // BUGFIX: giliran yang berpindah secara lokal (mis. kelompok pertama salah, sistem otomatis
   // maju ke kelompok berikutnya yang sudah antre) sebelumnya tidak pernah ditulis balik ke
@@ -2002,7 +2028,10 @@ function TebakCariKataGame({ onBack, teacher }) {
       if (!data) return;
       setJoinedGroups(data.groups || {});
       if (mode !== "digital") return;
-      const roundId = currentWord ? currentWord.id : null;
+      // BUGFIX (lihat penjelasan lengkap di efek penulis roundId di atas): roundId di sini juga
+      // harus digabung dengan queue.length, supaya cocok/konsisten dengan apa yang ditulis ke
+      // Firestore, dan supaya perbandingan "apakah ini ronde baru?" tetap benar di Mode Guru Bebas.
+      const roundId = currentWord ? `${currentWord.id}:${queue.length}` : null;
       if (!roundId || data.roundId !== roundId || !Array.isArray(data.buzzOrder)) return;
       if (lastAppliedRoundRef.current !== roundId) {
         lastAppliedRoundRef.current = roundId;
@@ -2016,7 +2045,7 @@ function TebakCariKataGame({ onBack, teacher }) {
       });
     });
     return () => unsub();
-  }, [stage, roomCode, currentWord?.id, mode]);
+  }, [stage, roomCode, currentWord?.id, mode, queue.length]);
 
   function scheduleRetry() {
     clearRetryTimer();
@@ -2035,17 +2064,32 @@ function TebakCariKataGame({ onBack, teacher }) {
     }, 5000);
   }
 
+  // Lihat rearmRetryOnBabakRef & switchBabak() — dipisah jadi useEffect (bukan dipanggil
+  // langsung di switchBabak) supaya scheduleRetry() di sini membaca `currentWord` babak yang
+  // BARU (dari render setelah babakId berubah), bukan closure babak lama yang sudah basi.
+  useEffect(() => {
+    if (!rearmRetryOnBabakRef.current) return;
+    rearmRetryOnBabakRef.current = false;
+    if (currentWord) scheduleRetry();
+  }, [babakId]);
+
   function clearHintOverlayTimer() { if (hintOverlayTimerRef.current) { clearTimeout(hintOverlayTimerRef.current); hintOverlayTimerRef.current = null; } }
 
   function playClue() {
     if (!currentWord) return;
-    // Mode Nonaktif: TIDAK ada audio yang diputar — teks petunjuk ditampilkan besar di
-    // tengah layar selama 3 detik saja lalu hilang otomatis (lihat hintOverlayVisible).
+    // Mode Guru Bebas: TIDAK ada apa pun yang ditampilkan/diputar sistem — guru membacakan
+    // petunjuknya sendiri secara lisan (dari catatannya sendiri). Klik tombol ini semata-mata
+    // untuk membuka kunci angkat tangan siswa, tepat saat guru siap (biasanya sesaat sebelum atau
+    // sambil mulai membacakan) — sama seperti mode Audio: klik tombol & buka kunci terjadi
+    // BERSAMAAN, bukan menunggu sampai "selesai".
+    if (audioMode === "bebas") { setClueRevealed(true); return; }
+    // Mode Teks: TIDAK ada audio yang diputar — teks petunjuk ditampilkan besar di
+    // tengah layar selama durasi yang diatur guru (default 3 detik) lalu hilang otomatis.
     if (audioMode === "off" || !currentWord.audioUrl) {
       setClueRevealed(true);
       clearHintOverlayTimer();
       setHintOverlayVisible(true);
-      hintOverlayTimerRef.current = setTimeout(() => setHintOverlayVisible(false), 3000);
+      hintOverlayTimerRef.current = setTimeout(() => setHintOverlayVisible(false), teksDurasiDetik * 1000);
       return;
     }
     // Mode Audio: HANYA suara yang diputar — sengaja tidak ada teks petunjuk yang ditampilkan
@@ -2107,8 +2151,14 @@ function TebakCariKataGame({ onBack, teacher }) {
     confettiTimerRef.current = setTimeout(() => setConfetti(null), 1300);
   }
 
-  function nextQuestion() {
-    setQueue((q) => q.slice(1));
+  // FIX (fitur baru — mode Guru Bebas): dulu nextQuestion() selalu mengambil kata PERTAMA di
+  // antrean (q.slice(1)) karena semua mode lain memang menjawab soal berurutan sesuai antrean.
+  // Mode Guru Bebas tidak begitu — guru bisa membacakan petunjuk kata mana pun duluan (tidak
+  // berurutan), jadi kata yang perlu dihapus dari antrean adalah kata yang BENAR-BENAR terjawab/
+  // dilewati (wordId), bukan selalu yang pertama. Parameter wordId opsional: kalau tidak diisi,
+  // perilakunya sama persis seperti sebelumnya (mode Audio/Teks tetap berurutan seperti biasa).
+  function nextQuestion(wordId) {
+    setQueue((q) => (wordId ? q.filter((id) => id !== wordId) : q.slice(1)));
     setClueRevealed(false); setTriedSet(new Set()); setOpenToAll(false);
     clearRetryTimer(); releaseTurn(); setSpeaking(false);
     setBuzzOrder([]);
@@ -2116,19 +2166,21 @@ function TebakCariKataGame({ onBack, teacher }) {
     if (audioRef.current) audioRef.current.pause();
     clearHintOverlayTimer(); setHintOverlayVisible(false);
   }
-  function skipWord() {
-    if (!currentWord) return;
+  function skipWord(word) {
+    const target = word || currentWord;
+    if (!target) return;
     // Ungkap jawabannya: sorot posisi kata di papan (warna netral abu-abu putus-putus, beda dari
     // warna kelompok yang benar-benar menjawab) + tampilkan banner "Jawaban: ...". Posisi kata
     // diambil dari puzzle.placements — data penempatan asli saat papan dibangun (bukan dari seleksi
     // siswa, karena soal ini memang tidak pernah terjawab).
-    const cells = puzzle && puzzle.placements ? puzzle.placements[currentWord.id] : null;
+    const cells = puzzle && puzzle.placements ? puzzle.placements[target.id] : null;
     if (cells) {
-      setFoundMap((f) => ({ ...f, [currentWord.id]: { cells, color: REVEALED_COLOR, revealed: true } }));
+      setFoundMap((f) => ({ ...f, [target.id]: { cells, color: REVEALED_COLOR, revealed: true } }));
     }
-    setFlash({ type: "revealed", word: currentWord.letters, clue: currentWord.clue });
+    setFlash({ type: "revealed", word: target.letters, clue: target.clue });
     setTimeout(() => setFlash(null), 2400);
-    nextQuestion();
+    nextQuestion(target.id);
+    setSkipPickerOpen(false);
   }
 
   function handleCellClick(r, c) {
@@ -2147,7 +2199,14 @@ function TebakCariKataGame({ onBack, teacher }) {
     // diagonal kanan-atas) — jadi jawaban yang sah cuma yang dipilih persis mengikuti arah itu dari
     // huruf pertama kata. Fallback dihapus supaya berlaku sama di Babak 1, 2, maupun 3 (kode cek ini
     // memang satu-satunya & dipakai bareng oleh ketiga babak, bukan per-babak terpisah).
-    const match = str === currentWord.letters;
+    // FITUR BARU (mode Guru Bebas): karena guru membacakan petunjuk sendiri tanpa urutan tertentu,
+    // sistem tidak tahu kata MANA yang sedang ditanyakan — jadi seleksi huruf kelompok dicek
+    // terhadap SELURUH kata yang masih tersisa di antrean babak ini (bukan cuma currentWord/kata
+    // pertama seperti mode Audio & Teks), cocok dengan salah satu saja sudah dianggap benar.
+    const matchedWord = audioMode === "bebas"
+      ? (() => { const wid = queue.find((id) => { const w = babak.words.find((x) => x.id === id); return w && w.letters === str; }); return wid ? babak.words.find((w) => w.id === wid) : null; })()
+      : (str === currentWord.letters ? currentWord : null);
+    const match = !!matchedWord;
     if (match) {
       // FIX: warna highlight jawaban dulu ikut warna kelompok yang menjawab (GROUP_COLORS) —
       // kalau kelompok yang sama beruntun menjawab benar (atau saat dites sendiri oleh guru),
@@ -2155,12 +2214,12 @@ function TebakCariKataGame({ onBack, teacher }) {
       // ANSWER_KEY_PALETTE berdasarkan urutannya di daftar kosakata babak ini (sama seperti
       // pewarnaan di pratinjau Kunci Jawaban Persiapan), jadi warnanya selalu bervariasi apa pun
       // kelompok yang menjawab.
-      const segColor = answerKeyColorByWordId[currentWord.id] || GROUP_COLORS[activeGroup - 1];
-      setFoundMap((f) => ({ ...f, [currentWord.id]: { cells, color: segColor } }));
+      const segColor = answerKeyColorByWordId[matchedWord.id] || GROUP_COLORS[activeGroup - 1];
+      setFoundMap((f) => ({ ...f, [matchedWord.id]: { cells, color: segColor } }));
       setScores((s) => ({ ...s, [activeGroup]: s[activeGroup] + babak.point }));
       setFlash({ type: "correct", group: activeGroup }); setTimeout(() => setFlash(null), 1400);
       triggerCelebration(activeGroup);
-      nextQuestion();
+      nextQuestion(matchedWord.id);
     } else {
       const wrongGroup = activeGroup;
       const updatedTried = new Set(triedSet); updatedTried.add(wrongGroup);
@@ -2493,7 +2552,7 @@ function TebakCariKataGame({ onBack, teacher }) {
       {puzzle && (
         <div style={{ background: t.panel, borderRadius: 14, padding: "12px 18px", boxShadow: t.shadowSm, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
           <div style={{ fontSize: 13, color: t.dim }}>
-            {currentWord ? `Soal ${foundCount + 1} dari ${totalWords}` : "Semua soal selesai 🎉"}
+            {currentWord ? (audioMode === "bebas" ? `Sisa kosakata: ${queue.length} dari ${totalWords}` : `Soal ${foundCount + 1} dari ${totalWords}`) : "Semua soal selesai 🎉"}
             {selStart && currentWord && <span style={{ color: "#F4B740" }}> — klik huruf terakhir kata</span>}
           </div>
           {/* FIX (UX): status "Soal X dari Y" & pesan benar/salah/jawaban tadinya ditaruh MELAYANG
@@ -2513,34 +2572,57 @@ function TebakCariKataGame({ onBack, teacher }) {
         </div>
       )}
       <div style={{ background: t.panel, borderRadius: 14, padding: 18, boxShadow: t.shadowSm }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
           <div style={{ fontSize: 13, color: t.dim }}>Petunjuk soal</div>
-          <div style={{ display: "flex", background: t.panel2, borderRadius: 8, padding: 3 }}>
+          <div style={{ display: "flex", background: t.panel2, borderRadius: 8, padding: 3, flexWrap: "wrap" }}>
             <button onClick={() => setAudioMode("guru")} style={{ display: "flex", alignItems: "center", gap: 5, padding: "5px 9px", borderRadius: 6, border: "none", cursor: "pointer", background: audioMode === "guru" ? "#3FBFAD" : "transparent", color: audioMode === "guru" ? "#0D1730" : t.text, fontSize: 11.5, fontWeight: 600 }}><span style={{ fontSize: 12, lineHeight: 1, color: 'inherit' }}>🔊</span> Audio</button>
-            <button onClick={() => setAudioMode("off")} style={{ display: "flex", alignItems: "center", gap: 5, padding: "5px 9px", borderRadius: 6, border: "none", cursor: "pointer", background: audioMode === "off" ? "#3FBFAD" : "transparent", color: audioMode === "off" ? "#0D1730" : t.text, fontSize: 11.5, fontWeight: 600 }}><span style={{ fontSize: 12, lineHeight: 1, color: 'inherit' }}>🔇</span> Nonaktif</button>
+            <button onClick={() => setAudioMode("off")} style={{ display: "flex", alignItems: "center", gap: 5, padding: "5px 9px", borderRadius: 6, border: "none", cursor: "pointer", background: audioMode === "off" ? "#3FBFAD" : "transparent", color: audioMode === "off" ? "#0D1730" : t.text, fontSize: 11.5, fontWeight: 600 }}><span style={{ fontSize: 12, lineHeight: 1, color: 'inherit' }}>📝</span> Teks</button>
+            {/* FITUR BARU: Mode ke-3, "Guru Bebas" — guru membacakan petunjuknya sendiri secara
+                lisan dari catatannya sendiri (tidak ada apa pun yang ditampilkan/diputar sistem).
+                Cocok untuk guru yang tidak memakai 2 layar/perangkat terpisah. */}
+            <button onClick={() => setAudioMode("bebas")} style={{ display: "flex", alignItems: "center", gap: 5, padding: "5px 9px", borderRadius: 6, border: "none", cursor: "pointer", background: audioMode === "bebas" ? "#3FBFAD" : "transparent", color: audioMode === "bebas" ? "#0D1730" : t.text, fontSize: 11.5, fontWeight: 600 }}><span style={{ fontSize: 12, lineHeight: 1, color: 'inherit' }}>🎙️</span> Guru Bebas</button>
           </div>
         </div>
 
+        {/* FITUR BARU: durasi tampil mode Teks dulu dipatok 3 detik tetap, sekarang guru bisa
+            atur sendiri (1–30 detik). Berlaku untuk seluruh kata sepanjang sesi ini, bukan per-kata. */}
+        {audioMode === "off" && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, fontSize: 12.5, color: t.dim }}>
+            <span>Durasi tampil:</span>
+            <input type="number" min={1} max={30} value={teksDurasiDetik}
+              onChange={(e) => setTeksDurasiDetik(Math.min(30, Math.max(1, parseInt(e.target.value, 10) || 1)))}
+              style={{ width: 54, padding: "5px 7px", borderRadius: 6, border: `1px solid ${t.border}`, background: t.bg, color: t.text, fontSize: 12.5, boxSizing: "border-box" }} />
+            <span>detik</span>
+          </div>
+        )}
+
         {currentWord && (
           <button onClick={playClue} className="grp-btn" style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", background: "#F4B740", color: "#101B34", border: "none", borderRadius: 10, padding: "12px 16px", fontWeight: 700, fontSize: 15, cursor: "pointer" }}>
-            {audioMode === "guru" && currentWord.audioUrl ? <span style={{ fontSize: 18, lineHeight: 1, color: 'inherit' }}>🔊</span> : <span style={{ fontSize: 18, lineHeight: 1, color: 'inherit' }}>🔇</span>}
-            {audioMode === "guru" && currentWord.audioUrl ? (speaking ? "Memutar…" : "Putar Petunjuk") : "Tampilkan teks (dibacakan guru)"}
+            {audioMode === "guru" && currentWord.audioUrl ? <span style={{ fontSize: 18, lineHeight: 1, color: 'inherit' }}>🔊</span>
+              : audioMode === "bebas" ? <span style={{ fontSize: 18, lineHeight: 1, color: 'inherit' }}>🎙️</span>
+              : <span style={{ fontSize: 18, lineHeight: 1, color: 'inherit' }}>🔇</span>}
+            {audioMode === "guru" && currentWord.audioUrl ? (speaking ? "Memutar…" : "Putar Petunjuk")
+              : audioMode === "bebas" ? "Siap — Boleh Angkat Tangan"
+              : "Tampilkan teks (dibacakan guru)"}
           </button>
         )}
-        {/* Sengaja TIDAK ada teks petunjuk permanen di sini lagi, di kedua mode:
+        {/* Sengaja TIDAK ada teks petunjuk permanen di sini, di ketiga mode:
             - Mode Audio: hanya suara yang diputar, tidak ada teks apa pun yang tertinggal di layar.
-            - Mode Nonaktif: teksnya tampil sebagai overlay besar di tengah layar selama 3 detik
-              saja (lihat hintOverlayVisible), lalu hilang sendiri — bukan teks statis di panel ini. */}
+            - Mode Teks: teksnya tampil sebagai overlay besar di tengah layar selama durasi yang
+              diatur guru (lihat hintOverlayVisible), lalu hilang sendiri — bukan teks statis di sini.
+            - Mode Guru Bebas: tidak ada teks apa pun ditampilkan sistem sama sekali — guru
+              membacakan dari catatannya sendiri. */}
         {audioMode === "off" && clueRevealed && !hintOverlayVisible && currentWord && (
-          <div style={{ marginTop: 10, fontSize: 11.5, color: t.faint }}>Teks petunjuk sudah ditampilkan (3 detik) di tengah layar. Klik lagi tombol di atas untuk menampilkannya ulang.</div>
+          <div style={{ marginTop: 10, fontSize: 11.5, color: t.faint }}>Teks petunjuk sudah ditampilkan ({teksDurasiDetik} detik) di tengah layar. Klik lagi tombol di atas untuk menampilkannya ulang.</div>
         )}
         {audioMode === "guru" && <div style={{ marginTop: 10, fontSize: 11.5, color: t.faint }}>Kalau tidak ada yang angkat tangan 5 detik setelah audio selesai, audio diputar ulang otomatis.</div>}
+        {audioMode === "bebas" && <div style={{ marginTop: 10, fontSize: 11.5, color: t.faint }}>Bacakan petunjuk kata mana pun sesuka Anda (urutan bebas) — jawaban kelompok diterima kalau cocok dengan salah satu kosakata babak ini yang belum ketemu.</div>}
       </div>
 
       <div style={{ background: t.panel, borderRadius: 14, padding: 18, boxShadow: t.shadowSm }}>
         <div style={{ fontSize: 13, color: t.dim, marginBottom: 10 }}>{mode === "digital" ? "Buzzer kelompok" : "Tunjuk kelompok penjawab"}</div>
         {currentWord && !clueRevealed && (
-          <div style={{ marginBottom: 10, fontSize: 12, color: "#F4B740", background: "rgba(244,183,64,.12)", borderRadius: 8, padding: "8px 10px" }}>Tombol masih terkunci — klik "{audioMode === "guru" && currentWord.audioUrl ? "Putar Petunjuk" : "Tampilkan teks"}" di panel kanan dulu supaya kelompok bisa angkat tangan.</div>
+          <div style={{ marginBottom: 10, fontSize: 12, color: "#F4B740", background: "rgba(244,183,64,.12)", borderRadius: 8, padding: "8px 10px" }}>Tombol masih terkunci — klik "{audioMode === "guru" && currentWord.audioUrl ? "Putar Petunjuk" : audioMode === "bebas" ? "Siap — Boleh Angkat Tangan" : "Tampilkan teks"}" di panel kanan dulu supaya kelompok bisa angkat tangan.</div>
         )}
         {/* FIX (fitur diminta): dulu di mode Manual, guru cuma bisa memilih SATU kelompok
             (klik langsung setActiveGroup), dan begitu satu kelompok aktif, tombol kelompok
@@ -2587,7 +2669,30 @@ function TebakCariKataGame({ onBack, teacher }) {
         )}
         {activeGroup && <div style={{ marginTop: 10, fontSize: 13, color: t.dim }}>Kelompok {activeGroup} pegang giliran — klik huruf awal &amp; akhir kata di papan.</div>}
         <div style={{ marginTop: 10, fontSize: 11.5, color: t.faint }}>{babakId === 1 ? "Babak 1: kelompok yang sudah mencoba tidak bisa menjawab lagi untuk soal ini." : "Kelompok yang sudah mencoba boleh menjawab lagi kalau tidak ada kelompok lain yang mengangkat tangan."}</div>
-        {currentWord && <button onClick={skipWord} style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 6, background: "transparent", border: `1px solid ${t.panel2}`, color: t.dim, borderRadius: 8, padding: "8px 12px", fontSize: 13, cursor: "pointer", width: "100%", justifyContent: "center" }}><span style={{ fontSize: 14, lineHeight: 1, color: 'inherit' }}>⏭</span> Lewati soal ini</button>}
+        {/* FITUR BARU (mode Guru Bebas): "Lewati soal ini" tidak masuk akal di mode ini karena
+            tidak ada "1 soal aktif" yang tunggal — jadi diganti jadi picker: guru pilih sendiri
+            kata mana yang mau diungkap paksa (tidak dapat poin), dari sisa kosakata babak ini. */}
+        {currentWord && audioMode === "bebas" && (
+          <div style={{ marginTop: 12 }}>
+            <button onClick={() => setSkipPickerOpen((v) => !v)} style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: `1px solid ${t.panel2}`, color: t.dim, borderRadius: 8, padding: "8px 12px", fontSize: 13, cursor: "pointer", width: "100%", justifyContent: "center" }}><span style={{ fontSize: 14, lineHeight: 1, color: 'inherit' }}>⏭</span> Lewati salah satu kosakata…</button>
+            {skipPickerOpen && (
+              <div style={{ marginTop: 8, maxHeight: 220, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6, background: t.bg, borderRadius: 8, padding: 8 }}>
+                {queue.length === 0 && <div style={{ fontSize: 12, color: t.faint, padding: 4 }}>Tidak ada kosakata tersisa.</div>}
+                {queue.map((id) => {
+                  const w = babak.words.find((x) => x.id === id);
+                  if (!w) return null;
+                  return (
+                    <button key={id} onClick={() => skipWord(w)} style={{ textAlign: "left", background: t.panel2, border: "none", borderRadius: 7, padding: "7px 10px", cursor: "pointer", color: t.text }}>
+                      <div style={{ fontWeight: 700, fontSize: 12.5 }}>{w.letters}</div>
+                      <div style={{ fontSize: 11, color: t.dim }}>{w.clue}</div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+        {currentWord && audioMode !== "bebas" && <button onClick={() => skipWord()} style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 6, background: "transparent", border: `1px solid ${t.panel2}`, color: t.dim, borderRadius: 8, padding: "8px 12px", fontSize: 13, cursor: "pointer", width: "100%", justifyContent: "center" }}><span style={{ fontSize: 14, lineHeight: 1, color: 'inherit' }}>⏭</span> Lewati soal ini</button>}
       </div>
 
       {!hideScoreboard && renderScoreboard()}
