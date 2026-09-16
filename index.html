@@ -405,15 +405,15 @@ function ensureMateri(data, materi) {
 // "Pilih materi" di halaman Persiapan terasa related dengan branding, bukan sekadar daftar
 // pilihan biasa.
 const MATERI_LIST = [
-  { name: "Aisatsu", desc: "Salam sapaan", icon: "👋", accent: "#3E7CB1", accentSoft: "#E8F1F8", available: true },
-  { name: "Jikoshoukai", desc: "Perkenalan diri", icon: "🙋", accent: "#D98A2B", accentSoft: "#FBF0E1", available: true },
-  { name: "Gakkou no Seikatsu", desc: "Kehidupan sekolah", icon: "🏫", accent: "#3FBFAD", accentSoft: "#E4F7F4", available: true },
-  { name: "Jikan", desc: "Waktu", icon: "⏰", accent: "#F4B740", accentSoft: "#FDF3DE", available: true },
-  { name: "Dekiru Koto", desc: "Kemampuan", icon: "💪", accent: "#C45B5B", accentSoft: "#FAEAEA", available: true },
-  { name: "Kazoku", desc: "Keluarga", icon: "👪", accent: "#8E7CC3", accentSoft: "#EFEAF9", available: true },
-  { name: "Mainichi no Seikatsu", desc: "Kehidupan sehari-hari", icon: "🗓️", accent: "#5DA9E9", accentSoft: "#E9F3FD", available: true },
-  { name: "Uchi", desc: "Rumah", icon: "🏠", accent: "#8FBF6B", accentSoft: "#EEF7E8", available: true },
-  { name: "Shumi to Himana Toki", desc: "Hobi dan waktu luang", icon: "🎨", accent: "#F2879E", accentSoft: "#FCEAEF", available: true },
+  { name: "Aisatsu", desc: "Salam sapaan", icon: "👋", kana: "あいさつ", accent: "#3E7CB1", accentSoft: "#E8F1F8", available: true },
+  { name: "Jikoshoukai", desc: "Perkenalan diri", icon: "🙋", kana: "じこしょうかい", accent: "#D98A2B", accentSoft: "#FBF0E1", available: true },
+  { name: "Gakkou no Seikatsu", desc: "Kehidupan sekolah", icon: "🏫", kana: "がっこうのせいかつ", accent: "#3FBFAD", accentSoft: "#E4F7F4", available: true },
+  { name: "Jikan", desc: "Waktu", icon: "⏰", kana: "じかん", accent: "#F4B740", accentSoft: "#FDF3DE", available: true },
+  { name: "Dekiru Koto", desc: "Kemampuan", icon: "💪", kana: "できること", accent: "#C45B5B", accentSoft: "#FAEAEA", available: true },
+  { name: "Kazoku", desc: "Keluarga", icon: "👪", kana: "かぞく", accent: "#8E7CC3", accentSoft: "#EFEAF9", available: true },
+  { name: "Mainichi no Seikatsu", desc: "Kehidupan sehari-hari", icon: "🗓️", kana: "まいにちのせいかつ", accent: "#5DA9E9", accentSoft: "#E9F3FD", available: true },
+  { name: "Uchi", desc: "Rumah", icon: "🏠", kana: "うち", accent: "#8FBF6B", accentSoft: "#EEF7E8", available: true },
+  { name: "Shumi to Himana Toki", desc: "Hobi dan waktu luang", icon: "🎨", kana: "しゅみとひまなとき", accent: "#F2879E", accentSoft: "#FCEAEF", available: true },
 ];
 
 // FIX (dedup): kartu "Pilih materi" ini dipakai bareng di Word Search & Mystery Box.
@@ -423,7 +423,7 @@ const MATERI_LIST = [
 // halaman Persiapan terasa lebih menarik dilihat, bukan cuma daftar teks.
 function MateriPicker({ t, selected, onSelect }) {
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(148px, 1fr))", gap: 10 }}>
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: 12 }}>
       {MATERI_LIST.map((m, i) => {
         const isSelected = selected === m.name;
         return (
@@ -431,18 +431,67 @@ function MateriPicker({ t, selected, onSelect }) {
             className="materi-card"
             style={{
               position: "relative", display: "flex", flexDirection: "column", alignItems: "flex-start", textAlign: "left",
-              gap: 6, padding: "12px 12px 11px", borderRadius: 14, cursor: m.available ? "pointer" : "default",
-              background: isSelected ? m.accentSoft : t.panel2, border: `1.5px solid ${isSelected ? m.accent : t.border}`,
-              opacity: m.available ? 1 : 0.45, boxShadow: isSelected ? `0 4px 14px -6px ${m.accent}66` : "none",
-              transition: "border-color .15s ease, background .15s ease, box-shadow .15s ease, transform .1s ease",
+              gap: 0, padding: 0, borderRadius: 16, cursor: m.available ? "pointer" : "default",
+              background: isSelected ? m.accentSoft : t.panel2,
+              border: `2px solid ${isSelected ? m.accent : t.border}`,
+              opacity: m.available ? 1 : 0.4,
+              boxShadow: isSelected ? `0 6px 20px -6px ${m.accent}55` : t.shadowSm,
+              transition: "all .18s ease", overflow: "hidden",
             }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%" }}>
-              <div style={{ width: 26, height: 26, borderRadius: 8, background: isSelected ? m.accent : t.panel, color: isSelected ? "#fff" : t.faint, fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{i + 1}</div>
-              <span style={{ fontSize: 17, lineHeight: 1 }}>{m.icon}</span>
+
+            {/* Strip warna atas */}
+            <div style={{
+              width: "100%", height: 5,
+              background: isSelected ? m.accent : `${m.accent}44`,
+              transition: "background .18s ease",
+            }} />
+
+            {/* Konten kartu */}
+            <div style={{ padding: "10px 12px 12px", width: "100%", boxSizing: "border-box", display: "flex", flexDirection: "column", gap: 5 }}>
+              {/* Baris atas: nomor + ikon */}
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <div style={{
+                  width: 24, height: 24, borderRadius: 7,
+                  background: isSelected ? m.accent : `${m.accent}22`,
+                  color: isSelected ? "#fff" : m.accent,
+                  fontSize: 11, fontWeight: 800,
+                  display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+                }}>{i + 1}</div>
+                <span style={{ fontSize: 20, lineHeight: 1 }}>{m.icon}</span>
+              </div>
+
+              {/* Nama materi */}
+              <div className="sgt" style={{
+                fontSize: 12.5, fontWeight: 800, lineHeight: 1.25,
+                color: isSelected ? m.accent : t.text,
+                marginTop: 2,
+              }}>{m.name}</div>
+
+              {/* Deskripsi Indonesia */}
+              <div style={{ fontSize: 10.5, color: isSelected ? "#3A3220" : t.faint, lineHeight: 1.35 }}>
+                {m.desc}
+              </div>
+
+              {/* Kana Jepang */}
+              <div style={{
+                fontSize: 10, color: isSelected ? m.accent : `${m.accent}88`,
+                fontFamily: "'Noto Sans JP', sans-serif",
+                letterSpacing: 0.5, marginTop: 2,
+                opacity: isSelected ? 1 : 0.7,
+              }}>{m.kana || ""}</div>
             </div>
-            <div className="sgt" style={{ fontSize: 13, fontWeight: 700, color: isSelected ? "#101B34" : t.text, lineHeight: 1.25 }}>{m.name}</div>
-            <div style={{ fontSize: 11, color: isSelected ? "#3A3220" : t.faint, lineHeight: 1.3 }}>{m.desc}{!m.available ? " · segera" : ""}</div>
-            {isSelected && <span style={{ position: "absolute", top: 8, right: 8, width: 16, height: 16, borderRadius: "50%", background: m.accent, color: "#fff", fontSize: 9, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>✓</span>}
+
+            {/* Centang terpilih */}
+            {isSelected && (
+              <div style={{
+                position: "absolute", top: 10, right: 10,
+                width: 18, height: 18, borderRadius: "50%",
+                background: m.accent, color: "#fff",
+                fontSize: 10, fontWeight: 700,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                boxShadow: `0 2px 8px ${m.accent}66`,
+              }}>✓</div>
+            )}
           </button>
         );
       })}
@@ -833,7 +882,11 @@ const fontImport = `
      disentuh, supaya terasa interaktif seperti kartu game di halaman Pilih Game — tapi
      gerakannya lebih halus (bukan grid utama) supaya tidak mengalihkan perhatian dari isian
      kosakata di bawahnya. */
-  .materi-card:hover:not(:disabled) { transform: translateY(-2px); }
+  .materi-card:hover:not(:disabled) {
+  transform: translateY(-3px);
+  box-shadow: 0 8px 24px -8px rgba(0,0,0,0.18) !important;
+}
+.materi-card:active:not(:disabled) { transform: translateY(-1px); }
   .pilih-game-header { animation: headerFade .45s ease both; }
   /* Optimasi layar HP untuk "Pilih Game": versi desktop dirancang dengan padding lebar, judul
      besar, dan motif kanji dekoratif berukuran penuh — semuanya terasa sesak di layar sempit.
@@ -3050,28 +3103,47 @@ function TebakCariKataGame({ onBack, teacher }) {
         <span style={{ fontSize: 11.5, color: t.faint }}>{mode === "digital" ? "Kelompok pencet tombol duluan untuk mengunci giliran." : "Guru klik kelompok sesuai urutan angkat tangan."}</span>
       </div>
 
-      {/* BARIS 4: Konten utama — papan kiri + panel kontrol kanan, flex grow */}
-      <div style={{ display: "flex", gap: 16, flex: 1, minHeight: 0, alignItems: "stretch" }}>
-        {/* Papan puzzle — kiri, mengisi sisa tinggi layar */}
-        <div style={{ flex: "1 1 0", minWidth: 0, minHeight: 0, position: "relative", display: "flex", flexDirection: "column", overflow: "hidden" }}>
-          <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
+      {/* BARIS 4: Konten utama — 3 kolom seperti mode proyektor */}
+      <div style={{ display: "grid", gridTemplateColumns: "200px minmax(0,1fr) 300px", gap: 14, flex: 1, minHeight: 0 }}>
+
+        {/* Kolom kiri: Papan Skor + buzz order */}
+        <div style={{ overflowY: "auto", minHeight: 0, display: "flex", flexDirection: "column", gap: 10 }}>
+          <div className="sgt" style={{ fontSize: 13, fontWeight: 700, textAlign: "center", color: t.dim }}>Word Search — {babak.label}</div>
+          {renderBuzzIndicator()}
+          {buzzOrder.length > 1 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+              {buzzOrder.map((o, i) => (
+                <div key={o.group} style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, borderRadius: 8, padding: "4px 8px" }}>
+                  <span style={{ width: 16, height: 16, borderRadius: "50%", background: GROUP_COLORS[o.group - 1], color: "#101B34", fontSize: 9, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{i + 1}</span>
+                  <span className="sgt" style={{ fontWeight: 700, fontSize: 11.5 }}>Kelompok {o.group}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {renderScoreboard()}
+        </div>
+
+        {/* Kolom tengah: papan huruf — fokus utama, sebesar mungkin */}
+        <div style={{ minHeight: 0, minWidth: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
+          <div style={{ flex: 1, minHeight: 0, width: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
             {renderGrid()}
           </div>
           {puzzle && !currentWord && (
             autoNext !== null ? (
-              <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 10, background: t.panel, padding: "8px 12px", borderRadius: 10, flexWrap: "wrap", flexShrink: 0 }}>
+              <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 10, background: t.panel, padding: "8px 12px", borderRadius: 10, flexWrap: "wrap", flexShrink: 0, width: "100%" }}>
                 <span style={{ fontSize: 13, color: t.text }}>🎉 Babak {babakId} selesai! Lanjut ke Babak {babakId + 1} dalam <b>{autoNext}</b> detik…</span>
                 <button onClick={cancelAutoNext} style={{ background: t.panel2, border: "none", color: t.dim, borderRadius: 7, padding: "5px 10px", cursor: "pointer", fontSize: 12, fontWeight: 600 }}>Batalkan</button>
               </div>
             ) : (
-              <div style={{ marginTop: 10, fontSize: 13, color: t.dim, flexShrink: 0 }}>Semua kosakata di babak ini sudah ditemukan. Ganti babak untuk melanjutkan.</div>
+              <div style={{ marginTop: 8, fontSize: 12.5, color: t.dim, flexShrink: 0 }}>Semua kosakata sudah ditemukan. Ganti babak untuk melanjutkan.</div>
             )
           )}
         </div>
 
-        {/* Panel kontrol — kanan, scroll sendiri jika kontennya panjang */}
-        <div style={{ width: 320, flexShrink: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: 12 }}>
-          {renderControlPanel()}
+        {/* Kolom kanan: panel kontrol guru */}
+        <div style={{ overflowY: "auto", minHeight: 0, display: "flex", flexDirection: "column", gap: 10 }}>
+          <div style={{ fontSize: 11, color: t.faint, textAlign: "center" }}>Panel guru</div>
+          {renderControlPanel({ hideScoreboard: true, hideBuzzOrder: true })}
         </div>
       </div>
     </div>
