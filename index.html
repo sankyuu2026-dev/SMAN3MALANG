@@ -462,22 +462,22 @@ function MateriPicker({ t, selected, onSelect }) {
 
               {/* Nama materi */}
               <div className="sgt" style={{
-                fontSize: 12.5, fontWeight: 800, lineHeight: 1.25,
+                fontSize: 14, fontWeight: 800, lineHeight: 1.25,
                 color: isSelected ? m.accent : t.text,
                 marginTop: 2,
               }}>{m.name}</div>
 
               {/* Deskripsi Indonesia */}
-              <div style={{ fontSize: 10.5, color: isSelected ? "#3A3220" : t.faint, lineHeight: 1.35 }}>
+              <div style={{ fontSize: 12, color: isSelected ? "#3A3220" : t.dim, lineHeight: 1.35 }}>
                 {m.desc}
               </div>
 
               {/* Kana Jepang */}
               <div style={{
-                fontSize: 10, color: isSelected ? m.accent : `${m.accent}88`,
+                fontSize: 11.5, color: isSelected ? m.accent : `${m.accent}CC`,
                 fontFamily: "'Noto Sans JP', sans-serif",
                 letterSpacing: 0.5, marginTop: 2,
-                opacity: isSelected ? 1 : 0.7,
+                opacity: isSelected ? 1 : 0.85,
               }}>{m.kana || ""}</div>
             </div>
 
@@ -832,6 +832,10 @@ const THEMES = {
     border: "#2B3D6E", shadowSm: "0 1px 3px rgba(0,0,0,.35)", shadowMd: "0 6px 20px rgba(0,0,0,.35)",
   },
   light: {
+    // FIX (keterbacaan): warna "faint" dulu #8D93A3 — di tema terang (latar krem cerah) warna abu
+    // muda ini kontrasnya terlalu rendah untuk teks kecil (10-12px), jadi kelihatan tipis/nyaris
+    // hilang (mis. deskripsi materi, catatan kecil di bawah papan). Digelapkan supaya tetap kelihatan
+    // "sekunder" dibanding teks utama, tapi tidak sampai susah dibaca.
     // FIX (permintaan guru: "tampilan siang kurang bagus, buat sangat bagus") — sebelumnya cuma
     // gradasi krem datar (nyaris putih ke krem pucat) tanpa "kedalaman", panel & panel2 & border
     // warnanya terlalu berdekatan (jadi elemen terasa blur/tidak jelas batasnya), dan bayangannya
@@ -842,7 +846,7 @@ const THEMES = {
     // lebih lembut-tapi-dalam supaya kartu & tombol terasa "melayang" di atas latar.
     bg: "radial-gradient(1100px 560px at 50% -8%, rgba(244,183,64,.14), transparent 60%), linear-gradient(180deg,#FFFEFA 0%,#F8F2E3 48%,#EFE6CF 100%)",
     panel: "#FFFFFF", panel2: "#F6EFDF",
-    text: "#181C30", dim: "#565C70", faint: "#8D93A3", cellText: "#181C30", modalBg: "#FFFFFF",
+    text: "#181C30", dim: "#565C70", faint: "#6B7086", cellText: "#181C30", modalBg: "#FFFFFF",
     border: "#E4D9C0", shadowSm: "0 1px 2px rgba(28,32,51,.05), 0 3px 10px rgba(28,32,51,.06)", shadowMd: "0 14px 34px rgba(28,32,51,.12), 0 2px 8px rgba(28,32,51,.05)",
   },
 };
@@ -1675,17 +1679,26 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
   // perubahan kata (kalau guru edit/tambah/hapus kosakata, preview lama otomatis basi dan dibangun ulang).
   const babakWordsSig = babakSignature(babak.words);
 
-  // Bangun otomatis preview puzzle utk babak yang sedang dibuka di Persiapan kalau belum ada
-  // atau kalau kosakatanya sudah berubah sejak preview terakhir dibuat.
+  // FIX (bug "kedipan" saat hapus/edit kosakata): sebelumnya papan pratinjau di sini dibangun
+  // lewat useEffect — begitu kosakata berubah, sidik jarinya (babakWordsSig) langsung berubah
+  // PADA RENDER YANG SAMA, tapi puzzleByBabak (state) masih menyimpan sidik jari LAMA sampai
+  // efeknya sempat jalan. Selisih satu render itu bikin puzzlePreview sempat bernilai null →
+  // tampilan sempat balik ke pesan "isi kosakata dulu" → lalu balik lagi ke papan sesaat
+  // kemudian — itulah yang terlihat sebagai kedipan. Sekarang papan default dihitung SINKRON
+  // di sini lewat useMemo (selesai dalam render yang sama, tidak pernah ada momen kosong),
+  // useEffect di bawah cuma dipakai untuk kasus KHUSUS: mengunci hasil "Acak Ulang" supaya
+  // dipakai persis saat "Mulai Permainan" (lihat resetRound).
+  const defaultPuzzlePreview = useMemo(() => (babakWordsSig ? buildPuzzle(babak.words) : null), [babakWordsSig]);
+
   useEffect(() => {
     if (stage !== "setup") return;
     if (!babakWordsSig) return;
     setPuzzleByBabak((prev) => {
       const cached = prev[babakId];
       if (cached && cached.signature === babakWordsSig) return prev;
-      return { ...prev, [babakId]: { signature: babakWordsSig, puzzle: buildPuzzle(babak.words) } };
+      return { ...prev, [babakId]: { signature: babakWordsSig, puzzle: defaultPuzzlePreview } };
     });
-  }, [stage, babakId, babakWordsSig]);
+  }, [stage, babakId, babakWordsSig, defaultPuzzlePreview]);
 
   // Tombol "Acak Ulang" di Persiapan — sengaja HANYA ada di layar ini (bukan saat main),
   // supaya posisi jawaban yang dipakai siswa sudah final & tidak berubah-ubah waktu bermain.
@@ -1695,7 +1708,10 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
   }
 
   const puzzlePreviewEntry = puzzleByBabak[babakId];
-  const puzzlePreview = puzzlePreviewEntry && puzzlePreviewEntry.signature === babakWordsSig ? puzzlePreviewEntry.puzzle : null;
+  // Kalau guru sudah pernah menekan "Acak Ulang" untuk kosakata versi SEKARANG (signature cocok),
+  // pakai hasil acakan itu; kalau belum (atau kosakata baru saja berubah), pakai papan default
+  // di atas — jadi papan selalu ada isinya, tidak pernah kosong menunggu efek selesai.
+  const puzzlePreview = puzzlePreviewEntry && puzzlePreviewEntry.signature === babakWordsSig ? puzzlePreviewEntry.puzzle : defaultPuzzlePreview;
   // Warna kunci jawaban per kata, urut sesuai daftar kosakata (bukan acak) supaya konsisten dengan nomor di daftar.
   const answerKeyColorByWordId = useMemo(() => {
     const map = {};
@@ -1787,7 +1803,12 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
       const uniqueCode = await ensureUniqueRoomCode(roomCode);
       if (uniqueCode !== roomCode) setRoomCode(uniqueCode);
       babakSnapshotsRef.current = {};
-      resetRound(babakId);
+      // FIX: babakId ikut berubah tiap kali guru buka accordion babak lain di Persiapan (buat lihat/
+      // edit kosakata Babak 2 atau 3, misalnya) — jadi kalau langsung klik "Mulai Permainan" setelah
+      // itu, permainan ikut mulai dari babak yang kebetulan masih terbuka, bukan dari Babak 1. Sengaja
+      // dipaksa mulai dari Babak 1 di sini, terlepas dari accordion mana yang terakhir dibuka.
+      setBabakId(1);
+      resetRound(1);
       setStage("play");
     } finally {
       setStartingGame(false);
@@ -2587,7 +2608,7 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
             {/* FITUR BARU: Mode ke-3, "Guru Bebas" — guru membacakan petunjuknya sendiri secara
                 lisan dari catatannya sendiri (tidak ada apa pun yang ditampilkan/diputar sistem).
                 Cocok untuk guru yang tidak memakai 2 layar/perangkat terpisah. */}
-            <button onClick={() => setAudioMode("bebas")} style={{ display: "flex", alignItems: "center", gap: 5, padding: "5px 9px", borderRadius: 6, border: "none", cursor: "pointer", background: audioMode === "bebas" ? "#3FBFAD" : "transparent", color: audioMode === "bebas" ? "#0D1730" : t.text, fontSize: 11.5, fontWeight: 600 }}><span style={{ fontSize: 12, lineHeight: 1, color: 'inherit' }}>🎙️</span> Guru Bebas</button>
+            <button onClick={() => setAudioMode("bebas")} style={{ display: "flex", alignItems: "center", gap: 5, padding: "5px 9px", borderRadius: 6, border: "none", cursor: "pointer", background: audioMode === "bebas" ? "#3FBFAD" : "transparent", color: audioMode === "bebas" ? "#0D1730" : t.text, fontSize: 11.5, fontWeight: 600 }}><span style={{ fontSize: 12, lineHeight: 1, color: 'inherit' }}>🎙️</span> Bebas</button>
           </div>
         </div>
 
@@ -2610,7 +2631,7 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
               : <span style={{ fontSize: 18, lineHeight: 1, color: 'inherit' }}>🔇</span>}
             {audioMode === "guru" && currentWord.audioUrl ? (speaking ? "Memutar…" : "Putar Petunjuk")
               : audioMode === "bebas" ? "Siap — Boleh Angkat Tangan"
-              : "Tampilkan teks (dibacakan guru)"}
+              : "Tampilkan Teks di Layar"}
           </button>
         )}
         {/* Sengaja TIDAK ada teks petunjuk permanen di sini, di ketiga mode:
@@ -2825,15 +2846,16 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
       });
     }
     return (
-      <div className="app-screen" style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: t.bg, color: t.text, minHeight: "100vh", padding: 28, boxSizing: "border-box" }}>
+      <div className="app-screen" style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: t.bg, color: t.text, minHeight: "100vh", padding: 28, boxSizing: "border-box", position: "relative", overflow: "hidden" }}>
         <style>{fontImport}</style>
+        <JapaneseBackdrop theme={theme} />
         {historyOpen && <HistoryModal />}
 
         {/* HEADER — judul kiri, aksi kanan */}
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 28, flexWrap: "wrap", gap: 12 }}>
+        <div style={{ position: "relative", zIndex: 1, display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 28, flexWrap: "wrap", gap: 12 }}>
           <div>
             <div className="sgt page-title" style={{ fontSize: 32, fontWeight: 800, letterSpacing: -0.5 }}>Persiapan Permainan</div>
-            <div style={{ fontSize: 13.5, color: t.dim, marginTop: 3 }}>Susun materi &amp; kosakata sebelum mulai bermain bersama siswa.</div>
+            <div style={{ fontSize: 14.5, color: t.dim, marginTop: 3 }}>Susun materi &amp; kosakata sebelum mulai bermain bersama siswa.</div>
           </div>
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             {/* Ikon utilitas */}
@@ -2902,7 +2924,7 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
                       <div style={{ width: 28, height: 28, borderRadius: "50%", background: isOpen ? "#F4B740" : t.panel, border: isOpen ? "none" : `1px solid ${t.border}`, color: isOpen ? "#101B34" : t.dim, fontWeight: 700, fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{id}</div>
                       <div style={{ minWidth: 0 }}>
                         <div className="sgt" style={{ fontWeight: 700, fontSize: 14, color: t.text }}>Babak {id}</div>
-                        <div style={{ fontSize: 12, color: t.faint, marginTop: 1 }}>{meta.sub} · {meta.point} poin / soal · {wordsForId.length} kosakata</div>
+                        <div style={{ fontSize: 13, color: t.dim, marginTop: 1 }}>{meta.sub} · {meta.point} poin / soal · {wordsForId.length} kosakata</div>
                       </div>
                     </div>
                     <span style={{ width: 26, height: 26, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, color: isOpen ? "#101B34" : t.dim, background: isOpen ? "#F4B740" : "transparent", flexShrink: 0, transform: isOpen ? "rotate(180deg)" : "none", transition: "transform .15s ease, background .15s ease" }}>▾</span>
@@ -2925,7 +2947,7 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
                           <div>
                           {!puzzlePreview ? (
                             <div style={{ padding: 20, color: t.dim, fontSize: 13, textAlign: "center", background: t.panel2, borderRadius: 12 }}>
-                              {puzzlePreviewEntry && puzzlePreviewEntry.signature === babakWordsSig && puzzlePreviewEntry.puzzle === null
+                              {babakWordsSig && defaultPuzzlePreview === null
                                 ? `Papan gagal disusun — coba kurangi jumlah kata atau perpendek beberapa kata, lalu klik "Acak Ulang".`
                                 : `Isi kosakata di bawah untuk melihat pratinjau papan.`}
                             </div>
@@ -2965,7 +2987,7 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
                             </div>
 
                             {/* Catatan di bawah papan */}
-                            <div style={{ fontSize: 11.5, color: t.faint, lineHeight: 1.6 }}>
+                            <div style={{ fontSize: 12.5, color: t.dim, lineHeight: 1.6 }}>
                               Papan ini persis yang dipakai saat "Mulai Permainan" — bukan diacak ulang otomatis.
                             </div>
 
@@ -4035,7 +4057,14 @@ const BG_MOTIFS = [
 function JapaneseBackdrop({ theme }) {
   const color = theme === "dark" ? "rgba(244,241,232,.05)" : "rgba(16,27,52,.045)";
   return (
-    <div style={{ position: "fixed", inset: 0, overflow: "hidden", pointerEvents: "none", zIndex: 0 }} className="jp-backdrop">
+    // FIX: zIndex dulu 0 — cukup untuk layar "Pilih Game" karena kontennya sengaja dibungkus 1 div
+    // ber-zIndex:1. Tapi di layar lain (mis. Persiapan) yang tidak dibungkus begitu, backdrop
+    // position:fixed dengan zIndex:0 justru bisa ikut tergambar DI ATAS konten biasa (elemen
+    // position:static tanpa z-index digambar SEBELUM elemen positioned ber-z-index:0 di urutan
+    // stacking CSS baku) — menutupi sebagian isi halaman. zIndex negatif memastikan backdrop ini
+    // selalu di lapisan paling belakang di mana pun dipakai, tanpa perlu tiap layar membungkus
+    // seluruh kontennya secara eksplisit.
+    <div style={{ position: "fixed", inset: 0, overflow: "hidden", pointerEvents: "none", zIndex: -1 }} className="jp-backdrop">
       {BG_MOTIFS.map((m, i) => (
         <span key={i} className="sgt" style={{
           position: "absolute", top: m.top, left: m.left, fontSize: m.size, fontWeight: 700,
