@@ -527,6 +527,13 @@ const GROUP_COLORS = ["#F4B740", "#EF5B5B", "#3FBFAD", "#F2879E", "#5DA9E9", "#8
 // Warna netral (abu-abu) khusus untuk kata yang jawabannya diungkap lewat "Lewati soal" — sengaja
 // beda dari GROUP_COLORS / ANSWER_KEY_PALETTE supaya jelas ini bukan hasil jawaban benar kelompok.
 const REVEALED_COLOR = "#9AA3B2";
+// FITUR BARU: warna & label khusus untuk pseudo-kelompok "Guru" (activeGroup === "guru") — guru
+// bisa "pegang giliran" sendiri untuk menjawab langsung di papan (tanpa memberi poin ke kelompok
+// manapun) atau mengoreksi kesalahan eksekusi. Sengaja beda dari GROUP_COLORS supaya tidak
+// tertukar visual dengan kelompok asli mana pun.
+const GURU_COLOR = "#8B7FD6";
+function groupColor(g) { return g === "guru" ? GURU_COLOR : GROUP_COLORS[g - 1]; }
+function groupLabel(g) { return g === "guru" ? "Guru" : `Kelompok ${g}`; }
 const GROUP_NAMES = [1, 2, 3, 4, 5, 6];
 // Palet khusus untuk kunci jawaban di layar Persiapan — perlu lebih banyak warna dari GROUP_COLORS
 // karena satu babak bisa berisi sampai 20 kata sekaligus (lihat Babak 3), bukan cuma 6 kelompok.
@@ -1531,7 +1538,6 @@ function TebakCariKataGame({ onBack, teacher }) {
   const [mode, setMode] = useState("digital");
   const [audioMode, setAudioMode] = useState("guru"); // "guru" = Audio, "off" = Teks, "bebas" = Guru Bebas
   const [teksDurasiDetik, setTeksDurasiDetik] = useState(3); // durasi tampil mode Teks, guru bisa atur (dulu dipatok 3)
-  const [skipPickerOpen, setSkipPickerOpen] = useState(false); // mode Guru Bebas: daftar pilih kata yang mau dilewati
   const [scores, setScores] = useState({ 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 });
   const prevScoresRef = useRef({ 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 });
   const [bumpedGroup, setBumpedGroup] = useState(null); // kelompok yang skornya baru saja naik, buat animasi angka "melompat"
@@ -1992,7 +1998,10 @@ function TebakCariKataGame({ onBack, teacher }) {
   // Setiap kali giliran aktif berubah di layar guru, siarkan ke room supaya semua HP ikut update.
   useEffect(() => {
     if (stage !== "play") return;
-    db.collection("rooms").doc(roomCode).set({ activeTurnGroup: activeGroup || null }, { merge: true }).catch(() => {});
+    // FITUR BARU: kalau yang aktif adalah "Guru" (bukan kelompok asli), sengaja TIDAK dikirim ke
+    // tampilan eksternal — bagi siswa tetap terlihat "menunggu", karena ini murni tindakan
+    // administratif guru (mengungkap/mengoreksi), bukan giliran kelompok yang perlu diumumkan.
+    db.collection("rooms").doc(roomCode).set({ activeTurnGroup: typeof activeGroup === "number" ? activeGroup : null }, { merge: true }).catch(() => {});
   }, [stage, roomCode, activeGroup]);
 
   // FIX: papan skor sebelumnya cuma tersimpan lokal di browser guru (state React), jadi HP
@@ -2130,6 +2139,53 @@ function TebakCariKataGame({ onBack, teacher }) {
 
   function releaseTurn() { activeGroupRef.current = null; setActiveGroup(null); setSelStart(null); }
 
+  // FITUR BARU: koreksi skor manual — dulu skor cuma bisa naik lewat jawaban benar yang dieksekusi
+  // sistem (handleCellClick). Kalau guru salah menilai (mis. jawaban kelompok sebenarnya benar tapi
+  // guru terlanjur menyalahkan), tidak ada cara memperbaikinya selain kejadian itu dibiarkan salah
+  // terus. Sekarang guru bisa menambah/mengurangi skor kelompok mana pun secara langsung, sebesar
+  // poin babak yang sedang berjalan (unit yang sama dengan 1 jawaban benar), kapan saja — tidak
+  // terikat harus ada soal aktif atau giliran tertentu.
+  function adjustScore(group, delta) {
+    setScores((s) => ({ ...s, [group]: Math.max(0, (s[group] || 0) + delta) }));
+  }
+
+  // FITUR BARU: "Guru" adalah pseudo-kelompok — begitu diaktifkan, guru sendiri yang klik huruf
+  // di papan (persis seperti kelompok biasa), tapi TIDAK ADA kelompok yang dapat poin. Dipakai
+  // untuk (1) mengungkap/menjawab soal yang tidak bisa dijawab murid (menggantikan "Lewati soal"
+  // dengan cara yang lebih langsung), dan (2) memperbaiki kesalahan eksekusi guru sendiri secara
+  // umum. Sengaja TIDAK lewat buzz()/antrean — guru berwenang penuh, tidak perlu antre atau
+  // tunduk pada aturan "sudah pernah salah" seperti kelompok asli.
+  function activateGuru() {
+    if (!currentWord) return;
+    clearRetryTimer();
+    if (audioRef.current) audioRef.current.pause();
+    setSpeaking(false);
+    activeGroupRef.current = "guru";
+    setActiveGroup("guru");
+    setSelStart(null);
+  }
+
+  // FITUR BARU: override/interupsi giliran — biasanya klik tombol kelompok cuma "mengantre"
+  // (lewat buzz()), tidak langsung memotong kelompok yang sedang pegang giliran. Ini dipakai kalau
+  // guru salah eksekusi (mis. niatnya menunjuk Kelompok 5 yang benar duluan, tapi ternyata giliran
+  // malah jatuh ke kelompok lain) — klik tombol override ini LANGSUNG memaksa kelompok yang dipilih
+  // jadi giliran aktif SEKARANG, menimpa siapa pun yang sedang pegang giliran, tanpa perlu menunggu
+  // antrean atau kelompok yang salah dulu.
+  function forceSetActiveGroup(group) {
+    if (!currentWord) return;
+    clearRetryTimer();
+    if (audioRef.current) audioRef.current.pause();
+    setSpeaking(false);
+    activeGroupRef.current = group;
+    setActiveGroup(group);
+    setSelStart(null);
+    if (!buzzOrderRef.current.some((o) => o.group === group)) {
+      const newOrder = [...buzzOrderRef.current, { group }];
+      buzzOrderRef.current = newOrder;
+      setBuzzOrder(newOrder);
+    }
+  }
+
   // BUGFIX: dulu tombol Digital/Manual cuma panggil releaseTurn() (batalkan giliran AKTIF saja).
   // Tapi kalau ganti mode DI TENGAH soal yang sudah ada kelompok lain yang sempat angkat tangan
   // lebih dulu (buzzOrder tidak kosong), kelompok-kelompok itu tetap tersimpan di buzzOrder —
@@ -2180,7 +2236,13 @@ function TebakCariKataGame({ onBack, teacher }) {
     setFlash({ type: "revealed", word: target.letters, clue: target.clue });
     setTimeout(() => setFlash(null), 2400);
     nextQuestion(target.id);
-    setSkipPickerOpen(false);
+  }
+
+  // Dipakai mode Guru Bebas (cek seluruh kata tersisa, bukan cuma currentWord) DAN oleh Guru
+  // (pseudo-kelompok) di mode manapun — sama-sama butuh "kata mana pun di papan yang cocok".
+  function findMatchInQueue(str) {
+    const wid = queue.find((id) => { const w = babak.words.find((x) => x.id === id); return w && w.letters === str; });
+    return wid ? babak.words.find((w) => w.id === wid) : null;
   }
 
   function handleCellClick(r, c) {
@@ -2193,6 +2255,23 @@ function TebakCariKataGame({ onBack, teacher }) {
     if (!validLine) { setSelStart([r, c]); return; }
     const cells = Array.from({ length: len }, (_, i) => [sr + dr * i, sc + dc * i]);
     const str = cells.map(([rr, cc]) => puzzle.grid[rr][cc]).join("");
+
+    // FITUR BARU: "Guru" (pseudo-kelompok) menjawab/mengoreksi LANGSUNG di papan, menggantikan
+    // "Lewati soal" dengan cara yang lebih intuitif — cek terhadap SEMUA kata tersisa (berlaku di
+    // mode apa pun, tidak cuma Guru Bebas), dan TIDAK ADA kelompok yang dapat poin sama sekali.
+    // Diperlakukan identik dengan "diungkap" (garis abu-abu putus-putus + banner "Jawaban: ...").
+    if (activeGroup === "guru") {
+      const matchedWord = findMatchInQueue(str);
+      if (matchedWord) {
+        setFoundMap((f) => ({ ...f, [matchedWord.id]: { cells, color: REVEALED_COLOR, revealed: true } }));
+        setFlash({ type: "revealed", word: matchedWord.letters, clue: matchedWord.clue });
+        setTimeout(() => setFlash(null), 2400);
+        nextQuestion(matchedWord.id);
+      }
+      setSelStart(null);
+      return;
+    }
+
     // FIX: sebelumnya jawaban yang dibalik arahnya (mis. "まど" dipilih dari "ど" ke "ま", kanan-ke-kiri)
     // ikut dianggap benar karena ada fallback "reversed === currentWord.letters". Kata di papan cuma
     // pernah ditempatkan dalam 4 arah maju (lihat DIRECTIONS: kanan, bawah, diagonal kanan-bawah,
@@ -2203,9 +2282,7 @@ function TebakCariKataGame({ onBack, teacher }) {
     // sistem tidak tahu kata MANA yang sedang ditanyakan — jadi seleksi huruf kelompok dicek
     // terhadap SELURUH kata yang masih tersisa di antrean babak ini (bukan cuma currentWord/kata
     // pertama seperti mode Audio & Teks), cocok dengan salah satu saja sudah dianggap benar.
-    const matchedWord = audioMode === "bebas"
-      ? (() => { const wid = queue.find((id) => { const w = babak.words.find((x) => x.id === id); return w && w.letters === str; }); return wid ? babak.words.find((w) => w.id === wid) : null; })()
-      : (str === currentWord.letters ? currentWord : null);
+    const matchedWord = audioMode === "bebas" ? findMatchInQueue(str) : (str === currentWord.letters ? currentWord : null);
     const match = !!matchedWord;
     if (match) {
       // FIX: warna highlight jawaban dulu ikut warna kelompok yang menjawab (GROUP_COLORS) —
@@ -2468,7 +2545,7 @@ function TebakCariKataGame({ onBack, teacher }) {
       // giliran kelompok ditandai dengan bingkai bersinar mengikuti warna kelompok yang sedang
       // pegang giliran menjawab (activeGroup) — begitu belum ada yang menang giliran, bingkai ini
       // tidak muncul sama sekali.
-      boxShadow: activeGroup ? `0 0 0 3px ${GROUP_COLORS[activeGroup - 1]}, 0 0 22px 4px ${GROUP_COLORS[activeGroup - 1]}99` : "none",
+      boxShadow: activeGroup ? `0 0 0 3px ${groupColor(activeGroup)}, 0 0 22px 4px ${groupColor(activeGroup)}99` : "none",
       transition: "box-shadow .25s ease",
       animation: "cardRise .3s ease",
     }}>
@@ -2505,9 +2582,9 @@ function TebakCariKataGame({ onBack, teacher }) {
     </div>
   ); }
 
-  function renderScoreboard({ big, compact, highlight } = {}) { return (
+  function renderScoreboard({ big, compact, highlight, editable } = {}) { return (
     <div style={{ background: compact ? "transparent" : t.panel, borderRadius: 14, padding: compact ? 0 : big ? 22 : 18 }}>
-      {!compact && <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: big ? 15 : 13, color: t.dim, marginBottom: 10 }}><span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>🏆</span> Papan Skor</div>}
+      {!compact && <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: big ? 15 : 13, color: t.dim, marginBottom: 10 }}><span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>🏆</span> Papan Skor{editable && <span style={{ fontSize: 11, color: t.faint, fontWeight: 400 }}> — klik +/- untuk koreksi manual</span>}</div>}
       <div style={{ display: "flex", flexDirection: big ? "row" : "column", gap: big ? 12 : 6, flexWrap: "wrap" }}>
         {sortedGroups.map((g) => (
           <div key={g} style={{
@@ -2520,7 +2597,19 @@ function TebakCariKataGame({ onBack, teacher }) {
               <span style={{ fontSize: big ? 16 : compact ? 12.5 : 14, fontWeight: 600, color: g === highlight ? "#101B34" : t.text }}>Kelompok {g}</span>
               {scores[g] === leaderScore && leaderScore > 0 && <span style={{ fontSize: 16, lineHeight: 1, color: g === highlight ? "#101B34" : "#F4B740" }}>👑</span>}
             </div>
-            <span className={`sgt${g === bumpedGroup ? " score-bump" : ""}`} style={{ fontWeight: 700, fontSize: big ? 22 : compact ? 13 : 15, color: g === highlight ? "#101B34" : t.text }}>{scores[g]}</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              {/* FITUR BARU: koreksi skor manual — cuma dirender kalau editable (dipanggil dari
+                  Panel Kontrol guru saja; TIDAK pernah muncul di Mode Proyektor/tampilan siswa),
+                  supaya siswa tidak melihat kontrol admin ini di layar bersama kelas. Tiap klik
+                  menambah/mengurangi sebesar poin babak yang sedang berjalan. */}
+              {editable && (
+                <button onClick={() => adjustScore(g, -babak.point)} title={`Kurangi ${babak.point} poin`} style={{ width: 20, height: 20, borderRadius: 6, border: "none", background: "rgba(239,91,91,.18)", color: "#EF5B5B", fontSize: 13, fontWeight: 700, lineHeight: 1, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>−</button>
+              )}
+              <span className={`sgt${g === bumpedGroup ? " score-bump" : ""}`} style={{ fontWeight: 700, fontSize: big ? 22 : compact ? 13 : 15, color: g === highlight ? "#101B34" : t.text }}>{scores[g]}</span>
+              {editable && (
+                <button onClick={() => adjustScore(g, babak.point)} title={`Tambah ${babak.point} poin`} style={{ width: 20, height: 20, borderRadius: 6, border: "none", background: "rgba(63,191,173,.18)", color: "#3FBFAD", fontSize: 13, fontWeight: 700, lineHeight: 1, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>+</button>
+              )}
+            </div>
           </div>
         ))}
       </div>
@@ -2542,8 +2631,8 @@ function TebakCariKataGame({ onBack, teacher }) {
   }
 
   function renderBuzzIndicator({ big } = {}) { return (
-    <div style={{ textAlign: "center", padding: big ? "18px 0" : "10px 0", borderRadius: 14, background: activeGroup ? GROUP_COLORS[activeGroup - 1] : t.panel, color: activeGroup ? "#101B34" : t.dim, fontWeight: 700, fontSize: big ? 22 : 14, transition: "background .2s ease" }}>
-      {activeGroup ? `Kelompok ${activeGroup} mengangkat tangan duluan!` : "Menunggu ada yang mengangkat tangan…"}
+    <div style={{ textAlign: "center", padding: big ? "18px 0" : "10px 0", borderRadius: 14, background: activeGroup ? groupColor(activeGroup) : t.panel, color: activeGroup ? "#101B34" : t.dim, fontWeight: 700, fontSize: big ? 22 : 14, transition: "background .2s ease" }}>
+      {activeGroup === "guru" ? "🧑‍🏫 Guru sedang menjawab/mengoreksi langsung…" : activeGroup ? `Kelompok ${activeGroup} mengangkat tangan duluan!` : "Menunggu ada yang mengangkat tangan…"}
     </div>
   ); }
 
@@ -2652,10 +2741,32 @@ function TebakCariKataGame({ onBack, teacher }) {
                 K{g}
                 {joinedGroups[g] && <span title="Sudah join lewat QR" style={{ position: "absolute", top: 4, right: 4, width: 7, height: 7, borderRadius: "50%", background: "#3FBFAD" }} />}
                 {alreadyBuzzed && <span style={{ position: "absolute", top: -6, left: -6, width: 18, height: 18, borderRadius: "50%", background: "#101B34", color: "#F4B740", fontSize: 10, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>{buzzPos + 1}</span>}
+                {/* FITUR BARU: override/interupsi giliran — beda dari tombol utama (yang cuma
+                    mengantre lewat buzz() dan dikunci kalau sudah pernah angkat tangan), ikon kecil
+                    ini SELALU aktif selama ada soal & petunjuk sudah dibuka, untuk kondisi darurat:
+                    guru salah eksekusi giliran dan perlu langsung memindahkannya ke kelompok yang
+                    benar SEKARANG, tanpa menunggu antrean. */}
+                {currentWord && clueRevealed && !isActive && (
+                  <span onClick={(e) => { e.stopPropagation(); forceSetActiveGroup(g); }} title={`Langsung jadikan giliran ${groupLabel(g)} sekarang (menimpa giliran yang sedang berjalan)`}
+                    style={{ position: "absolute", bottom: -6, right: -6, width: 20, height: 20, borderRadius: "50%", background: "#101B34", color: "#F4B740", fontSize: 10, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", boxShadow: "0 1px 4px rgba(0,0,0,.35)" }}>▶</span>
+                )}
               </button>
             );
           })}
         </div>
+        {/* FITUR BARU: "Guru" — pseudo-kelompok, dipilih persis seperti K1–K6, tapi guru sendiri
+            yang klik huruf jawabannya di papan. Dipakai untuk mengungkap/menjawab soal yang tidak
+            bisa dijawab murid TANPA memberi poin ke kelompok manapun (menggantikan tombol "Lewati
+            soal" dengan cara yang lebih langsung), atau memperbaiki kesalahan eksekusi lain. Selalu
+            tersedia di mode manapun, tidak lewat antrean buzz() — kapan pun ada soal aktif.
+            Terkunci sampai petunjuk dibuka, sama seperti kelompok asli, supaya tidak dipakai untuk
+            "curi start" sebelum soal resmi dibacakan/diputar. */}
+        {currentWord && (
+          <button onClick={activateGuru} disabled={!clueRevealed} title="Guru menjawab/mengungkap langsung di papan — tidak ada kelompok yang dapat poin"
+            style={{ marginTop: 8, width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, padding: "10px 0", borderRadius: 10, border: `1px dashed ${activeGroup === "guru" ? GURU_COLOR : t.panel2}`, cursor: clueRevealed ? "pointer" : "default", background: activeGroup === "guru" ? GURU_COLOR : "transparent", color: activeGroup === "guru" ? "#fff" : t.dim, fontWeight: 700, fontSize: 13, opacity: clueRevealed ? 1 : 0.4 }}>
+            <span style={{ fontSize: 15, lineHeight: 1, color: "inherit" }}>🧑‍🏫</span> Guru menjawab langsung
+          </button>
+        )}
         {!hideBuzzOrder && buzzOrder.length > 0 && (
           <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 4 }}>
             <div style={{ fontSize: 11.5, color: t.faint }}>Urutan angkat tangan:</div>
@@ -2667,35 +2778,16 @@ function TebakCariKataGame({ onBack, teacher }) {
             ))}
           </div>
         )}
-        {activeGroup && <div style={{ marginTop: 10, fontSize: 13, color: t.dim }}>Kelompok {activeGroup} pegang giliran — klik huruf awal &amp; akhir kata di papan.</div>}
+        {activeGroup && <div style={{ marginTop: 10, fontSize: 13, color: t.dim }}>{activeGroup === "guru" ? "Guru pegang giliran" : `${groupLabel(activeGroup)} pegang giliran`} — klik huruf awal &amp; akhir kata di papan.</div>}
         <div style={{ marginTop: 10, fontSize: 11.5, color: t.faint }}>{babakId === 1 ? "Babak 1: kelompok yang sudah mencoba tidak bisa menjawab lagi untuk soal ini." : "Kelompok yang sudah mencoba boleh menjawab lagi kalau tidak ada kelompok lain yang mengangkat tangan."}</div>
-        {/* FITUR BARU (mode Guru Bebas): "Lewati soal ini" tidak masuk akal di mode ini karena
-            tidak ada "1 soal aktif" yang tunggal — jadi diganti jadi picker: guru pilih sendiri
-            kata mana yang mau diungkap paksa (tidak dapat poin), dari sisa kosakata babak ini. */}
-        {currentWord && audioMode === "bebas" && (
-          <div style={{ marginTop: 12 }}>
-            <button onClick={() => setSkipPickerOpen((v) => !v)} style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: `1px solid ${t.panel2}`, color: t.dim, borderRadius: 8, padding: "8px 12px", fontSize: 13, cursor: "pointer", width: "100%", justifyContent: "center" }}><span style={{ fontSize: 14, lineHeight: 1, color: 'inherit' }}>⏭</span> Lewati salah satu kosakata…</button>
-            {skipPickerOpen && (
-              <div style={{ marginTop: 8, maxHeight: 220, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6, background: t.bg, borderRadius: 8, padding: 8 }}>
-                {queue.length === 0 && <div style={{ fontSize: 12, color: t.faint, padding: 4 }}>Tidak ada kosakata tersisa.</div>}
-                {queue.map((id) => {
-                  const w = babak.words.find((x) => x.id === id);
-                  if (!w) return null;
-                  return (
-                    <button key={id} onClick={() => skipWord(w)} style={{ textAlign: "left", background: t.panel2, border: "none", borderRadius: 7, padding: "7px 10px", cursor: "pointer", color: t.text }}>
-                      <div style={{ fontWeight: 700, fontSize: 12.5 }}>{w.letters}</div>
-                      <div style={{ fontSize: 11, color: t.dim }}>{w.clue}</div>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        )}
+        {/* FITUR DIGANTI: picker teks "Lewati salah satu kosakata…" untuk mode Guru Bebas dihapus —
+            digantikan tombol "🧑‍🏫 Guru menjawab langsung" di atas (klik langsung di papan,
+            konsisten di semua mode, bukan cuma Guru Bebas). Tombol "Lewati soal ini" (di bawah)
+            tetap khusus mode Audio/Teks yang memang selalu tahu 1 soal aktif tertentu. */}
         {currentWord && audioMode !== "bebas" && <button onClick={() => skipWord()} style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 6, background: "transparent", border: `1px solid ${t.panel2}`, color: t.dim, borderRadius: 8, padding: "8px 12px", fontSize: 13, cursor: "pointer", width: "100%", justifyContent: "center" }}><span style={{ fontSize: 14, lineHeight: 1, color: 'inherit' }}>⏭</span> Lewati soal ini</button>}
       </div>
 
-      {!hideScoreboard && renderScoreboard()}
+      {!hideScoreboard && renderScoreboard({ editable: true })}
     </div>
   ); }
 
