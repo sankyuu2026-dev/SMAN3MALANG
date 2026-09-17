@@ -1,4 +1,4 @@
-<!doctype html>
+  <!doctype html>
 <html lang="id">
 <head>
 <meta charset="UTF-8" />
@@ -1417,107 +1417,6 @@ function CardsPlayArea({ roomCode, room, myGroup }) {
   );
 }
 
-/* ===========================================================
-   LAYAR PROYEKTOR (JENDELA TERPISAH) — dibuka lewat window.open() dari
-   TebakCariKataGame (tombol "🖥️ Jendela Proyektor"/"Layar Proyektor").
-   Sengaja komponen BERDIRI SENDIRI, terpisah dari TebakCariKataGame: satu-satunya
-   sumber datanya adalah pesan BroadcastChannel dari jendela guru (lihat pushDisplayState
-   di TebakCariKataGame) — TIDAK ada state/props dari komponen guru, TIDAK ada akses ke
-   clue/jawaban sama sekali, jadi mustahil bocor lewat jendela ini walau disalin/inspect-element.
-   Cuma menampilkan: papan, giliran kelompok, & skor — persis yang aman dilihat siswa.
-=========================================================== */
-function ProjectorDisplayScreen() {
-  const [data, setData] = useState(null);
-  const [boardPx, setBoardPx] = useState(480);
-  const gridAreaRef = useRef(null);
-  const t = THEMES.dark;
-
-  useEffect(() => {
-    if (typeof BroadcastChannel === "undefined") return;
-    const ch = new BroadcastChannel("tck-projector-display");
-    ch.onmessage = (e) => { if (e.data?.type === "state") setData(e.data); };
-    ch.postMessage({ type: "request-state" }); // minta state terkini kalau jendela ini baru dibuka belakangan
-    return () => ch.close();
-  }, []);
-
-  useEffect(() => {
-    const el = gridAreaRef.current;
-    if (!el || typeof ResizeObserver === "undefined") return;
-    const measure = () => {
-      const w = el.clientWidth, h = el.clientHeight;
-      if (w < 10 || h < 10) return;
-      setBoardPx(Math.max(160, Math.floor(Math.min(w, h)) - 4));
-    };
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-
-  if (!data || !data.puzzle) {
-    return (
-      <div style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: t.bg, color: t.dim, height: "100vh", width: "100vw", boxSizing: "border-box", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, textAlign: "center", padding: 24 }}>
-        <style>{fontImport}</style>
-        Menunggu guru memulai permainan…
-      </div>
-    );
-  }
-
-  const { puzzle, foundSegments, activeGroup, buzzOrder, scores, babakLabel, babakSub } = data;
-  const fontPx = Math.max(9, Math.floor((boardPx / puzzle.size) * 0.42));
-  const leaderScore = Math.max(...Object.values(scores || { 1: 0 }));
-  const sortedGroups = [...GROUP_NAMES].sort((a, b) => (scores?.[b] || 0) - (scores?.[a] || 0));
-
-  return (
-    <div style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: t.bg, color: t.text, height: "100vh", width: "100vw", boxSizing: "border-box", overflow: "hidden", display: "grid", gridTemplateColumns: "220px minmax(0,1fr)", gap: 20, padding: 24 }}>
-      <style>{fontImport}</style>
-      <div style={{ overflowY: "auto", minHeight: 0, display: "flex", flexDirection: "column", gap: 12 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: t.dim, marginBottom: 4 }}><span style={{ fontSize: 16, lineHeight: 1 }}>🏆</span> Papan Skor</div>
-        {sortedGroups.map((g) => (
-          <div key={g} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, background: t.panel2, borderRadius: 10, padding: "8px 12px", boxShadow: activeGroup === g ? `0 0 0 2px ${GROUP_COLORS[g - 1]}` : "none" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ width: 12, height: 12, borderRadius: 4, background: GROUP_COLORS[g - 1], display: "inline-block" }} />
-              <span style={{ fontSize: 14, fontWeight: 600 }}>Kelompok {g}</span>
-              {scores?.[g] === leaderScore && leaderScore > 0 && <span style={{ fontSize: 16, lineHeight: 1, color: "#F4B740" }}>👑</span>}
-            </div>
-            <span className="sgt" style={{ fontWeight: 700, fontSize: 15 }}>{scores?.[g] || 0}</span>
-          </div>
-        ))}
-      </div>
-      <div style={{ minHeight: 0, minWidth: 0, height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
-        <div className="sgt" style={{ fontSize: 16, fontWeight: 700, textAlign: "center", marginBottom: 8 }}>Word Search — {babakLabel}{babakSub ? ` · ${babakSub}` : ""}</div>
-        <div style={{ textAlign: "center", padding: "10px 0", borderRadius: 14, background: activeGroup ? GROUP_COLORS[activeGroup - 1] : t.panel, color: activeGroup ? "#101B34" : t.dim, fontWeight: 700, fontSize: 14, marginBottom: 8, width: "100%", maxWidth: 640, transition: "background .2s ease" }}>
-          {activeGroup ? `Kelompok ${activeGroup} mengangkat tangan duluan!` : "Menunggu ada yang mengangkat tangan…"}
-        </div>
-        {buzzOrder && buzzOrder.length > 1 && (
-          <div style={{ display: "flex", justifyContent: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
-            {buzzOrder.map((o, i) => (
-              <div key={o.group} style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, borderRadius: 10, padding: "5px 10px" }}>
-                <span style={{ width: 18, height: 18, borderRadius: "50%", background: GROUP_COLORS[o.group - 1], color: "#101B34", fontSize: 10, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>{i + 1}</span>
-                <span className="sgt" style={{ fontWeight: 700, fontSize: 12.5 }}>Kelompok {o.group}</span>
-              </div>
-            ))}
-          </div>
-        )}
-        <div ref={gridAreaRef} style={{ flex: 1, minHeight: 0, width: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
-          <div style={{ position: "relative", background: t.panel, padding: 10, borderRadius: 14, width: boardPx, height: boardPx, boxSizing: "border-box", flexShrink: 0 }}>
-            <svg viewBox={`0 0 ${puzzle.size} ${puzzle.size}`} style={{ position: "absolute", top: 10, left: 10, right: 10, bottom: 10, pointerEvents: "none" }}>
-              {(foundSegments || []).map((seg) => (
-                <line key={seg.id} x1={seg.x1} y1={seg.y1} x2={seg.x2} y2={seg.y2} stroke={seg.revealed ? REVEALED_COLOR : seg.color} strokeWidth={0.62} strokeLinecap="round" />
-              ))}
-            </svg>
-            <div style={{ display: "grid", gridTemplateColumns: `repeat(${puzzle.size}, minmax(0, 1fr))`, gap: 3, position: "relative", zIndex: 1 }}>
-              {puzzle.grid.map((row, r) => row.map((letter, c) => (
-                <div key={`${r}-${c}`} className="sgt" style={{ aspectRatio: "1 / 1", fontWeight: 700, fontSize: fontPx, display: "flex", alignItems: "center", justifyContent: "center", color: t.cellText, minWidth: 0 }}>{letter}</div>
-              )))}
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function TebakCariKataGame({ onBack, teacher }) {
   // Semua data "Riwayat Sesi" & file audio soal disimpan di bawah koleksi milik guru yang sedang
   // login (users/{uid}/...), supaya antar-guru yang sama-sama pakai app ini datanya tidak
@@ -1609,6 +1508,13 @@ function TebakCariKataGame({ onBack, teacher }) {
   // kelompok itu dirugikan permanen, guru bisa "reka ulang" gilirannya kapan saja selama Mode Guru
   // menyala, tanpa terikat aturan antrean/eligibility normal.
   const [guruModeOn, setGuruModeOn] = useState(false);
+  // FIX (bug): buzz() dipanggil dari dalam listener Firestore (onSnapshot) yang efeknya TIDAK
+  // di-dependency-kan ke guruModeOn (lihat useEffect pendengar buzzOrder) — kalau langsung baca
+  // state `guruModeOn` di dalam buzz(), nilainya bisa "basi" (nilai lama dari saat listener
+  // terakhir dipasang ulang), bukan nilai TERKINI begitu guru baru saja menyalakan Mode Guru.
+  // Dengan ref ini, buzz() selalu baca nilai paling baru kapan pun listener itu terakhir dipasang.
+  const guruModeOnRef = useRef(false);
+  useEffect(() => { guruModeOnRef.current = guruModeOn; }, [guruModeOn]);
   const [selStart, setSelStart] = useState(null);
   const [flash, setFlash] = useState(null);
   const [speaking, setSpeaking] = useState(false);
@@ -2120,6 +2026,14 @@ function TebakCariKataGame({ onBack, teacher }) {
   function isEligible(g) { if (!triedSetRef.current.has(g)) return true; return babakId !== 1 && openToAllRef.current; }
 
   function buzz(group) {
+    // FIX (bug): Mode Guru dimaksudkan sebagai kendali penuh admin — begitu aktif, giliran &
+    // urutan HANYA boleh diatur guru sendiri lewat klik tombol kelompok (lihat komentar
+    // "Mode Guru" di atas). Sebelumnya fungsi ini tidak mengecek status Mode Guru sama sekali,
+    // jadi kalau siswa menekan tombol "angkat tangan" di HP mereka justru pada saat guru sedang
+    // mengoreksi manual, tekanan itu tetap ikut masuk antrean dan bisa menimpa/mengganggu giliran
+    // yang baru saja diatur guru — padahal seharusnya sistem buzzer normal berhenti total selama
+    // Mode Guru menyala. Sekarang sinyal dari HP siswa langsung diabaikan kalau Mode Guru aktif.
+    if (guruModeOnRef.current) return;
     if (!currentWord || !clueRevealedRef.current || !isEligible(group)) return;
     const alreadyQueued = buzzOrderRef.current.some((o) => o.group === group);
     // BUGFIX: dulu grup yang sudah pernah masuk buzzOrder (baik sedang antre MAUPUN sudah pernah
@@ -2253,7 +2167,7 @@ function TebakCariKataGame({ onBack, teacher }) {
     if (cells) {
       setFoundMap((f) => ({ ...f, [target.id]: { cells, color: REVEALED_COLOR, revealed: true } }));
     }
-    setFlash({ type: "revealed", word: target.letters, clue: target.clue });
+    setFlash({ type: "revealed", word: target.letters });
     setTimeout(() => setFlash(null), 2400);
     nextQuestion(target.id);
   }
@@ -2284,7 +2198,7 @@ function TebakCariKataGame({ onBack, teacher }) {
       const matchedWord = findMatchInQueue(str);
       if (matchedWord) {
         setFoundMap((f) => ({ ...f, [matchedWord.id]: { cells, color: REVEALED_COLOR, revealed: true } }));
-        setFlash({ type: "revealed", word: matchedWord.letters, clue: matchedWord.clue });
+        setFlash({ type: "revealed", word: matchedWord.letters });
         setTimeout(() => setFlash(null), 2400);
         nextQuestion(matchedWord.id);
       }
@@ -2354,42 +2268,6 @@ function TebakCariKataGame({ onBack, teacher }) {
   // per-sel dihilangkan — papan jadi terasa renggang dan huruf terlihat kecil. Dinaikkan sedikit
   // supaya tetap nyaman dibaca dari proyektor.
   const cellFont = babakId === 1 ? (puzzle && puzzle.size > 16 ? 17 : 20) : (puzzle && puzzle.size > 16 ? 20 : 24);
-
-  // FITUR BARU: "Layar Proyektor (Jendela Terpisah)" — beda dari Mode Proyektor biasa (yang cuma
-  // menata ulang tampilan DALAM satu jendela yang sama, jadi kalau layar itu di-mirror/duplicate
-  // ke proyektor, panel guru tetap ikut kelihatan oleh siswa). Fitur ini membuka JENDELA BROWSER
-  // KEDUA yang isinya cuma papan (tanpa panel guru sama sekali) — jendela ini yang dipindah ke
-  // layar proyektor kalau laptop disetel mode "Extend Display" (bukan Duplicate), sehingga panel
-  // guru betul-betul tidak pernah tergambar di layar proyektor.
-  // Kedua jendela sama-sama dari file/origin yang sama, jadi cukup pakai BroadcastChannel (kanal
-  // pesan antar-tab bawaan browser, real-time, tanpa perlu lewat Firestore) untuk mengirim state
-  // papan dari jendela guru ke jendela proyektor. HANYA data yang aman dilihat siswa yang dikirim
-  // (papan, kata yang sudah ketemu, giliran, skor) — clue/jawaban TIDAK pernah disertakan.
-  const displayChannelRef = useRef(null);
-  useEffect(() => {
-    if (typeof BroadcastChannel === "undefined") return; // browser sangat lawas — abaikan, fitur ini opsional
-    const ch = new BroadcastChannel("tck-projector-display");
-    displayChannelRef.current = ch;
-    // Kalau jendela proyektor baru dibuka SETELAH permainan berjalan, ia akan minta state
-    // terkini lewat pesan "request-state" — guru merespons dengan broadcast ulang di bawah ini.
-    ch.onmessage = (e) => { if (e.data?.type === "request-state") pushDisplayState(); };
-    return () => ch.close();
-  }, []);
-  function pushDisplayState() {
-    if (!displayChannelRef.current) return;
-    displayChannelRef.current.postMessage({
-      type: "state", roomCode, materiName: selectedMateri, babakId,
-      babakLabel: babak.label, babakSub: babak.sub,
-      puzzle, foundSegments, activeGroup, buzzOrder, scores,
-    });
-  }
-  useEffect(() => { pushDisplayState(); }, [roomCode, selectedMateri, babakId, puzzle, foundSegments, activeGroup, buzzOrder, scores]);
-  function openProjectorDisplayWindow() {
-    const url = new URL(window.location.href);
-    url.searchParams.set("display", "proyektor");
-    const win = window.open(url.toString(), "tck_projector_display", "width=1280,height=800");
-    if (!win) alert("Jendela baru diblokir browser — izinkan pop-up untuk situs ini, lalu coba lagi.");
-  }
 
   /* ---------- editing helpers (tahap persiapan) ---------- */
   function updateWord(id, wordId, field, value) {
@@ -2674,7 +2552,7 @@ function TebakCariKataGame({ onBack, teacher }) {
           {flash && (
             <div style={{ fontSize: 12.5, fontWeight: 700, padding: "4px 10px", borderRadius: 8, background: flash.type === "correct" ? "#3FBFAD" : flash.type === "revealed" ? REVEALED_COLOR : "#EF5B5B", color: "#0D1730" }}>
               {flash.type === "correct" ? `Benar! Kelompok ${flash.group} +${babak.point} poin`
-                : flash.type === "revealed" ? `Jawaban: ${flash.word}${flash.clue ? ` — ${flash.clue}` : ""}`
+                : flash.type === "revealed" ? `Jawaban: ${flash.word}`
                 : "Belum tepat — giliran dibuka lagi"}
             </div>
           )}
@@ -3173,14 +3051,13 @@ function TebakCariKataGame({ onBack, teacher }) {
         <div style={{ position: "fixed", top: 16, left: 16, display: "flex", gap: 8, zIndex: 30 }}>
           <button onClick={endGame} title="Akhiri permainan" style={{ display: "flex", alignItems: "center", gap: 6, background: t.bg, border: "1px solid #EF5B5B", color: "#EF5B5B", padding: "10px 12px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>⏹</span> Akhiri</button>
           <button onClick={openSaveNamePrompt} title="Simpan progres & jeda, lanjutkan nanti" style={{ display: "flex", alignItems: "center", gap: 6, background: t.bg, border: "1px solid #F4B740", color: "#F4B740", padding: "10px 12px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>💾</span> Simpan & Jeda</button>
-          <button onClick={openProjectorDisplayWindow} title="Buka jendela baru berisi papan saja (tanpa panel guru) untuk dipindah ke layar proyektor" style={{ display: "flex", alignItems: "center", gap: 6, background: t.bg, border: `1px solid ${t.border}`, color: t.text, padding: "10px 12px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>🖥️</span> Jendela Proyektor</button>
         </div>
       </React.Fragment>
     );
     const flashBanner = flash && (
       <div style={{ position: "absolute", top: -8, left: "50%", transform: "translate(-50%, -100%)", zIndex: 5, padding: "10px 22px", borderRadius: 12, fontWeight: 700, fontSize: 17, textAlign: "center", background: flash.type === "correct" ? "#3FBFAD" : flash.type === "revealed" ? REVEALED_COLOR : "#EF5B5B", color: "#0D1730", animation: `pulseFlash ${flash.type === "revealed" ? 2.4 : flash.type === "correct" ? 1.4 : 0.9}s ease forwards`, maxWidth: "90%", boxShadow: "0 6px 20px rgba(0,0,0,.25)" }}>
         {flash.type === "correct" ? `Benar! Kelompok ${flash.group} +${babak.point} poin`
-          : flash.type === "revealed" ? `Jawaban: ${flash.word}${flash.clue ? ` — ${flash.clue}` : ""}`
+          : flash.type === "revealed" ? `Jawaban: ${flash.word}`
           : "Belum tepat — giliran dibuka lagi"}
       </div>
     );
@@ -3230,7 +3107,7 @@ function TebakCariKataGame({ onBack, teacher }) {
                 ))}
               </div>
             )}
-            {renderScoreboard()}
+            {renderScoreboard({ editable: guruModeOn })}
           </div>
 
           <div style={{ minHeight: 0, minWidth: 0, height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center" }}>
@@ -3344,7 +3221,6 @@ function TebakCariKataGame({ onBack, teacher }) {
 
         <ThemeToggleButton theme={theme} onToggle={() => setTheme(theme === "dark" ? "light" : "dark")} style={{ background: t.panel, border: `1px solid ${t.border}`, color: t.text, padding: 7, borderRadius: 8, cursor: "pointer" }} />
         <button onClick={() => setProjectorMode(true)} style={{ display: "flex", alignItems: "center", gap: 5, background: "#F4B740", border: "none", color: "#101B34", padding: "7px 11px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontWeight: 700 }}><span style={{ fontSize: 13, lineHeight: 1 }}>⤢</span> Mode Proyektor</button>
-        <button onClick={openProjectorDisplayWindow} style={{ display: "flex", alignItems: "center", gap: 5, background: t.panel, border: `1px solid ${t.border}`, color: t.text, padding: "7px 11px", borderRadius: 8, cursor: "pointer", fontSize: 12, fontWeight: 600 }}><span style={{ fontSize: 13, lineHeight: 1 }}>🖥️</span> Layar Proyektor</button>
 
         <div style={{ flex: "1 0 auto" }} />
 
@@ -3379,7 +3255,7 @@ function TebakCariKataGame({ onBack, teacher }) {
               ))}
             </div>
           )}
-          {renderScoreboard()}
+          {renderScoreboard({ editable: guruModeOn })}
         </div>
 
         {/* Kolom tengah: papan huruf — fokus utama, sebesar mungkin */}
@@ -4182,7 +4058,7 @@ function SettingsModal({ open, onClose, t }) {
                 { t: "Pilih Materi & Susun Kosakata", d: "Buka \"Persiapan\", pilih salah satu dari 9 materi, lalu isi kosakata di Babak 1–3 (kata, petunjuk, dan audio opsional)." },
                 { t: "Mulai Permainan", d: "Klik \"Mulai Permainan\" — kode Room & QR untuk siswa join otomatis dibuat." },
                 { t: "Atur Mode Kelas", d: "Pilih mode angkat tangan (Digital/Manual) dan mode petunjuk (Audio/Nonaktif) sesuai kondisi kelas." },
-                { t: "Proyeksikan ke Layar", d: "Gunakan \"Mode Proyektor\" atau \"Jendela Proyektor (Terpisah)\" supaya siswa hanya melihat papan permainan, bukan panel guru." },
+                { t: "Proyeksikan ke Layar", d: "Gunakan \"Mode Proyektor\" supaya siswa hanya melihat papan permainan, bukan panel guru." },
                 { t: "Simpan & Lanjutkan", d: "Progres bisa disimpan lewat \"Simpan & Jeda\", lalu dibuka lagi kapan saja lewat menu Riwayat Sesi." },
               ].map((step, i) => (
                 <div key={i} style={{ display: "flex", gap: 12 }}>
@@ -4259,12 +4135,6 @@ function App() {
   const [signingIn, setSigningIn] = useState(false);
   const [loginError, setLoginError] = useState("");
   const joinCode = getJoinCodeFromUrl();
-  // Rute layar proyektor (jendela terpisah, lihat ProjectorDisplayScreen) — tidak butuh login/auth
-  // sama sekali, cukup BroadcastChannel dari jendela guru, jadi dicek paling awal sebelum gerbang
-  // auth di bawah supaya jendela ini langsung terbuka tanpa nunggu apa pun.
-  if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("display") === "proyektor") {
-    return <ProjectorDisplayScreen />;
-  }
 
   useEffect(() => {
     try {
