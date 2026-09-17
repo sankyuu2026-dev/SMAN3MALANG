@@ -1602,6 +1602,13 @@ function TebakCariKataGame({ onBack, teacher }) {
   const [hintOverlayVisible, setHintOverlayVisible] = useState(false);
   const hintOverlayTimerRef = useRef(null);
   const [activeGroup, setActiveGroup] = useState(null);
+  // FITUR BARU: "Mode Guru" — satu saklar admin. Begitu aktif, SEMUA kontrol jadi bebas: guru bisa
+  // langsung menunjuk kelompok mana pun (termasuk yang gilirannya SUDAH LEWAT/dianggap salah) untuk
+  // dapat giliran lagi, dan skor tiap kelompok bisa dikoreksi manual. Ini buat kasus guru salah
+  // eksekusi (mis. salah pencet huruf terakhir padahal kelompoknya sebenarnya benar) — daripada
+  // kelompok itu dirugikan permanen, guru bisa "reka ulang" gilirannya kapan saja selama Mode Guru
+  // menyala, tanpa terikat aturan antrean/eligibility normal.
+  const [guruModeOn, setGuruModeOn] = useState(false);
   const [selStart, setSelStart] = useState(null);
   const [flash, setFlash] = useState(null);
   const [speaking, setSpeaking] = useState(false);
@@ -1727,6 +1734,7 @@ function TebakCariKataGame({ onBack, teacher }) {
     babakSnapshotsRef.current = {};
     setShowBackConfirm(false);
     setStage("setup"); setProjectorMode(false);
+    setGuruModeOn(false); // FITUR BARU: jangan sampai Mode Guru nyangkut aktif ke sesi berikutnya
   }
   function endGame() {
     if (!window.confirm("Akhiri permainan ini? Skor & progres babak yang sedang berjalan akan dihapus.")) return;
@@ -1811,6 +1819,7 @@ function TebakCariKataGame({ onBack, teacher }) {
     // FIX: clear hitung mundur otomatis sebelum pindah babak — cegah double-trigger
     if (autoNextIntervalRef.current) { clearInterval(autoNextIntervalRef.current); autoNextIntervalRef.current = null; }
     setAutoNext(null);
+    setGuruModeOn(false); // FITUR BARU: jangan sampai Mode Guru nyangkut aktif ke babak berikutnya
     babakSnapshotsRef.current[babakId] = {
       queue, foundMap, triedSet: Array.from(triedSet), puzzle, clueRevealed, activeGroup, buzzOrder, selStart, openToAll,
     };
@@ -2165,12 +2174,13 @@ function TebakCariKataGame({ onBack, teacher }) {
     setSelStart(null);
   }
 
-  // FITUR BARU: override/interupsi giliran — biasanya klik tombol kelompok cuma "mengantre"
-  // (lewat buzz()), tidak langsung memotong kelompok yang sedang pegang giliran. Ini dipakai kalau
-  // guru salah eksekusi (mis. niatnya menunjuk Kelompok 5 yang benar duluan, tapi ternyata giliran
-  // malah jatuh ke kelompok lain) — klik tombol override ini LANGSUNG memaksa kelompok yang dipilih
-  // jadi giliran aktif SEKARANG, menimpa siapa pun yang sedang pegang giliran, tanpa perlu menunggu
-  // antrean atau kelompok yang salah dulu.
+  // FITUR DIPERBAIKI (koreksi dari override "▶" per-tombol sebelumnya): ini sekarang dipicu dari
+  // Mode Guru (klik langsung tombol K1–K6 saat Mode Guru menyala, bukan ikon kecil terpisah) — dan
+  // yang penting, BISA dipakai untuk kembali ke kelompok yang gilirannya SUDAH LEWAT/dianggap salah
+  // di ronde ini (bukan cuma menyela kelompok yang lagi aktif), lewat mekanisme openToAll yang
+  // sudah ada (bukan menghapus status triedSet — lihat BUGFIX di bawah kenapa itu salah). Kalau
+  // kelompok ini salah lagi, giliran tetap lanjut normal ke kelompok berikutnya di antrean sesuai
+  // urutan angkat tangan asli (persis seperti biasa).
   function forceSetActiveGroup(group) {
     if (!currentWord) return;
     clearRetryTimer();
@@ -2184,6 +2194,16 @@ function TebakCariKataGame({ onBack, teacher }) {
       buzzOrderRef.current = newOrder;
       setBuzzOrder(newOrder);
     }
+    // BUGFIX: sebelumnya baris ini MENGHAPUS grup dari triedSet supaya "benar-benar dapat
+    // kesempatan baru". Niatnya benar, tapi caranya salah — ini bikin DESYNC dengan HP siswa:
+    // pressBuzz() di HP (lihat StudentJoinScreen) cuma mengizinkan tekan ulang buzzer kalau grup
+    // ADA di triedGroups DAN openToAll aktif (dua syarat sekaligus). Kalau grup malah DIHAPUS dari
+    // triedGroups (bukan tetap ada + openToAll diaktifkan), justru gagal memenuhi syarat itu — HP
+    // asli kelompok itu diam-diam tidak bisa menekan buzzer lagi, walau di layar guru terlihat
+    // baik-baik saja (karena override ini memang langsung mengeset giliran di layar guru, tidak
+    // lewat pressBuzz sama sekali). Diperbaiki dengan memakai openToAll — mekanisme retry yang
+    // SUDAH ADA & sudah terbukti tersinkron benar ke HP — bukan menciptakan kondisi baru.
+    setOpenToAll(true); openToAllRef.current = true;
   }
 
   // BUGFIX: dulu tombol Digital/Manual cuma panggil releaseTurn() (batalkan giliran AKTIF saja).
@@ -2709,8 +2729,24 @@ function TebakCariKataGame({ onBack, teacher }) {
       </div>
 
       <div style={{ background: t.panel, borderRadius: 14, padding: 18, boxShadow: t.shadowSm }}>
-        <div style={{ fontSize: 13, color: t.dim, marginBottom: 10 }}>{mode === "digital" ? "Buzzer kelompok" : "Tunjuk kelompok penjawab"}</div>
-        {currentWord && !clueRevealed && (
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, gap: 8, flexWrap: "wrap" }}>
+          <div style={{ fontSize: 13, color: t.dim }}>{mode === "digital" ? "Buzzer kelompok" : "Tunjuk kelompok penjawab"}</div>
+          {/* FITUR BARU: Mode Guru — satu saklar admin, gantikan ikon override "▶" kecil per
+              kelompok yang sebelumnya cuma bisa menyela kelompok yang SEDANG aktif. Sekarang, saat
+              menyala: klik tombol K1–K6 di bawah LANGSUNG memaksa kelompok itu jadi giliran aktif —
+              termasuk kelompok yang gilirannya SUDAH LEWAT/dianggap salah di ronde ini (bukan cuma
+              yang masih menunggu), pas buat "reka ulang" kalau guru salah eksekusi. Koreksi skor
+              manual & "Guru menjawab langsung" juga cuma muncul selama saklar ini menyala. */}
+          <button onClick={() => setGuruModeOn((v) => !v)} style={{ display: "flex", alignItems: "center", gap: 6, background: guruModeOn ? GURU_COLOR : t.panel2, color: guruModeOn ? "#fff" : t.dim, border: "none", borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontSize: 12, fontWeight: 700 }}>
+            <span style={{ fontSize: 13, lineHeight: 1, color: "inherit" }}>🧑‍🏫</span> Mode Guru: {guruModeOn ? "Aktif" : "Nonaktif"}
+          </button>
+        </div>
+        {guruModeOn && (
+          <div style={{ marginBottom: 10, fontSize: 12, color: "#fff", background: GURU_COLOR, borderRadius: 8, padding: "8px 10px", lineHeight: 1.5 }}>
+            Mode Guru aktif — klik kelompok mana pun di bawah untuk langsung menjadikannya giliran aktif (walau gilirannya sudah lewat), dan skor bisa dikoreksi manual. Matikan lagi kalau sudah selesai supaya permainan berjalan normal.
+          </div>
+        )}
+        {!guruModeOn && currentWord && !clueRevealed && (
           <div style={{ marginBottom: 10, fontSize: 12, color: "#F4B740", background: "rgba(244,183,64,.12)", borderRadius: 8, padding: "8px 10px" }}>Tombol masih terkunci — klik "{audioMode === "guru" && currentWord.audioUrl ? "Putar Petunjuk" : audioMode === "bebas" ? "Siap — Boleh Angkat Tangan" : "Tampilkan teks"}" di panel kanan dulu supaya kelompok bisa angkat tangan.</div>
         )}
         {/* FIX (fitur diminta): dulu di mode Manual, guru cuma bisa memilih SATU kelompok
@@ -2734,22 +2770,15 @@ function TebakCariKataGame({ onBack, teacher }) {
             // sudah pernah salah & retry sedang diizinkan (openToAll). Sekarang kunci "sudah pernah
             // angkat tangan" cuma berlaku kalau grup itu memang belum boleh mencoba lagi.
             const canRetryNow = triedSet.has(g) && openToAll;
-            const locked = !currentWord || !clueRevealed || !eligible || (alreadyBuzzed && !canRetryNow);
+            // Mode Guru: SEMUA aturan kunci di atas diabaikan — kelompok mana pun selalu bisa
+            // langsung dipilih, kapan saja selama ada soal aktif.
+            const locked = guruModeOn ? !currentWord : (!currentWord || !clueRevealed || !eligible || (alreadyBuzzed && !canRetryNow));
             return (
-              <button key={g} className="grp-btn" onClick={() => buzz(g)} disabled={locked}
-                style={{ position: "relative", padding: "12px 0", borderRadius: 10, border: "none", cursor: locked ? "default" : "pointer", background: isActive ? GROUP_COLORS[g - 1] : t.panel2, color: isActive ? "#0D1730" : t.text, fontWeight: 700, fontSize: 14, opacity: locked && !isActive ? 0.4 : 1, boxShadow: isActive ? `0 0 0 2px ${GROUP_COLORS[g - 1]}` : "none" }}>
+              <button key={g} className="grp-btn" onClick={() => guruModeOn ? forceSetActiveGroup(g) : buzz(g)} disabled={locked}
+                style={{ position: "relative", padding: "12px 0", borderRadius: 10, border: guruModeOn ? `1.5px solid ${GURU_COLOR}` : "none", cursor: locked ? "default" : "pointer", background: isActive ? GROUP_COLORS[g - 1] : t.panel2, color: isActive ? "#0D1730" : t.text, fontWeight: 700, fontSize: 14, opacity: locked && !isActive ? 0.4 : 1, boxShadow: isActive ? `0 0 0 2px ${GROUP_COLORS[g - 1]}` : "none" }}>
                 K{g}
                 {joinedGroups[g] && <span title="Sudah join lewat QR" style={{ position: "absolute", top: 4, right: 4, width: 7, height: 7, borderRadius: "50%", background: "#3FBFAD" }} />}
                 {alreadyBuzzed && <span style={{ position: "absolute", top: -6, left: -6, width: 18, height: 18, borderRadius: "50%", background: "#101B34", color: "#F4B740", fontSize: 10, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>{buzzPos + 1}</span>}
-                {/* FITUR BARU: override/interupsi giliran — beda dari tombol utama (yang cuma
-                    mengantre lewat buzz() dan dikunci kalau sudah pernah angkat tangan), ikon kecil
-                    ini SELALU aktif selama ada soal & petunjuk sudah dibuka, untuk kondisi darurat:
-                    guru salah eksekusi giliran dan perlu langsung memindahkannya ke kelompok yang
-                    benar SEKARANG, tanpa menunggu antrean. */}
-                {currentWord && clueRevealed && !isActive && (
-                  <span onClick={(e) => { e.stopPropagation(); forceSetActiveGroup(g); }} title={`Langsung jadikan giliran ${groupLabel(g)} sekarang (menimpa giliran yang sedang berjalan)`}
-                    style={{ position: "absolute", bottom: -6, right: -6, width: 20, height: 20, borderRadius: "50%", background: "#101B34", color: "#F4B740", fontSize: 10, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", boxShadow: "0 1px 4px rgba(0,0,0,.35)" }}>▶</span>
-                )}
               </button>
             );
           })}
@@ -2757,13 +2786,11 @@ function TebakCariKataGame({ onBack, teacher }) {
         {/* FITUR BARU: "Guru" — pseudo-kelompok, dipilih persis seperti K1–K6, tapi guru sendiri
             yang klik huruf jawabannya di papan. Dipakai untuk mengungkap/menjawab soal yang tidak
             bisa dijawab murid TANPA memberi poin ke kelompok manapun (menggantikan tombol "Lewati
-            soal" dengan cara yang lebih langsung), atau memperbaiki kesalahan eksekusi lain. Selalu
-            tersedia di mode manapun, tidak lewat antrean buzz() — kapan pun ada soal aktif.
-            Terkunci sampai petunjuk dibuka, sama seperti kelompok asli, supaya tidak dipakai untuk
-            "curi start" sebelum soal resmi dibacakan/diputar. */}
-        {currentWord && (
-          <button onClick={activateGuru} disabled={!clueRevealed} title="Guru menjawab/mengungkap langsung di papan — tidak ada kelompok yang dapat poin"
-            style={{ marginTop: 8, width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, padding: "10px 0", borderRadius: 10, border: `1px dashed ${activeGroup === "guru" ? GURU_COLOR : t.panel2}`, cursor: clueRevealed ? "pointer" : "default", background: activeGroup === "guru" ? GURU_COLOR : "transparent", color: activeGroup === "guru" ? "#fff" : t.dim, fontWeight: 700, fontSize: 13, opacity: clueRevealed ? 1 : 0.4 }}>
+            soal" dengan cara yang lebih langsung), atau memperbaiki kesalahan eksekusi lain. Cuma
+            muncul selama Mode Guru menyala, konsisten dengan kontrol admin lainnya. */}
+        {guruModeOn && currentWord && (
+          <button onClick={activateGuru} title="Guru menjawab/mengungkap langsung di papan — tidak ada kelompok yang dapat poin"
+            style={{ marginTop: 8, width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, padding: "10px 0", borderRadius: 10, border: `1px dashed ${GURU_COLOR}`, cursor: "pointer", background: activeGroup === "guru" ? GURU_COLOR : "transparent", color: activeGroup === "guru" ? "#fff" : t.dim, fontWeight: 700, fontSize: 13 }}>
             <span style={{ fontSize: 15, lineHeight: 1, color: "inherit" }}>🧑‍🏫</span> Guru menjawab langsung
           </button>
         )}
@@ -2787,7 +2814,7 @@ function TebakCariKataGame({ onBack, teacher }) {
         {currentWord && audioMode !== "bebas" && <button onClick={() => skipWord()} style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 6, background: "transparent", border: `1px solid ${t.panel2}`, color: t.dim, borderRadius: 8, padding: "8px 12px", fontSize: 13, cursor: "pointer", width: "100%", justifyContent: "center" }}><span style={{ fontSize: 14, lineHeight: 1, color: 'inherit' }}>⏭</span> Lewati soal ini</button>}
       </div>
 
-      {!hideScoreboard && renderScoreboard({ editable: true })}
+      {!hideScoreboard && renderScoreboard({ editable: guruModeOn })}
     </div>
   ); }
 
