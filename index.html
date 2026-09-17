@@ -2851,8 +2851,15 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
         <JapaneseBackdrop theme={theme} />
         {historyOpen && <HistoryModal />}
 
+        {/* FIX: dulu cuma header yang dibungkus position:relative+zIndex:1 — sisanya (panel Pilih
+            materi, Kosakata per babak, dst) tidak, jadi backdrop (position:fixed, zIndex:0) yang
+            SECARA URUTAN STACKING CSS baku digambar SETELAH elemen normal tanpa z-index, malah
+            menutupi panel-panel itu. Sekarang SEMUA konten (bukan cuma header) dibungkus 1 wrapper
+            ber-zIndex:1 di sini — persis pola yang sudah benar di layar "Pilih Game". */}
+        <div style={{ position: "relative", zIndex: 1 }}>
+
         {/* HEADER — judul kiri, aksi kanan */}
-        <div style={{ position: "relative", zIndex: 1, display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 28, flexWrap: "wrap", gap: 12 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 28, flexWrap: "wrap", gap: 12 }}>
           <div>
             <div className="sgt page-title" style={{ fontSize: 32, fontWeight: 800, letterSpacing: -0.5 }}>Persiapan Permainan</div>
             <div style={{ fontSize: 14.5, color: t.dim, marginTop: 3 }}>Susun materi &amp; kosakata sebelum mulai bermain bersama siswa.</div>
@@ -3079,6 +3086,7 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
               : (<>Mulai Permainan <span style={{ fontSize: 20, lineHeight: 1, color: "inherit" }}>➡</span></>)}
           </button>
           {!canStart && <div style={{ fontSize: 12.5, color: t.faint }}>Isi minimal satu kosakata di salah satu babak untuk mulai.</div>}
+        </div>
         </div>
       </div>
     );
@@ -4057,14 +4065,7 @@ const BG_MOTIFS = [
 function JapaneseBackdrop({ theme }) {
   const color = theme === "dark" ? "rgba(244,241,232,.05)" : "rgba(16,27,52,.045)";
   return (
-    // FIX: zIndex dulu 0 — cukup untuk layar "Pilih Game" karena kontennya sengaja dibungkus 1 div
-    // ber-zIndex:1. Tapi di layar lain (mis. Persiapan) yang tidak dibungkus begitu, backdrop
-    // position:fixed dengan zIndex:0 justru bisa ikut tergambar DI ATAS konten biasa (elemen
-    // position:static tanpa z-index digambar SEBELUM elemen positioned ber-z-index:0 di urutan
-    // stacking CSS baku) — menutupi sebagian isi halaman. zIndex negatif memastikan backdrop ini
-    // selalu di lapisan paling belakang di mana pun dipakai, tanpa perlu tiap layar membungkus
-    // seluruh kontennya secara eksplisit.
-    <div style={{ position: "fixed", inset: 0, overflow: "hidden", pointerEvents: "none", zIndex: -1 }} className="jp-backdrop">
+    <div style={{ position: "fixed", inset: 0, overflow: "hidden", pointerEvents: "none", zIndex: 0 }} className="jp-backdrop">
       {BG_MOTIFS.map((m, i) => (
         <span key={i} className="sgt" style={{
           position: "absolute", top: m.top, left: m.left, fontSize: m.size, fontWeight: 700,
