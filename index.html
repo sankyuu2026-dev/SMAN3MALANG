@@ -480,18 +480,6 @@ function MateriPicker({ t, selected, onSelect }) {
                 opacity: isSelected ? 1 : 0.85,
               }}>{m.kana || ""}</div>
             </div>
-
-            {/* Centang terpilih */}
-            {isSelected && (
-              <div style={{
-                position: "absolute", top: 10, right: 10,
-                width: 18, height: 18, borderRadius: "50%",
-                background: m.accent, color: "#fff",
-                fontSize: 10, fontWeight: 700,
-                display: "flex", alignItems: "center", justifyContent: "center",
-                boxShadow: `0 2px 8px ${m.accent}66`,
-              }}>✓</div>
-            )}
           </button>
         );
       })}
