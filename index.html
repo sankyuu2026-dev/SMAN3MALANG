@@ -1,4 +1,4 @@
-  <!doctype html>
+<!doctype html>
 <html lang="id">
 <head>
 <meta charset="UTF-8" />
@@ -1417,12 +1417,17 @@ function CardsPlayArea({ roomCode, room, myGroup }) {
   );
 }
 
-function TebakCariKataGame({ onBack, teacher }) {
+function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
+  // FIX (bug): dulu tiap game (Word Search, Mystery Box, Card Rush) punya saklar tema
+  // sendiri-sendiri (useState("light") lokal, tidak tersimpan) yang terpisah dari saklar tema
+  // di halaman "Pilih Game" (pickerTheme, yang tersimpan ke localStorage). Akibatnya ganti
+  // terang/gelap di satu halaman tidak ikut mengubah halaman lain — terasa "beda-beda tiap
+  // halaman". Sekarang `theme`/`setTheme` dikirim dari App sebagai satu sumber tunggal yang
+  // sama untuk semua halaman, jadi selalu konsisten & tersimpan di mana pun diganti.
   // Semua data "Riwayat Sesi" & file audio soal disimpan di bawah koleksi milik guru yang sedang
   // login (users/{uid}/...), supaya antar-guru yang sama-sama pakai app ini datanya tidak
   // tercampur atau bisa saling lihat/hapus punya orang lain.
   const historyCol = db.collection("users").doc(teacher.uid).collection("history");
-  const [theme, setTheme] = useState("light");
   const t = THEMES[theme];
   const isMobile = useIsMobile();
 
@@ -2480,19 +2485,24 @@ function TebakCariKataGame({ onBack, teacher }) {
     </div>
   ); }
 
+  // FIX (UX): label "Kelompok X" bikin baris skor jadi panjang & terasa sesak, apalagi
+  // berdampingan dengan tombol +/- koreksi manual. Disingkat jadi "KX" — konsisten dengan gaya
+  // tombol buzzer (K1-K6) yang sudah dipakai di panel yang sama — supaya lebih rapi, dan ukuran
+  // teks/skor dinaikkan sedikit (hanya untuk tampilan biasa di sidebar, bukan versi "big" di Mode
+  // Proyektor yang memang sudah besar & sengaja tetap pakai "Kelompok X" lengkap untuk siswa).
   function renderScoreboard({ big, compact, highlight, editable } = {}) { return (
     <div style={{ background: compact ? "transparent" : t.panel, borderRadius: 14, padding: compact ? 0 : big ? 22 : 18 }}>
       {!compact && <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: big ? 15 : 13, color: t.dim, marginBottom: 10 }}><span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>🏆</span> Papan Skor{editable && <span style={{ fontSize: 11, color: t.faint, fontWeight: 400 }}> — klik +/- untuk koreksi manual</span>}</div>}
-      <div style={{ display: "flex", flexDirection: big ? "row" : "column", gap: big ? 12 : 6, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", flexDirection: big ? "row" : "column", gap: big ? 12 : 8, flexWrap: "wrap" }}>
         {sortedGroups.map((g) => (
           <div key={g} style={{
             display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
-            background: g === highlight ? GROUP_COLORS[g - 1] : t.panel2, borderRadius: 10, padding: big ? "14px 20px" : compact ? "6px 10px" : "8px 12px",
+            background: g === highlight ? GROUP_COLORS[g - 1] : t.panel2, borderRadius: 10, padding: big ? "14px 20px" : compact ? "6px 10px" : "11px 14px",
             flex: big ? "1 1 140px" : undefined, boxShadow: activeGroup === g && !compact ? `0 0 0 2px ${GROUP_COLORS[g - 1]}` : "none",
           }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ width: compact ? 9 : 12, height: compact ? 9 : 12, borderRadius: 4, background: GROUP_COLORS[g - 1], display: "inline-block" }} />
-              <span style={{ fontSize: big ? 16 : compact ? 12.5 : 14, fontWeight: 600, color: g === highlight ? "#101B34" : t.text }}>Kelompok {g}</span>
+              <span style={{ width: compact ? 9 : 13, height: compact ? 9 : 13, borderRadius: 4, background: GROUP_COLORS[g - 1], display: "inline-block" }} />
+              <span style={{ fontSize: big ? 16 : compact ? 12.5 : 16, fontWeight: 700, color: g === highlight ? "#101B34" : t.text }}>{big ? `Kelompok ${g}` : `K${g}`}</span>
               {scores[g] === leaderScore && leaderScore > 0 && <span style={{ fontSize: 16, lineHeight: 1, color: g === highlight ? "#101B34" : "#F4B740" }}>👑</span>}
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -2501,11 +2511,11 @@ function TebakCariKataGame({ onBack, teacher }) {
                   supaya siswa tidak melihat kontrol admin ini di layar bersama kelas. Tiap klik
                   menambah/mengurangi sebesar poin babak yang sedang berjalan. */}
               {editable && (
-                <button onClick={() => adjustScore(g, -babak.point)} title={`Kurangi ${babak.point} poin`} style={{ width: 20, height: 20, borderRadius: 6, border: "none", background: "rgba(239,91,91,.18)", color: "#EF5B5B", fontSize: 13, fontWeight: 700, lineHeight: 1, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>−</button>
+                <button onClick={() => adjustScore(g, -babak.point)} title={`Kurangi ${babak.point} poin`} style={{ width: 24, height: 24, borderRadius: 6, border: "none", background: "rgba(239,91,91,.18)", color: "#EF5B5B", fontSize: 15, fontWeight: 700, lineHeight: 1, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>−</button>
               )}
-              <span className={`sgt${g === bumpedGroup ? " score-bump" : ""}`} style={{ fontWeight: 700, fontSize: big ? 22 : compact ? 13 : 15, color: g === highlight ? "#101B34" : t.text }}>{scores[g]}</span>
+              <span className={`sgt${g === bumpedGroup ? " score-bump" : ""}`} style={{ fontWeight: 700, fontSize: big ? 22 : compact ? 13 : 18, color: g === highlight ? "#101B34" : t.text, minWidth: big ? undefined : 18, textAlign: "center" }}>{scores[g]}</span>
               {editable && (
-                <button onClick={() => adjustScore(g, babak.point)} title={`Tambah ${babak.point} poin`} style={{ width: 20, height: 20, borderRadius: 6, border: "none", background: "rgba(63,191,173,.18)", color: "#3FBFAD", fontSize: 13, fontWeight: 700, lineHeight: 1, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>+</button>
+                <button onClick={() => adjustScore(g, babak.point)} title={`Tambah ${babak.point} poin`} style={{ width: 24, height: 24, borderRadius: 6, border: "none", background: "rgba(63,191,173,.18)", color: "#3FBFAD", fontSize: 15, fontWeight: 700, lineHeight: 1, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>+</button>
               )}
             </div>
           </div>
@@ -3342,8 +3352,7 @@ function ensureBoxMateri(data, materi) {
   return { ...data, [materi]: [] };
 }
 
-function BukaKotakGame({ onBack }) {
-  const [theme, setTheme] = useState("light");
+function BukaKotakGame({ onBack, theme, setTheme }) {
   const t = THEMES[theme];
   const [stage, setStage] = useState("setup"); // 'setup' | 'play'
   const [selectedMateri, setSelectedMateri] = useState("Gakkou no Seikatsu");
@@ -3570,9 +3579,8 @@ function BukaKotakGame({ onBack }) {
 =========================================================== */
 function makeBabak(n) { return { id: uid(), label: `Babak ${n}`, pairs: [] }; }
 
-function CocokkanKartuGame({ onBack }) {
+function CocokkanKartuGame({ onBack, theme, setTheme }) {
   const isMobile = useIsMobile();
-  const [theme, setTheme] = useState("light");
   const t = THEMES[theme];
 
   const [stage, setStage] = useState("setup"); // 'setup' | 'play'
@@ -4191,9 +4199,9 @@ function App() {
     return <TeacherLoginScreen onSignIn={handleTeacherSignIn} busy={signingIn} error={loginError} />;
   }
 
-  if (activeGame === "g1") return <TebakCariKataGame onBack={() => setActiveGame(null)} teacher={authUser} />;
-  if (activeGame === "g2") return <BukaKotakGame onBack={() => setActiveGame(null)} />;
-  if (activeGame === "g3") return <CocokkanKartuGame onBack={() => setActiveGame(null)} />;
+  if (activeGame === "g1") return <TebakCariKataGame onBack={() => setActiveGame(null)} teacher={authUser} theme={pickerTheme} setTheme={setPickerTheme} />;
+  if (activeGame === "g2") return <BukaKotakGame onBack={() => setActiveGame(null)} theme={pickerTheme} setTheme={setPickerTheme} />;
+  if (activeGame === "g3") return <CocokkanKartuGame onBack={() => setActiveGame(null)} theme={pickerTheme} setTheme={setPickerTheme} />;
 
   const initial = (authUser.displayName || authUser.email || "?").trim().charAt(0).toUpperCase();
   const firstName = (authUser.displayName || authUser.email || "Guru").split("@")[0].split(" ")[0];
