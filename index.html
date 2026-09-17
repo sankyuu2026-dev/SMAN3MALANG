@@ -832,9 +832,18 @@ const THEMES = {
     border: "#2B3D6E", shadowSm: "0 1px 3px rgba(0,0,0,.35)", shadowMd: "0 6px 20px rgba(0,0,0,.35)",
   },
   light: {
-    bg: "linear-gradient(180deg,#FDFCF8,#F1ECDF 55%)", panel: "#FFFFFF", panel2: "#EFE9DB",
-    text: "#1C2033", dim: "#565C70", faint: "#8D93A3", cellText: "#1C2033", modalBg: "#FFFFFF",
-    border: "#E7E1D2", shadowSm: "0 1px 3px rgba(28,32,51,.08), 0 1px 2px rgba(28,32,51,.05)", shadowMd: "0 6px 18px rgba(28,32,51,.10)",
+    // FIX (permintaan guru: "tampilan siang kurang bagus, buat sangat bagus") — sebelumnya cuma
+    // gradasi krem datar (nyaris putih ke krem pucat) tanpa "kedalaman", panel & panel2 & border
+    // warnanya terlalu berdekatan (jadi elemen terasa blur/tidak jelas batasnya), dan bayangannya
+    // terlalu tipis sampai panel-panel terasa menempel rata di latar, bukan "terangkat". Sekarang:
+    // ada sorotan keemasan lembut di bagian atas (kesan "cahaya siang", sekalian senada dengan
+    // warna aksen kuning #F4B740 yang dipakai di semua tombol utama), gradasi krem lebih berlapis,
+    // panel2/border dibuat sedikit lebih kontras biar batas antar elemen jelas, dan bayangan dibuat
+    // lebih lembut-tapi-dalam supaya kartu & tombol terasa "melayang" di atas latar.
+    bg: "radial-gradient(1100px 560px at 50% -8%, rgba(244,183,64,.14), transparent 60%), linear-gradient(180deg,#FFFEFA 0%,#F8F2E3 48%,#EFE6CF 100%)",
+    panel: "#FFFFFF", panel2: "#F6EFDF",
+    text: "#181C30", dim: "#565C70", faint: "#8D93A3", cellText: "#181C30", modalBg: "#FFFFFF",
+    border: "#E4D9C0", shadowSm: "0 1px 2px rgba(28,32,51,.05), 0 3px 10px rgba(28,32,51,.06)", shadowMd: "0 14px 34px rgba(28,32,51,.12), 0 2px 8px rgba(28,32,51,.05)",
   },
 };
 
@@ -2559,11 +2568,12 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
               terlihat sebagai "kedipan" mengganggu. Sekarang statusnya dipindah ke sini (panel
               guru), ditampilkan sebagai teks biasa tanpa animasi — papan di tengah jadi benar-benar
               cuma papan, tidak ada elemen lain yang bongkar-pasang atau menutupinya. */}
-          {flash && (
-            <div style={{ fontSize: 12.5, fontWeight: 700, padding: "4px 10px", borderRadius: 8, background: flash.type === "correct" ? "#3FBFAD" : flash.type === "revealed" ? REVEALED_COLOR : "#EF5B5B", color: "#0D1730" }}>
-              {flash.type === "correct" ? `Benar! Kelompok ${flash.group} +${babak.point} poin`
-                : flash.type === "revealed" ? `Jawaban: ${flash.word}`
-                : "Belum tepat — giliran dibuka lagi"}
+          {/* FIX: banner "Jawaban: ..." yang muncul di sini tiap kali "Lewati soal ini" ditekan
+              dianggap mengganggu, jadi khusus tipe "revealed" ini sengaja tidak ditampilkan lagi —
+              banner Benar!/Belum tepat untuk jawaban dari siswa tetap tampil seperti biasa. */}
+          {flash && flash.type !== "revealed" && (
+            <div style={{ fontSize: 12.5, fontWeight: 700, padding: "4px 10px", borderRadius: 8, background: flash.type === "correct" ? "#3FBFAD" : "#EF5B5B", color: "#0D1730" }}>
+              {flash.type === "correct" ? `Benar! Kelompok ${flash.group} +${babak.point} poin` : "Belum tepat — giliran dibuka lagi"}
             </div>
           )}
         </div>
@@ -2612,7 +2622,6 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
         {audioMode === "off" && clueRevealed && !hintOverlayVisible && currentWord && (
           <div style={{ marginTop: 10, fontSize: 11.5, color: t.faint }}>Teks petunjuk sudah ditampilkan ({teksDurasiDetik} detik) di tengah layar. Klik lagi tombol di atas untuk menampilkannya ulang.</div>
         )}
-        {audioMode === "guru" && <div style={{ marginTop: 10, fontSize: 11.5, color: t.faint }}>Kalau tidak ada yang angkat tangan 5 detik setelah audio selesai, audio diputar ulang otomatis.</div>}
         {audioMode === "bebas" && <div style={{ marginTop: 10, fontSize: 11.5, color: t.faint }}>Bacakan petunjuk kata mana pun sesuka Anda (urutan bebas) — jawaban kelompok diterima kalau cocok dengan salah satu kosakata babak ini yang belum ketemu.</div>}
       </div>
 
@@ -3132,7 +3141,11 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
           </div>
 
           <div style={{ overflowY: "auto", minHeight: 0 }}>
-            <div style={{ fontSize: 11, color: t.faint, marginBottom: 8, textAlign: "center" }}>Panel ini hanya guru yang lihat</div>
+            {/* FIX: dulu ada label "Panel ini hanya guru yang lihat" di sini — padahal kolom ini
+                dirender di halaman yang SAMA dengan papan huruf yang diproyeksikan. Kalau layar
+                laptop di-mirror ke proyektor (setup paling umum), kolom ini ikut terlihat kelas
+                juga. Labelnya dihapus karena menyesatkan — tidak ada pemisahan teknis sungguhan
+                antara "yang guru lihat" dan "yang kelas lihat" di mode ini. */}
             {/* hideBuzzOrder: daftar urutan angkat tangan sudah ditampilkan di kolom kiri (atas), lihat di atas */}
             {renderControlPanel({ hideScoreboard: true, hideBuzzOrder: true })}
           </div>
@@ -3174,7 +3187,9 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
         <button onClick={() => setControlsOpen((o) => !o)} style={{ position: "fixed", bottom: 16, right: 16, display: "flex", alignItems: "center", gap: 6, background: "#F4B740", color: "#101B34", border: "none", borderRadius: 10, padding: "10px 14px", cursor: "pointer", zIndex: 30, fontWeight: 700, fontSize: 13, boxShadow: "0 4px 16px rgba(0,0,0,.25)" }}><span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>⚙</span> {controlsOpen ? "Sembunyikan Panel" : "Panel Guru"}</button>
         {controlsOpen && (
           <div style={{ position: "fixed", top: 0, right: 0, bottom: 0, left: 0, padding: "16px 16px 76px", overflowY: "auto", background: t.modalBg, boxShadow: "-8px 0 30px rgba(0,0,0,.3)", zIndex: 25, boxSizing: "border-box" }}>
-            <div style={{ fontSize: 12, color: t.faint, marginBottom: 10, textAlign: "center" }}>Panel ini hanya guru yang lihat</div>
+            {/* FIX: label "Panel ini hanya guru yang lihat" dihapus — menyesatkan, karena kalau
+                layar guru di-mirror ke proyektor (setup paling umum), panel ini ikut tampil ke
+                seluruh kelas juga, bukan cuma guru. */}
             {/* hideBuzzOrder: daftar urutan angkat tangan sudah ditampilkan di atas papan, lihat di atas */}
             {renderControlPanel({ hideBuzzOrder: true })}
           </div>
@@ -3287,7 +3302,6 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
 
         {/* Kolom kanan: panel kontrol guru */}
         <div style={{ overflowY: "auto", minHeight: 0, display: "flex", flexDirection: "column", gap: 10 }}>
-          <div style={{ fontSize: 11, color: t.faint, textAlign: "center" }}>Panel guru</div>
           {renderControlPanel({ hideScoreboard: true, hideBuzzOrder: true })}
         </div>
       </div>
