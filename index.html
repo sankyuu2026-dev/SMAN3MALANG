@@ -323,7 +323,7 @@ const ROMAJI_TO_HIRAGANA = [
   ["pya","ぴゃ"],["pyu","ぴゅ"],["pyo","ぴょ"],
   ["ja","じゃ"],["ju","じゅ"],["jo","じょ"],
   ["dya","ぢゃ"],["dyu","ぢゅ"],["dyo","ぢょ"],
-  ["tchi","っち"],["ttsu","っつ"],
+  ,,
   ["a","あ"],["i","い"],["u","う"],["e","え"],["o","お"],
   ["ka","か"],["ki","き"],["ku","く"],["ke","け"],["ko","こ"],
   ["sa","さ"],["si","し"],["su","す"],["se","せ"],["so","そ"],
@@ -341,6 +341,7 @@ const ROMAJI_TO_HIRAGANA = [
   ["pa","ぱ"],["pi","ぴ"],["pu","ぷ"],["pe","ぺ"],["po","ぽ"],
   ["fa","ふぁ"],["fi","ふぃ"],["fe","ふぇ"],["fo","ふぉ"],
   ["va","ヴぁ"],["vi","ヴぃ"],["vu","ヴ"],["ve","ヴぇ"],["vo","ヴぉ"],
+];
   ["n","ん"],
 ];
 
@@ -367,7 +368,7 @@ function romajiToHiragana(romaji) {
   s = s.replace(/n(?=[^aiueoyn]|$)/g, "ん");
   // Konversi tabel
   for (const [rom, hira] of ROMAJI_TO_HIRAGANA) {
-    s = s.replaceAll(rom, hira);
+    s = s.replace(new RegExp(rom.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), hira);
   }
   return s;
 }
@@ -1679,6 +1680,7 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
         if (p.triedSet) setTriedSet(new Set(p.triedSet));
         if (p.puzzle) setPuzzle(p.puzzle);
         if (p.clueRevealed) setClueRevealed(p.clueRevealed);
+        if (p.scriptByBabak) setScriptByBabak(p.scriptByBabak);
       }
     } catch (e) { /* belum ada progres tersimpan, atau data korup */ }
     setLoaded(true);
@@ -1692,7 +1694,7 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
     const tm = setTimeout(() => {
       const res = safeSetItem("tck-progress", JSON.stringify({
         stage, babakId, mode, audioMode, teksDurasiDetik, scores, roomCode, queue, foundMap,
-        triedSet: Array.from(triedSet), puzzle, clueRevealed,
+        triedSet: Array.from(triedSet), puzzle, clueRevealed, scriptByBabak,
       }));
       setStorageWarning(res.ok ? null : res.message);
     }, 500);
@@ -2386,7 +2388,9 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
     // (romaji ditulis kapital) dan tidak pernah gagal cocok dengan jawaban siswa gara-gara
     // guru tidak sengaja mengetik huruf kecil. Aman untuk hiragana karena .toUpperCase()
     // tidak mengubah karakter kana sama sekali.
-    const finalValue = field === "letters" ? value.toUpperCase() : value;
+    // Konversi otomatis field 'letters' sesuai script mode babak — juga memaksa huruf besar
+    // untuk romaji (aman untuk hiragana/katakana karena .toUpperCase() tidak mengubah kana).
+    const finalValue = field === "letters" && value ? convertToScript(value, scriptByBabak[id] || "romaji") : value;
     setDataByMateri((prev) => {
       const materiData = prev[selectedMateri] || { 1: [], 2: [], 3: [] };
       return { ...prev, [selectedMateri]: { ...materiData, [id]: materiData[id].map((w) => w.id === wordId ? { ...w, [field]: finalValue } : w) } };
@@ -2407,6 +2411,7 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
     });
   }
   function addWord(id) {
+    // Tambah satu baris kosong — guru isi manual, konversi terjadi saat updateWord
     setDataByMateri((prev) => {
       const materiData = prev[selectedMateri] || { 1: [], 2: [], 3: [] };
       return { ...prev, [selectedMateri]: { ...materiData, [id]: [...materiData[id], { id: uid(), letters: "", clue: "", audioUrl: null }] } };
@@ -2898,7 +2903,6 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
               Lanjutkan Permainan
             </button>
           </div>
-        </div>
       </div>
     );
   }
@@ -3035,13 +3039,33 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
                           ].map(({ key, label, color, hint }) => {
                             const active = scriptByBabak[babakId] === key;
                             return (
-                              <button key={key} onClick={() => setScriptByBabak((s) => ({ ...s, [babakId]: key }))}
+                              <button key={key} onClick={() => {
+                                setScriptByBabak((s) => ({ ...s, [babakId]: key }));
+                                // FIX: sebelumnya ganti mode cuma mengubah LABEL-nya — kata yang
+                                // sudah diketik sebelumnya dibiarkan apa adanya (tetap romaji
+                                // walau sudah dipindah ke Hiragana/Katakana), guru harus ketik
+                                // ulang manual satu-satu. Sekarang begitu mode diganti, semua kata
+                                // yang sudah ada di babak ini otomatis dikonversi ke huruf baru.
+                                setDataByMateri((prev) => {
+                                  const materiData = prev[selectedMateri] || { 1: [], 2: [], 3: [] };
+                                  return {
+                                    ...prev,
+                                    [selectedMateri]: {
+                                      ...materiData,
+                                      [babakId]: (materiData[babakId] || []).map((w) => ({
+                                        ...w, letters: w.letters ? convertToScript(w.letters, key) : w.letters,
+                                      })),
+                                    },
+                                  };
+                                });
+                              }}
                                 style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 1, padding: "6px 14px", borderRadius: 8, border: "none", cursor: "pointer", background: active ? color : "transparent", color: active ? "#fff" : t.dim, fontWeight: active ? 700 : 500, fontSize: 12, transition: "all .15s ease" }}>
                                 <span>{label}</span>
                                 <span style={{ fontSize: 10, opacity: 0.8 }}>{hint}</span>
                               </button>
                             );
                           })}
+                        </div>
                         </div>
                         {/* Tombol Tambah Banyak */}
                         <button onClick={() => setBulkAddOpen(true)} style={{ display: "flex", alignItems: "center", gap: 8, background: t.panel, border: `1.5px dashed ${t.accent || "#F4B740"}`, color: t.text, borderRadius: 10, padding: "10px 18px", cursor: "pointer", fontSize: 14, fontWeight: 600 }}>
@@ -3731,6 +3755,7 @@ function BukaKotakGame({ onBack, theme, setTheme }) {
         </div>
       </div>
     </div>
+  </div>
   );
 }
 
