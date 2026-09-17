@@ -307,90 +307,9 @@ function CelebrationOverlay({ particles }) {
 --------------------------------------------------------- */
 const uid = () => Math.random().toString(36).slice(2, 9);
 
-// ===== KONVERSI ROMAJI → HIRAGANA / KATAKANA =====
-// Urutan panjang → pendek supaya "shi" tidak terpotong jadi "si" lebih dulu
-const ROMAJI_TO_HIRAGANA = [
-  ["shi","し"],["chi","ち"],["tsu","つ"],["tchi","っち"],["ttsu","っつ"],
-  ["sha","しゃ"],["shu","しゅ"],["sho","しょ"],
-  ["cha","ちゃ"],["chu","ちゅ"],["cho","ちょ"],
-  ["kya","きゃ"],["kyu","きゅ"],["kyo","きょ"],
-  ["nya","にゃ"],["nyu","にゅ"],["nyo","にょ"],
-  ["hya","ひゃ"],["hyu","ひゅ"],["hyo","ひょ"],
-  ["mya","みゃ"],["myu","みゅ"],["myo","みょ"],
-  ["rya","りゃ"],["ryu","りゅ"],["ryo","りょ"],
-  ["gya","ぎゃ"],["gyu","ぎゅ"],["gyo","ぎょ"],
-  ["bya","びゃ"],["byu","びゅ"],["byo","びょ"],
-  ["pya","ぴゃ"],["pyu","ぴゅ"],["pyo","ぴょ"],
-  ["ja","じゃ"],["ju","じゅ"],["jo","じょ"],
-  ["dya","ぢゃ"],["dyu","ぢゅ"],["dyo","ぢょ"],
-  ["a","あ"],["i","い"],["u","う"],["e","え"],["o","お"],
-  ["ka","か"],["ki","き"],["ku","く"],["ke","け"],["ko","こ"],
-  ["sa","さ"],["si","し"],["su","す"],["se","せ"],["so","そ"],
-  ["ta","た"],["ti","ち"],["te","て"],["to","と"],
-  ["na","な"],["ni","に"],["nu","ぬ"],["ne","ね"],["no","の"],
-  ["ha","は"],["hi","ひ"],["fu","ふ"],["he","へ"],["ho","ほ"],
-  ["ma","ま"],["mi","み"],["mu","む"],["me","め"],["mo","も"],
-  ["ya","や"],["yu","ゆ"],["yo","よ"],
-  ["ra","ら"],["ri","り"],["ru","る"],["re","れ"],["ro","ろ"],
-  ["wa","わ"],["wi","ゐ"],["we","ゑ"],["wo","を"],
-  ["ga","が"],["gi","ぎ"],["gu","ぐ"],["ge","げ"],["go","ご"],
-  ["za","ざ"],["zi","じ"],["zu","ず"],["ze","ぜ"],["zo","ぞ"],
-  ["da","だ"],["di","ぢ"],["du","づ"],["de","で"],["do","ど"],
-  ["ba","ば"],["bi","び"],["bu","ぶ"],["be","べ"],["bo","ぼ"],
-  ["pa","ぱ"],["pi","ぴ"],["pu","ぷ"],["pe","ぺ"],["po","ぽ"],
-  ["fa","ふぁ"],["fi","ふぃ"],["fe","ふぇ"],["fo","ふぉ"],
-  ["va","ヴぁ"],["vi","ヴぃ"],["vu","ヴ"],["ve","ヴぇ"],["vo","ヴぉ"],
-  ["n","ん"],
-];
-
-// Hiragana → Katakana: selisih kode 0x60
-function hiraganaToKatakana(str) {
-  return str.replace(/[\u3041-\u3096]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) + 0x60));
-}
-
-// Katakana → Hiragana
-function katakanaToHiragana(str) {
-  return str.replace(/[\u30A1-\u30F6]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0x60));
-}
-
-// Deteksi apakah string sudah hiragana/katakana
-function isKana(str) { return /^[\u3040-\u30FF\u3000-\u303Fー\s]+$/.test(str.trim()); }
-
-// Konversi romaji → hiragana
-function romajiToHiragana(romaji) {
-  let s = romaji.toLowerCase().trim();
-  // Handle double consonant → っ (kk, ss, tt, pp, cc, dll)
-  s = s.replace(/([kstpgzdbcfhmnrwy])\1/g, (_, c) => "っ" + c);
-  // Handle "n" sebelum vokal/y → ん (n'a, n'i, dll) atau nn
-  s = s.replace(/nn/g, "ん");
-  s = s.replace(/n(?=[^aiueoyn]|$)/g, "ん");
-  // Konversi tabel
-  for (const [rom, hira] of ROMAJI_TO_HIRAGANA) {
-    s = s.replace(new RegExp(rom.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), hira);
-  }
-  return s;
-}
-
-// Fungsi utama konversi: input apapun → script target
-function convertToScript(input, script) {
-  if (!input) return input;
-  const trimmed = input.trim();
-  if (script === "romaji") return trimmed.toUpperCase();
-  // Jika sudah kana, konversi langsung
-  if (isKana(trimmed)) {
-    if (script === "hiragana") return katakanaToHiragana(trimmed);
-    if (script === "katakana") return hiraganaToKatakana(katakanaToHiragana(trimmed));
-  }
-  // Input romaji → hiragana dulu, lalu ke target
-  const hira = romajiToHiragana(trimmed);
-  if (script === "hiragana") return hira;
-  if (script === "katakana") return hiraganaToKatakana(hira);
-  return trimmed.toUpperCase(); // fallback romaji
-}
-
 const SEED_BABAK = {
   1: {
-    label: "Babak 1", sub: "Katakana (romaji)", point: 1, script: "katakana",
+    label: "Babak 1", sub: "Katakana (romaji)", point: 1,
     words: [
       { letters: "HOWAITOBOODO", clue: "Media tulis berpermukaan putih licin tempat menulis dengan spidol" },
       { letters: "EAKON", clue: "Mesin elektronik pengatur suhu ruangan agar tetap dingin dan sejuk" },
@@ -414,7 +333,7 @@ const SEED_BABAK = {
     ],
   },
   2: {
-    label: "Babak 2", sub: "Hiragana", point: 2, script: "hiragana",
+    label: "Babak 2", sub: "Hiragana", point: 2,
     words: [
       { letters: "ほん", clue: "Kumpulan lembaran kertas bertuliskan teks bacaan atau gambar yang dijilid rapi menjadi satu untuk dibaca dan menambah wawasan" },
       { letters: "かみ", clue: "Lembaran tipis berbahan olahan bubur kayu yang digunakan sebagai media dasar untuk menulis, melipat, atau mencetak dokumen" },
@@ -438,7 +357,7 @@ const SEED_BABAK = {
     ],
   },
   3: {
-    label: "Babak 3", sub: "Hiragana + konsonan ganda/youon", point: 2, script: "hiragana",
+    label: "Babak 3", sub: "Hiragana + konsonan ganda/youon", point: 2,
     words: [
       { letters: "へいや", clue: "Bentang alam daratan luas yang permukaannya datar dan relatif rendah tanpa banyak perbukitan" },
       { letters: "がっき", clue: "Perangkat atau benda yang dirancang khusus untuk menghasilkan alunan nada, irama, dan musik" },
@@ -1541,12 +1460,6 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
   const [controlsOpen, setControlsOpen] = useState(true);
   const [qrOpen, setQrOpen] = useState(false);
   const [bulkAddOpen, setBulkAddOpen] = useState(false);
-  // scriptByBabak: mode huruf per babak (romaji/hiragana/katakana)
-  const [scriptByBabak, setScriptByBabak] = useState(() => ({
-    1: SEED_BABAK[1].script || "katakana",
-    2: SEED_BABAK[2].script || "hiragana",
-    3: SEED_BABAK[3].script || "hiragana",
-  }));
   const [joinedGroups, setJoinedGroups] = useState({});
   const [uploadingAudio, setUploadingAudio] = useState({}); // { [wordId]: true } saat sedang upload ke Firebase Storage
   const [audioUploadError, setAudioUploadError] = useState({}); // { [wordId]: "pesan error" }
@@ -1678,7 +1591,6 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
         if (p.triedSet) setTriedSet(new Set(p.triedSet));
         if (p.puzzle) setPuzzle(p.puzzle);
         if (p.clueRevealed) setClueRevealed(p.clueRevealed);
-        if (p.scriptByBabak) setScriptByBabak(p.scriptByBabak);
       }
     } catch (e) { /* belum ada progres tersimpan, atau data korup */ }
     setLoaded(true);
@@ -1692,7 +1604,7 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
     const tm = setTimeout(() => {
       const res = safeSetItem("tck-progress", JSON.stringify({
         stage, babakId, mode, audioMode, teksDurasiDetik, scores, roomCode, queue, foundMap,
-        triedSet: Array.from(triedSet), puzzle, clueRevealed, scriptByBabak,
+        triedSet: Array.from(triedSet), puzzle, clueRevealed,
       }));
       setStorageWarning(res.ok ? null : res.message);
     }, 500);
@@ -2386,9 +2298,7 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
     // (romaji ditulis kapital) dan tidak pernah gagal cocok dengan jawaban siswa gara-gara
     // guru tidak sengaja mengetik huruf kecil. Aman untuk hiragana karena .toUpperCase()
     // tidak mengubah karakter kana sama sekali.
-    // Konversi otomatis field 'letters' sesuai script mode babak — juga memaksa huruf besar
-    // untuk romaji (aman untuk hiragana/katakana karena .toUpperCase() tidak mengubah kana).
-    const finalValue = field === "letters" && value ? convertToScript(value, scriptByBabak[id] || "romaji") : value;
+    const finalValue = field === "letters" ? value.toUpperCase() : value;
     setDataByMateri((prev) => {
       const materiData = prev[selectedMateri] || { 1: [], 2: [], 3: [] };
       return { ...prev, [selectedMateri]: { ...materiData, [id]: materiData[id].map((w) => w.id === wordId ? { ...w, [field]: finalValue } : w) } };
@@ -2409,7 +2319,6 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
     });
   }
   function addWord(id) {
-    // Tambah satu baris kosong — guru isi manual, konversi terjadi saat updateWord
     setDataByMateri((prev) => {
       const materiData = prev[selectedMateri] || { 1: [], 2: [], 3: [] };
       return { ...prev, [selectedMateri]: { ...materiData, [id]: [...materiData[id], { id: uid(), letters: "", clue: "", audioUrl: null }] } };
@@ -2420,15 +2329,12 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
   // dilewati (tidak dianggap error fatal — cukup tidak ikut ditambahkan), supaya satu baris
   // yang salah format tidak menggagalkan semua baris lain yang sudah benar.
   function addWordsBulk(id, text) {
-    const script = scriptByBabak[id] || "romaji";
     const newWords = text.split("\n").map((line) => line.trim()).filter(Boolean).map((line) => {
       const sepIdx = line.indexOf("/");
       if (sepIdx === -1) return null;
-      const rawLetters = line.slice(0, sepIdx).trim();
+      const letters = line.slice(0, sepIdx).trim().toUpperCase();
       const clue = line.slice(sepIdx + 1).trim();
-      if (!rawLetters) return null;
-      // Konversi otomatis sesuai script mode babak
-      const letters = convertToScript(rawLetters, script);
+      if (!letters) return null;
       return { id: uid(), letters, clue, audioUrl: null };
     }).filter(Boolean);
     if (newWords.length === 0) return 0;
@@ -3013,13 +2919,7 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
                       <div style={{ width: 28, height: 28, borderRadius: "50%", background: isOpen ? "#F4B740" : t.panel, border: isOpen ? "none" : `1px solid ${t.border}`, color: isOpen ? "#101B34" : t.dim, fontWeight: 700, fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{id}</div>
                       <div style={{ minWidth: 0 }}>
                         <div className="sgt" style={{ fontWeight: 700, fontSize: 14, color: t.text }}>Babak {id}</div>
-                        <div style={{ fontSize: 13, color: t.dim, marginTop: 1, display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" }}>
-                          <span>{meta.sub} · {meta.point} poin / soal · {wordsForId.length} kosakata</span>
-                          <span style={{ opacity: 0.35 }}>·</span>
-                          <span style={{ fontWeight: 600, fontSize: 12, color: scriptByBabak[id] === "hiragana" ? "#3FBFAD" : scriptByBabak[id] === "katakana" ? "#8E7CC3" : "#D98A2B" }}>
-                            {scriptByBabak[id] === "hiragana" ? "ひらがな" : scriptByBabak[id] === "katakana" ? "カタカナ" : "Romaji"}
-                          </span>
-                        </div>
+                        <div style={{ fontSize: 13, color: t.dim, marginTop: 1 }}>{meta.sub} · {meta.point} poin / soal · {wordsForId.length} kosakata</div>
                       </div>
                     </div>
                     <span style={{ width: 26, height: 26, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, color: isOpen ? "#101B34" : t.dim, background: isOpen ? "#F4B740" : "transparent", flexShrink: 0, transform: isOpen ? "rotate(180deg)" : "none", transition: "transform .15s ease, background .15s ease" }}>▾</span>
@@ -3027,45 +2927,8 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
 
                   {isOpen && (
                     <div className="babak-acc-body" style={{ padding: "0 16px 16px", borderTop: `1px solid ${t.border}` }}>
-                      {/* Pilihan mode huruf + tombol Tambah Banyak */}
-                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, margin: "14px 0" }}>
-                        {/* Pilihan script mode */}
-                        <div style={{ display: "flex", gap: 4, background: t.panel2, borderRadius: 10, padding: 4 }}>
-                          {[
-                            { key: "romaji", label: "Romaji", color: "#D98A2B", hint: "A B C" },
-                            { key: "hiragana", label: "Hiragana", color: "#3FBFAD", hint: "ひらがな" },
-                            { key: "katakana", label: "Katakana", color: "#8E7CC3", hint: "カタカナ" },
-                          ].map(({ key, label, color, hint }) => {
-                            const active = scriptByBabak[babakId] === key;
-                            return (
-                              <button key={key} onClick={() => {
-                                setScriptByBabak((s) => ({ ...s, [babakId]: key }));
-                                // FIX: sebelumnya ganti mode cuma mengubah LABEL-nya — kata yang
-                                // sudah diketik sebelumnya dibiarkan apa adanya (tetap romaji
-                                // walau sudah dipindah ke Hiragana/Katakana), guru harus ketik
-                                // ulang manual satu-satu. Sekarang begitu mode diganti, semua kata
-                                // yang sudah ada di babak ini otomatis dikonversi ke huruf baru.
-                                setDataByMateri((prev) => {
-                                  const materiData = prev[selectedMateri] || { 1: [], 2: [], 3: [] };
-                                  return {
-                                    ...prev,
-                                    [selectedMateri]: {
-                                      ...materiData,
-                                      [babakId]: (materiData[babakId] || []).map((w) => ({
-                                        ...w, letters: w.letters ? convertToScript(w.letters, key) : w.letters,
-                                      })),
-                                    },
-                                  };
-                                });
-                              }}
-                                style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 1, padding: "6px 14px", borderRadius: 8, border: "none", cursor: "pointer", background: active ? color : "transparent", color: active ? "#fff" : t.dim, fontWeight: active ? 700 : 500, fontSize: 12, transition: "all .15s ease" }}>
-                                <span>{label}</span>
-                                <span style={{ fontSize: 10, opacity: 0.8 }}>{hint}</span>
-                              </button>
-                            );
-                          })}
-                        </div>
-                        {/* Tombol Tambah Banyak */}
+                      {/* Tombol Tambah Banyak — kiri, lebih besar & menonjol */}
+                      <div style={{ display: "flex", justifyContent: "flex-start", margin: "14px 0" }}>
                         <button onClick={() => setBulkAddOpen(true)} style={{ display: "flex", alignItems: "center", gap: 8, background: t.panel, border: `1.5px dashed ${t.accent || "#F4B740"}`, color: t.text, borderRadius: 10, padding: "10px 18px", cursor: "pointer", fontSize: 14, fontWeight: 600 }}>
                           <span style={{ fontSize: 16, lineHeight: 1 }}>📋</span> Tambah Banyak Sekaligus
                         </button>
@@ -3185,21 +3048,9 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
             open={bulkAddOpen}
             onClose={() => setBulkAddOpen(false)}
             onAdd={(text) => addWordsBulk(babakId, text)}
-            title={`Tambah Banyak Kosakata — Babak ${babakId} (${scriptByBabak[babakId] === "hiragana" ? "ひらがな" : scriptByBabak[babakId] === "katakana" ? "カタカナ" : "Romaji"})`}
-            formatHint={
-              scriptByBabak[babakId] === "romaji"
-                ? 'Format: romaji/petunjuk — dipisah "/". Input romaji akan disimpan sebagai huruf besar. Contoh: gomibako/Wadah sampah'
-                : scriptByBabak[babakId] === "hiragana"
-                ? 'Format: kata/petunjuk — dipisah "/". Input romaji OTOMATIS dikonversi ke ひらがな. Contoh: dekiru/Kemampuan → できる'
-                : 'Format: kata/petunjuk — dipisah "/". Input romaji OTOMATIS dikonversi ke カタカナ. Contoh: pasokon/Komputer → パソコン'
-            }
-            placeholder={
-              scriptByBabak[babakId] === "hiragana"
-                ? "dekiru/Kemampuan atau kesanggupan untuk melakukan sesuatu\noyogu/Aktivitas menggerakkan tubuh di dalam air"
-                : scriptByBabak[babakId] === "katakana"
-                ? "pasokon/Komputer laptop untuk mengolah data\niyahon/Perangkat audio yang disematkan ke telinga"
-                : "gomibako/Wadah penampung barang bekas atau sisa pakai\nkarendaa/Lembaran penanggalan hari dan bulan"
-            }
+            title={`Tambah Banyak Kosakata Sekaligus — Babak ${babakId}`}
+            formatHint={'Satu kosakata per baris, format: kata/petunjuk (dipisah tanda garis miring "/"). Baris yang tidak punya "/" akan dilewati.'}
+            placeholder={"gomibako/Wadah penampung barang bekas atau sisa pakai yang sudah tidak digunakan\nkarendaa/Lembaran penanggalan yang menunjukkan susunan hari, tanggal, dan bulan dalam setahun"}
           />
         </div>
 
@@ -3542,12 +3393,6 @@ function BukaKotakGame({ onBack, theme, setTheme }) {
   const [storageWarning, setStorageWarning] = useState(null); // pesan kalau localStorage gagal menyimpan
   const [importMsg, setImportMsg] = useState(null); // { ok, text } hasil ekspor/impor cadangan
   const [bulkAddOpen, setBulkAddOpen] = useState(false);
-  // scriptByBabak: mode huruf per babak (romaji/hiragana/katakana)
-  const [scriptByBabak, setScriptByBabak] = useState(() => ({
-    1: SEED_BABAK[1].script || "katakana",
-    2: SEED_BABAK[2].script || "hiragana",
-    3: SEED_BABAK[3].script || "hiragana",
-  }));
   const [opened, setOpened] = useState({}); // id -> true
   const [activeBox, setActiveBox] = useState(null); // instruction object or null
 
@@ -3782,12 +3627,6 @@ function CocokkanKartuGame({ onBack, theme, setTheme }) {
   const [imageUploadError, setImageUploadError] = useState({});
   const [qrOpen, setQrOpen] = useState(false);
   const [bulkAddOpen, setBulkAddOpen] = useState(false);
-  // scriptByBabak: mode huruf per babak (romaji/hiragana/katakana)
-  const [scriptByBabak, setScriptByBabak] = useState(() => ({
-    1: SEED_BABAK[1].script || "katakana",
-    2: SEED_BABAK[2].script || "hiragana",
-    3: SEED_BABAK[3].script || "hiragana",
-  }));
   const [joinedGroups, setJoinedGroups] = useState({});
   const [cardsRoundId, setCardsRoundId] = useState(null);
   const [finishers, setFinishers] = useState([]);
