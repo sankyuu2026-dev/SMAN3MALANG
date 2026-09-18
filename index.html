@@ -233,6 +233,31 @@ function todayStamp() {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
+// FITUR BARU: kosakata/materi (Word Search & Mystery Box) dan kata+gambar (Card Rush)
+// sebelumnya CUMA tersimpan di localStorage browser — kalau riwayat/data browser dibersihkan
+// ("Clear browsing data" → "Cookies and other site data"), atau guru pindah device/browser,
+// SEMUA kosakata yang sudah disusun hilang total tanpa jejak, karena Firebase tidak pernah ikut
+// menyimpannya sama sekali (beda dengan "Riwayat Sesi" yang memang sudah di Firestore).
+// Kedua fungsi ini menambahkan "cadangan otomatis" ke Firestore di bawah akun guru yang sedang
+// login (users/{uid}/setupData/{docName}) — localStorage TETAP jadi sumber utama (lebih cepat,
+// tetap jalan walau offline), Firestore cuma penyelamat kalau localStorage-nya hilang/basi.
+// `savedAt` (angka Date.now() biasa, BUKAN firebase.firestore.FieldValue.serverTimestamp())
+// dipakai untuk membandingkan mana yang lebih baru antara salinan lokal & salinan cloud saat
+// dimuat — serverTimestamp() sengaja tidak dipakai di sini karena nilainya masih `null` sesaat
+// sebelum server mengonfirmasi, jadi tidak bisa langsung dibandingkan secara numerik saat itu juga.
+function loadSetupFromCloud(uid, docName) {
+  if (!uid) return Promise.resolve(null);
+  return db.collection("users").doc(uid).collection("setupData").doc(docName).get()
+    .then((snap) => (snap.exists ? snap.data() : null))
+    .catch(() => null); // offline/gagal — diam-diam saja, localStorage yang sudah dimuat tetap dipakai
+}
+function saveSetupToCloud(uid, docName, payload) {
+  if (!uid) return;
+  db.collection("users").doc(uid).collection("setupData").doc(docName)
+    .set({ ...payload, savedAt: Date.now() })
+    .catch(() => {}); // best-effort — kegagalan di sini tidak boleh mengganggu penyimpanan lokal
+}
+
 // Dulu tiap game (Tebak & Cari Kata, Buka Kotak, Card Rush) menulis ulang fungsi
 // exportBackup/importBackup masing-masing — isinya nyaris sama persis (unduh .json
 // berstempel tanggal, validasi field "app", tampilkan pesan sukses/gagal), cuma beda nama
@@ -1593,15 +1618,24 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
 
   // Muat editan tersimpan (kalau ada) saat pertama dibuka
   useEffect(() => {
+    let localSavedAt = 0;
     try {
       const raw = localStorage.getItem("tck-setup-data");
       if (raw) {
         const parsed = JSON.parse(raw);
+        // FIX (bug): baris `if (parsed.theme) setTheme(parsed.theme)` yang dulu ada di sini
+        // memanggil setter tema GLOBAL (lihat unifikasi tema — theme/setTheme sekarang prop
+        // dari App, bukan state lokal lagi) memakai nilai tema LAMA yang kebetulan ikut
+        // tersimpan di blob ini sejak sebelum tema disatukan. Efeknya, tiap buka Word Search,
+        // tema globalnya bisa "ketimpa" balik ke nilai basi ini — bug tema "beda-beda tiap
+        // halaman" yang sudah diperbaiki bisa muncul lagi lewat jalur ini. Field theme di blob
+        // ini sekarang diabaikan sepenuhnya (dan tidak ditulis lagi saat menyimpan, lihat effect
+        // penyimpanan di bawah).
         if (parsed.dataByMateri) setDataByMateri(parsed.dataByMateri);
         if (parsed.selectedMateri) setSelectedMateri(parsed.selectedMateri);
-        if (parsed.theme) setTheme(parsed.theme);
         if (parsed.puzzleByBabak) setPuzzleByBabak(parsed.puzzleByBabak);
         if (parsed.pointByBabak) setPointByBabak((prev) => ({ ...prev, ...parsed.pointByBabak }));
+        localSavedAt = parsed.savedAt || 0;
       }
     } catch (e) { /* belum ada data tersimpan, atau data korup */ }
     // Muat progres permainan yang sedang berjalan (kalau ada), supaya refresh tidak mengulang dari awal
@@ -1626,6 +1660,18 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
     setLoaded(true);
     // Sekalian sapu room lama yang basi (lihat cleanupStaleRooms) tiap kali layar game ini dibuka.
     cleanupStaleRooms();
+    // FITUR BARU: cek cadangan cloud. Kalau cloud lebih baru daripada localStorage (atau
+    // localStorage-nya kosong sama sekali, mis. baru saja dihapus) — pulihkan dari cloud.
+    loadSetupFromCloud(teacher.uid, "wordSearch").then((cloud) => {
+      if (!cloud) return;
+      if ((cloud.savedAt || 0) > localSavedAt) {
+        if (cloud.dataByMateri) setDataByMateri(cloud.dataByMateri);
+        if (cloud.selectedMateri) setSelectedMateri(cloud.selectedMateri);
+        if (cloud.puzzleByBabak) setPuzzleByBabak(cloud.puzzleByBabak);
+        if (cloud.pointByBabak) setPointByBabak((prev) => ({ ...prev, ...cloud.pointByBabak }));
+        setImportMsg({ ok: true, text: "Kosakata dipulihkan dari cadangan cloud (localStorage browser ini kosong/lebih basi)." });
+      }
+    });
   }, []);
 
   // Simpan progres permainan setiap kali berubah, supaya refresh browser tidak mereset ke awal
@@ -1687,11 +1733,13 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
   useEffect(() => {
     if (!loaded) return;
     const tm = setTimeout(() => {
-      const res = safeSetItem("tck-setup-data", JSON.stringify({ dataByMateri, selectedMateri, theme, puzzleByBabak, pointByBabak }));
+      const payload = { dataByMateri, selectedMateri, puzzleByBabak, pointByBabak };
+      const res = safeSetItem("tck-setup-data", JSON.stringify({ ...payload, savedAt: Date.now() }));
       setStorageWarning(res.ok ? null : res.message);
+      saveSetupToCloud(teacher.uid, "wordSearch", payload);
     }, 500);
     return () => clearTimeout(tm);
-  }, [dataByMateri, selectedMateri, theme, puzzleByBabak, pointByBabak, loaded]);
+  }, [dataByMateri, selectedMateri, puzzleByBabak, pointByBabak, loaded]);
 
   // Fingerprint kata di babak yang sedang dibuka di Persiapan — dipakai untuk auto-build & deteksi
   // perubahan kata (kalau guru edit/tambah/hapus kosakata, preview lama otomatis basi dan dibangun ulang).
@@ -3443,7 +3491,7 @@ function ensureBoxMateri(data, materi) {
   return { ...data, [materi]: [] };
 }
 
-function BukaKotakGame({ onBack, theme, setTheme }) {
+function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
   const t = THEMES[theme];
   const [stage, setStage] = useState("setup"); // 'setup' | 'play'
   const [selectedMateri, setSelectedMateri] = useState("Gakkou no Seikatsu");
@@ -3456,13 +3504,17 @@ function BukaKotakGame({ onBack, theme, setTheme }) {
   const [activeBox, setActiveBox] = useState(null); // instruction object or null
 
   useEffect(() => {
+    let localSavedAt = 0;
     try {
       const raw = localStorage.getItem("bk-setup-data");
       if (raw) {
         const parsed = JSON.parse(raw);
+        // FIX (bug): lihat catatan panjang di Word Search — field `theme` di blob ini sisa dari
+        // sebelum tema disatukan jadi satu state global, dan kalau masih dipakai (setTheme(parsed.theme))
+        // bisa menimpa balik tema global dengan nilai basi. Diabaikan sepenuhnya sekarang.
         if (parsed.dataByMateri) setDataByMateri(parsed.dataByMateri);
         if (parsed.selectedMateri) setSelectedMateri(parsed.selectedMateri);
-        if (parsed.theme) setTheme(parsed.theme);
+        localSavedAt = parsed.savedAt || 0;
       }
     } catch (e) { /* belum ada data tersimpan, atau data korup */ }
     try {
@@ -3474,15 +3526,27 @@ function BukaKotakGame({ onBack, theme, setTheme }) {
       }
     } catch (e) { /* belum ada progres tersimpan, atau data korup */ }
     setLoaded(true);
+    // FITUR BARU: sama seperti Word Search — pulihkan dari cadangan cloud kalau lebih baru
+    // daripada localStorage (atau localStorage-nya kosong sama sekali).
+    loadSetupFromCloud(teacher.uid, "mysteryBox").then((cloud) => {
+      if (!cloud) return;
+      if ((cloud.savedAt || 0) > localSavedAt) {
+        if (cloud.dataByMateri) setDataByMateri(cloud.dataByMateri);
+        if (cloud.selectedMateri) setSelectedMateri(cloud.selectedMateri);
+        setImportMsg({ ok: true, text: "Perintah dipulihkan dari cadangan cloud (localStorage browser ini kosong/lebih basi)." });
+      }
+    });
   }, []);
   useEffect(() => {
     if (!loaded) return;
     const tm = setTimeout(() => {
-      const res = safeSetItem("bk-setup-data", JSON.stringify({ dataByMateri, selectedMateri, theme }));
+      const payload = { dataByMateri, selectedMateri };
+      const res = safeSetItem("bk-setup-data", JSON.stringify({ ...payload, savedAt: Date.now() }));
       setStorageWarning(res.ok ? null : res.message);
+      saveSetupToCloud(teacher.uid, "mysteryBox", payload);
     }, 500);
     return () => clearTimeout(tm);
-  }, [dataByMateri, selectedMateri, theme, loaded]);
+  }, [dataByMateri, selectedMateri, loaded]);
   useEffect(() => {
     if (!loaded) return;
     const tm = setTimeout(() => {
@@ -3670,7 +3734,7 @@ function BukaKotakGame({ onBack, theme, setTheme }) {
 =========================================================== */
 function makeBabak(n) { return { id: uid(), label: `Babak ${n}`, pairs: [] }; }
 
-function CocokkanKartuGame({ onBack, theme, setTheme }) {
+function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
   const isMobile = useIsMobile();
   const t = THEMES[theme];
 
@@ -3693,26 +3757,40 @@ function CocokkanKartuGame({ onBack, theme, setTheme }) {
   const [publishing, setPublishing] = useState(false);
 
   useEffect(() => {
+    let localSavedAt = 0;
     try {
       const raw = localStorage.getItem("cck-setup-data");
       if (raw) {
         const parsed = JSON.parse(raw);
+        // FIX (bug): lihat catatan panjang di Word Search — field `theme` di blob ini sisa dari
+        // sebelum tema disatukan jadi satu state global. Diabaikan sepenuhnya sekarang.
         if (Array.isArray(parsed.babaks) && parsed.babaks.length > 0) setBabaks(parsed.babaks);
-        if (parsed.theme) setTheme(parsed.theme);
+        localSavedAt = parsed.savedAt || 0;
       }
     } catch (e) { /* belum ada data tersimpan, atau data korup — mulai dari kosong */ }
     setLoaded(true);
     cleanupStaleRooms();
+    // FITUR BARU: sama seperti Word Search — pulihkan dari cadangan cloud kalau lebih baru
+    // daripada localStorage (atau localStorage-nya kosong sama sekali).
+    loadSetupFromCloud(teacher.uid, "cardRush").then((cloud) => {
+      if (!cloud) return;
+      if ((cloud.savedAt || 0) > localSavedAt && Array.isArray(cloud.babaks) && cloud.babaks.length > 0) {
+        setBabaks(cloud.babaks);
+        setImportMsg({ ok: true, text: "Kartu dipulihkan dari cadangan cloud (localStorage browser ini kosong/lebih basi)." });
+      }
+    });
   }, []);
 
   useEffect(() => {
     if (!loaded) return;
     const tm = setTimeout(() => {
-      const res = safeSetItem("cck-setup-data", JSON.stringify({ babaks, theme }));
+      const payload = { babaks };
+      const res = safeSetItem("cck-setup-data", JSON.stringify({ ...payload, savedAt: Date.now() }));
       setStorageWarning(res.ok ? null : res.message);
+      saveSetupToCloud(teacher.uid, "cardRush", payload);
     }, 500);
     return () => clearTimeout(tm);
-  }, [babaks, theme, loaded]);
+  }, [babaks, loaded]);
 
   const babak = babaks[babakIdx] || babaks[0];
 
@@ -4139,18 +4217,31 @@ const SETTINGS_TABS = [
 function AccountsTab({ t, teacher }) {
   const [emails, setEmails] = useState([]);
   const [loaded, setLoaded] = useState(false);
-  const [loadError, setLoadError] = useState(false);
+  const [loadError, setLoadError] = useState("");
   const [newEmail, setNewEmail] = useState("");
   const [adding, setAdding] = useState(false);
   const [formError, setFormError] = useState("");
+
+  // FIX (bug): dulu SEMUA jenis error (gagal baca ATAUpun gagal simpan) langsung ditampilkan
+  // sebagai "cek koneksi internet" — padahal penyebab paling umum di sini justru BUKAN koneksi,
+  // melainkan Firestore Security Rules yang belum mengizinkan koleksi "teacherAllowlist" (lihat
+  // catatan di isEmailAllowedForTeacher()), yang errornya berkode "permission-denied". Pesan
+  // "cek koneksi" jelas menyesatkan kalau internetnya baik-baik saja — guru jadi bingung mencari
+  // masalah di tempat yang salah. Sekarang errornya dibedakan berdasarkan kodenya.
+  function describeFirestoreError(err) {
+    if (err && err.code === "permission-denied") {
+      return "Ditolak oleh Firestore (permission-denied) — koleksi \"teacherAllowlist\" belum diizinkan di Security Rules Firebase Console. Ini bukan soal koneksi internet.";
+    }
+    return "Gagal terhubung ke server — cek koneksi internet, lalu coba lagi.";
+  }
 
   useEffect(() => {
     const unsub = db.collection("teacherAllowlist").onSnapshot(
       (snap) => {
         setEmails(snap.docs.map((d) => ({ email: d.id, ...d.data() })).sort((a, b) => a.email.localeCompare(b.email)));
-        setLoaded(true); setLoadError(false);
+        setLoaded(true); setLoadError("");
       },
-      () => { setLoaded(true); setLoadError(true); }
+      (err) => { setLoaded(true); setLoadError(describeFirestoreError(err)); }
     );
     return () => unsub();
   }, []);
@@ -4169,12 +4260,12 @@ function AccountsTab({ t, teacher }) {
       addedBy: teacher.email || null,
       addedAt: firebase.firestore.FieldValue.serverTimestamp(),
     }).then(() => setNewEmail(""))
-      .catch(() => setFormError("Gagal menyimpan — cek koneksi internet, lalu coba lagi."))
+      .catch((err) => setFormError(describeFirestoreError(err)))
       .finally(() => setAdding(false));
   }
   function removeEmail(email) {
     if (!window.confirm(`Hapus akses login untuk ${email}?`)) return;
-    db.collection("teacherAllowlist").doc(email).delete().catch(() => alert("Gagal menghapus, coba lagi."));
+    db.collection("teacherAllowlist").doc(email).delete().catch((err) => alert(describeFirestoreError(err)));
   }
 
   return (
@@ -4197,7 +4288,7 @@ function AccountsTab({ t, teacher }) {
       {!loaded ? (
         <div style={{ padding: "16px 0", textAlign: "center", color: t.faint, fontSize: 13 }}>Memuat daftar…</div>
       ) : loadError ? (
-        <div style={{ padding: "16px 0", textAlign: "center", color: "#EF5B5B", fontSize: 13 }}>Gagal memuat — cek koneksi internet.</div>
+        <div style={{ padding: "16px 0", textAlign: "center", color: "#EF5B5B", fontSize: 13, lineHeight: 1.5 }}>{loadError}</div>
       ) : emails.length === 0 ? (
         <div style={{ padding: "16px 0", textAlign: "center", color: t.faint, fontSize: 13 }}>Belum ada email tambahan yang ditambahkan.</div>
       ) : (
@@ -4375,8 +4466,8 @@ function App() {
   }
 
   if (activeGame === "g1") return <TebakCariKataGame onBack={() => setActiveGame(null)} teacher={authUser} theme={pickerTheme} setTheme={setPickerTheme} />;
-  if (activeGame === "g2") return <BukaKotakGame onBack={() => setActiveGame(null)} theme={pickerTheme} setTheme={setPickerTheme} />;
-  if (activeGame === "g3") return <CocokkanKartuGame onBack={() => setActiveGame(null)} theme={pickerTheme} setTheme={setPickerTheme} />;
+  if (activeGame === "g2") return <BukaKotakGame onBack={() => setActiveGame(null)} theme={pickerTheme} setTheme={setPickerTheme} teacher={authUser} />;
+  if (activeGame === "g3") return <CocokkanKartuGame onBack={() => setActiveGame(null)} theme={pickerTheme} setTheme={setPickerTheme} teacher={authUser} />;
 
   const initial = (authUser.displayName || authUser.email || "?").trim().charAt(0).toUpperCase();
   const firstName = (authUser.displayName || authUser.email || "Guru").split("@")[0].split(" ")[0];
