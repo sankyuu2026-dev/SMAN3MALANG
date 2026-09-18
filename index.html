@@ -264,10 +264,17 @@ function saveSetupToCloud(uid, docName, payload) {
 // app dan cara membangun/menerapkan isi datanya. Sekarang disatukan di sini; tiap game
 // tinggal kirim `buildPayload` (apa yang disimpan) dan `applyPayload` (validasi + terapkan
 // saat dimuat) sesuai bentuk data masing-masing.
+//
+// FITUR BARU: dulu exportBackup() SELALU menyimpan SEMUA materi sekaligus — guru yang cuma
+// mau membagikan/mencadangkan SATU materi (mis. baru selesai isi "Kazoku" dan mau kirim ke
+// guru lain) terpaksa ikut mengirim 9 materi lainnya juga. Sekarang buildPayload menerima
+// parameter `scope` ("all" | "current") supaya tiap game bisa memilih data mana yang disertakan;
+// game yang tidak mengenal konsep "materi" (Card Rush) boleh abaikan `scope`-nya.
 function makeBackupHandlers({ appId, appLabel, buildPayload, applyPayload, setImportMsg }) {
-  function exportBackup() {
-    const ok = downloadJson(`cadangan-${appId}-${todayStamp()}.json`, {
-      app: appId, version: 1, exportedAt: new Date().toISOString(), ...buildPayload(),
+  function exportBackup(scope, scopeSlug) {
+    const suffix = scopeSlug ? `-${scopeSlug}` : "";
+    const ok = downloadJson(`cadangan-${appId}${suffix}-${todayStamp()}.json`, {
+      app: appId, version: 1, exportedAt: new Date().toISOString(), ...buildPayload(scope),
     });
     setImportMsg(ok
       ? { ok: true, text: "Cadangan berhasil diunduh. Simpan file itu di tempat aman." }
@@ -281,6 +288,35 @@ function makeBackupHandlers({ appId, appLabel, buildPayload, applyPayload, setIm
     }).catch((err) => setImportMsg({ ok: false, text: err.message || "Gagal memuat cadangan." }));
   }
   return { exportBackup, importBackup };
+}
+
+// Tombol "Cadangkan" dengan menu pilihan lingkup: materi yang sedang dibuka saja, atau semua
+// materi sekaligus. Dipakai bareng di Word Search & Mystery Box (dua game yang punya konsep
+// "9 materi") — Card Rush tidak pakai ini karena tidak mengenal materi sama sekali.
+function BackupExportButton({ t, onExportAll, onExportCurrent, currentLabel, compact, iconStyle }) {
+  const [open, setOpen] = useState(false);
+  const itemStyle = { display: "block", width: "100%", textAlign: "left", background: "transparent", border: "none", color: t.text, padding: "10px 12px", borderRadius: 8, cursor: "pointer", fontSize: 13 };
+  return (
+    <div style={{ position: "relative" }}>
+      {compact ? (
+        <button onClick={() => setOpen((o) => !o)} title="Cadangkan ke file .json" style={iconStyle}><span style={{ fontSize: 16, lineHeight: 1 }}>💾</span></button>
+      ) : (
+        <button onClick={() => setOpen((o) => !o)} title="Unduh cadangan ke file .json" style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}>
+          <span style={{ fontSize: 15, lineHeight: 1, color: "inherit" }}>💾</span> Cadangkan <span style={{ fontSize: 10, lineHeight: 1, color: "inherit", opacity: 0.6 }}>▾</span>
+        </button>
+      )}
+      {open && (
+        <>
+          {/* Lapisan tak terlihat buat menutup menu kalau diklik di luar */}
+          <div onClick={() => setOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 19 }} />
+          <div style={{ position: "absolute", top: "calc(100% + 6px)", left: compact ? "auto" : 0, right: compact ? 0 : "auto", minWidth: 230, background: t.modalBg, border: `1px solid ${t.border}`, borderRadius: 12, boxShadow: t.shadowMd, padding: 6, zIndex: 20 }}>
+            <button onClick={() => { onExportCurrent(); setOpen(false); }} style={itemStyle}>Tema ini saja <span style={{ color: t.faint }}>({currentLabel})</span></button>
+            <button onClick={() => { onExportAll(); setOpen(false); }} style={itemStyle}>Semua tema <span style={{ color: t.faint }}>({MATERI_LIST.length}+)</span></button>
+          </div>
+        </>
+      )}
+    </div>
+  );
 }
 
 /* ---------------------------------------------------------
@@ -456,84 +492,240 @@ function ensureMateri(data, materi) {
 // "Pilih materi" di halaman Persiapan terasa related dengan branding, bukan sekadar daftar
 // pilihan biasa.
 const MATERI_LIST = [
-  { name: "Aisatsu", desc: "Salam sapaan", icon: "👋", kana: "あいさつ", accent: "#3E7CB1", accentSoft: "#E8F1F8", available: true },
-  { name: "Jikoshoukai", desc: "Perkenalan diri", icon: "🙋", kana: "じこしょうかい", accent: "#D98A2B", accentSoft: "#FBF0E1", available: true },
-  { name: "Gakkou no Seikatsu", desc: "Kehidupan sekolah", icon: "🏫", kana: "がっこうのせいかつ", accent: "#3FBFAD", accentSoft: "#E4F7F4", available: true },
-  { name: "Jikan", desc: "Waktu", icon: "⏰", kana: "じかん", accent: "#F4B740", accentSoft: "#FDF3DE", available: true },
-  { name: "Dekiru Koto", desc: "Kemampuan", icon: "💪", kana: "できること", accent: "#C45B5B", accentSoft: "#FAEAEA", available: true },
-  { name: "Kazoku", desc: "Keluarga", icon: "👪", kana: "かぞく", accent: "#8E7CC3", accentSoft: "#EFEAF9", available: true },
-  { name: "Mainichi no Seikatsu", desc: "Kehidupan sehari-hari", icon: "🗓️", kana: "まいにちのせいかつ", accent: "#5DA9E9", accentSoft: "#E9F3FD", available: true },
-  { name: "Uchi", desc: "Rumah", icon: "🏠", kana: "うち", accent: "#8FBF6B", accentSoft: "#EEF7E8", available: true },
-  { name: "Shumi to Himana Toki", desc: "Hobi dan waktu luang", icon: "🎨", kana: "しゅみとひまなとき", accent: "#F2879E", accentSoft: "#FCEAEF", available: true },
+  { name: "Aisatsu", desc: "Salam sapaan", icon: "👋", kana: "あいさつ", accent: "#3E7CB1", accentSoft: "#E8F1F8", available: true, kelas: 11 },
+  { name: "Jikoshoukai", desc: "Perkenalan diri", icon: "🙋", kana: "じこしょうかい", accent: "#D98A2B", accentSoft: "#FBF0E1", available: true, kelas: 11 },
+  { name: "Gakkou no Seikatsu", desc: "Kehidupan sekolah", icon: "🏫", kana: "がっこうのせいかつ", accent: "#3FBFAD", accentSoft: "#E4F7F4", available: true, kelas: 11 },
+  { name: "Jikan", desc: "Waktu", icon: "⏰", kana: "じかん", accent: "#F4B740", accentSoft: "#FDF3DE", available: true, kelas: 11 },
+  { name: "Dekiru Koto", desc: "Kemampuan", icon: "💪", kana: "できること", accent: "#C45B5B", accentSoft: "#FAEAEA", available: true, kelas: 11 },
+  { name: "Kazoku", desc: "Keluarga", icon: "👪", kana: "かぞく", accent: "#8E7CC3", accentSoft: "#EFEAF9", available: true, kelas: 11 },
+  { name: "Mainichi no Seikatsu", desc: "Kehidupan sehari-hari", icon: "🗓️", kana: "まいにちのせいかつ", accent: "#5DA9E9", accentSoft: "#E9F3FD", available: true, kelas: 11 },
+  { name: "Uchi", desc: "Rumah", icon: "🏠", kana: "うち", accent: "#8FBF6B", accentSoft: "#EEF7E8", available: true, kelas: 11 },
+  { name: "Shumi to Himana Toki", desc: "Hobi dan waktu luang", icon: "🎨", kana: "しゅみとひまなとき", accent: "#F2879E", accentSoft: "#FCEAEF", available: true, kelas: 11 },
+  // FITUR BARU: 5 tema Kelas XII, atas permintaan guru pamong.
+  { name: "Ryokou", desc: "Perjalanan/wisata", icon: "✈️", kana: "りょこう", accent: "#3E7CB1", accentSoft: "#E8F1F8", available: true, kelas: 12 },
+  { name: "Kaimono", desc: "Belanja", icon: "🛍️", kana: "かいもの", accent: "#D98A2B", accentSoft: "#FBF0E1", available: true, kelas: 12 },
+  { name: "Tabemono to Nomimono", desc: "Makanan dan minuman", icon: "🍱", kana: "たべものとのみもの", accent: "#3FBFAD", accentSoft: "#E4F7F4", available: true, kelas: 12 },
+  { name: "Kenkou", desc: "Kesehatan", icon: "🏥", kana: "けんこう", accent: "#F4B740", accentSoft: "#FDF3DE", available: true, kelas: 12 },
+  { name: "Morau Ageru", desc: "Memberi dan menerima", icon: "🎁", kana: "もらう・あげる", accent: "#C45B5B", accentSoft: "#FAEAEA", available: true, kelas: 12 },
 ];
+// Palet warna untuk tema TAMBAHAN yang dibuat guru sendiri (bukan salah satu 14 di atas) —
+// dipakai berputar (i % length) supaya tetap konsisten dengan gaya warna 14 tema bawaan.
+const CUSTOM_TEMA_PALETTE = [
+  { accent: "#3E7CB1", accentSoft: "#E8F1F8" }, { accent: "#D98A2B", accentSoft: "#FBF0E1" },
+  { accent: "#3FBFAD", accentSoft: "#E4F7F4" }, { accent: "#F4B740", accentSoft: "#FDF3DE" },
+  { accent: "#C45B5B", accentSoft: "#FAEAEA" }, { accent: "#8E7CC3", accentSoft: "#EFEAF9" },
+  { accent: "#5DA9E9", accentSoft: "#E9F3FD" }, { accent: "#8FBF6B", accentSoft: "#EEF7E8" },
+  { accent: "#F2879E", accentSoft: "#FCEAEF" },
+];
+// FITUR BARU: tema tambahan yang dibuat guru sendiri (di luar 14 bawaan) disimpan di sini —
+// SATU localStorage key dipakai bareng oleh Word Search & Mystery Box (lewat MateriPicker yang
+// sama-sama dipakai keduanya), supaya tema yang ditambahkan dari game manapun langsung muncul
+// juga di game satunya, tanpa perlu didaftarkan ulang.
+function loadCustomTema() {
+  try {
+    const raw = localStorage.getItem("custom-tema-list");
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (e) { return []; }
+}
+function saveCustomTema(list) {
+  try { localStorage.setItem("custom-tema-list", JSON.stringify(list)); } catch (e) {}
+}
 
 // FIX (dedup): kartu "Pilih materi" ini dipakai bareng di Word Search & Mystery Box.
 // Dulu berupa chip pil polos berjajar (cuma teks, satu warna kuning saat aktif) — sekarang
 // jadi kartu bernomor 1–9 dengan ikon & warna aksen masing-masing, mirip gaya kartu game di
 // halaman Pilih Game, supaya kelihatan jelas ada 9 materi (sesuai arti "kyuu" di SanKyuu) dan
 // halaman Persiapan terasa lebih menarik dilihat, bukan cuma daftar teks.
-function MateriPicker({ t, selected, onSelect }) {
+function TemaCard({ t, m, i, isSelected, onSelect, onDelete }) {
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: 12 }}>
-      {MATERI_LIST.map((m, i) => {
-        const isSelected = selected === m.name;
-        return (
-          <button key={m.name} title={m.desc} onClick={() => { if (!m.available) return; onSelect(m.name); }} disabled={!m.available}
-            className="materi-card"
-            style={{
-              position: "relative", display: "flex", flexDirection: "column", alignItems: "flex-start", textAlign: "left",
-              gap: 0, padding: 0, borderRadius: 16, cursor: m.available ? "pointer" : "default",
-              background: isSelected ? m.accentSoft : t.panel2,
-              border: `2px solid ${isSelected ? m.accent : t.border}`,
-              opacity: m.available ? 1 : 0.4,
-              boxShadow: isSelected ? `0 6px 20px -6px ${m.accent}55` : t.shadowSm,
-              transition: "all .18s ease", overflow: "hidden",
-            }}>
+    <button title={m.desc} onClick={() => { if (!m.available) return; onSelect(m.name); }} disabled={!m.available}
+      className="materi-card"
+      style={{
+        position: "relative", display: "flex", flexDirection: "column", alignItems: "flex-start", textAlign: "left",
+        gap: 0, padding: 0, borderRadius: 16, cursor: m.available ? "pointer" : "default",
+        background: isSelected ? m.accentSoft : t.panel2,
+        border: `2px solid ${isSelected ? m.accent : t.border}`,
+        opacity: m.available ? 1 : 0.4,
+        boxShadow: isSelected ? `0 6px 20px -6px ${m.accent}55` : t.shadowSm,
+        transition: "all .18s ease", overflow: "hidden",
+      }}>
 
-            {/* Strip warna atas */}
-            <div style={{
-              width: "100%", height: 5,
-              background: isSelected ? m.accent : `${m.accent}44`,
-              transition: "background .18s ease",
-            }} />
+      {/* Strip warna atas */}
+      <div style={{
+        width: "100%", height: 5,
+        background: isSelected ? m.accent : `${m.accent}44`,
+        transition: "background .18s ease",
+      }} />
 
-            {/* Konten kartu */}
-            <div style={{ padding: "10px 12px 12px", width: "100%", boxSizing: "border-box", display: "flex", flexDirection: "column", gap: 5 }}>
-              {/* Baris atas: nomor + ikon */}
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <div style={{
-                  width: 24, height: 24, borderRadius: 7,
-                  background: isSelected ? m.accent : `${m.accent}22`,
-                  color: isSelected ? "#fff" : m.accent,
-                  fontSize: 11, fontWeight: 800,
-                  display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
-                }}>{i + 1}</div>
-                <span style={{ fontSize: 20, lineHeight: 1 }}>{m.icon}</span>
-              </div>
+      {/* Konten kartu */}
+      <div style={{ padding: "10px 12px 12px", width: "100%", boxSizing: "border-box", display: "flex", flexDirection: "column", gap: 5 }}>
+        {/* Baris atas: nomor + ikon */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div style={{
+            width: 24, height: 24, borderRadius: 7,
+            background: isSelected ? m.accent : `${m.accent}22`,
+            color: isSelected ? "#fff" : m.accent,
+            fontSize: 11, fontWeight: 800,
+            display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+          }}>{i + 1}</div>
+          <span style={{ fontSize: 20, lineHeight: 1 }}>{m.icon}</span>
+        </div>
 
-              {/* Nama materi */}
-              <div className="sgt" style={{
-                fontSize: 14, fontWeight: 800, lineHeight: 1.25,
-                color: isSelected ? m.accent : t.text,
-                marginTop: 2,
-              }}>{m.name}</div>
+        {/* Nama tema */}
+        <div className="sgt" style={{
+          fontSize: 14, fontWeight: 800, lineHeight: 1.25,
+          color: isSelected ? m.accent : t.text,
+          marginTop: 2,
+        }}>{m.name}</div>
 
-              {/* Deskripsi Indonesia */}
-              <div style={{ fontSize: 12, color: isSelected ? "#3A3220" : t.dim, lineHeight: 1.35 }}>
-                {m.desc}
-              </div>
+        {/* Deskripsi Indonesia */}
+        <div style={{ fontSize: 12, color: isSelected ? "#3A3220" : t.dim, lineHeight: 1.35 }}>
+          {m.desc}
+        </div>
 
-              {/* Kana Jepang */}
-              <div style={{
-                fontSize: 11.5, color: isSelected ? m.accent : `${m.accent}CC`,
-                fontFamily: "'Noto Sans JP', sans-serif",
-                letterSpacing: 0.5, marginTop: 2,
-                opacity: isSelected ? 1 : 0.85,
-              }}>{m.kana || ""}</div>
-            </div>
-          </button>
-        );
-      })}
+        {/* Kana Jepang */}
+        <div style={{
+          fontSize: 11.5, color: isSelected ? m.accent : `${m.accent}CC`,
+          fontFamily: "'Noto Sans JP', sans-serif",
+          letterSpacing: 0.5, marginTop: 2,
+          opacity: isSelected ? 1 : 0.85,
+        }}>{m.kana || ""}</div>
+      </div>
+      {/* Tema custom (dibuat guru sendiri) bisa dihapus lagi — 14 tema bawaan tidak. */}
+      {m.custom && (
+        <span onClick={(e) => { e.stopPropagation(); onDelete(m.name); }} title="Hapus tema ini"
+          style={{ position: "absolute", top: 6, right: 6, width: 20, height: 20, borderRadius: "50%", background: "rgba(0,0,0,.35)", color: "#fff", fontSize: 11, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>🗑</span>
+      )}
+    </button>
+  );
+}
+
+// FITUR BARU: modal tambah tema custom — guru isi nama, deskripsi, kana (opsional), pilih kelas.
+// Ikon & warna otomatis dari CUSTOM_TEMA_PALETTE (berputar sesuai urutan penambahan) supaya guru
+// tidak perlu repot memilih warna sendiri, konsisten gayanya dengan 14 tema bawaan.
+function AddTemaModal({ t, existingNames, nextColorIndex, onAdd, onClose }) {
+  const [name, setName] = useState("");
+  const [desc, setDesc] = useState("");
+  const [kana, setKana] = useState("");
+  const [icon, setIcon] = useState("📘");
+  const [kelas, setKelas] = useState(11);
+  const trimmedName = name.trim();
+  const duplicate = trimmedName && existingNames.some((n) => n.toLowerCase() === trimmedName.toLowerCase());
+  const canSubmit = trimmedName.length > 0 && !duplicate;
+  function submit() {
+    if (!canSubmit) return;
+    const palette = CUSTOM_TEMA_PALETTE[nextColorIndex % CUSTOM_TEMA_PALETTE.length];
+    onAdd({ name: trimmedName, desc: desc.trim(), kana: kana.trim(), icon: icon.trim() || "📘", kelas, available: true, custom: true, ...palette });
+  }
+  const fieldLabel = { fontSize: 10.5, color: t.faint, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6, display: "block" };
+  const fieldInput = { width: "100%", padding: "9px 11px", borderRadius: 8, border: `1px solid ${t.border}`, background: t.bg, color: t.text, fontSize: 13.5, boxSizing: "border-box" };
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 70, padding: 20 }} onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: "min(420px, 92vw)", background: t.modalBg, borderRadius: 20, padding: 24, boxShadow: "0 20px 60px rgba(0,0,0,.4)" }}>
+        <div className="sgt" style={{ fontSize: 17, fontWeight: 700, color: t.text, marginBottom: 4 }}>+ Tambah Tema Baru</div>
+        <div style={{ fontSize: 12.5, color: t.dim, marginBottom: 16 }}>Tema baru langsung muncul di Word Search & Mystery Box.</div>
+        <div style={{ display: "flex", gap: 10, marginBottom: 12 }}>
+          <div style={{ flex: 1 }}>
+            <label style={fieldLabel}>Nama tema (romaji)</label>
+            <input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="mis. Sports" style={fieldInput} />
+            {duplicate && <div style={{ fontSize: 11, color: "#EF5B5B", marginTop: 4 }}>Nama ini sudah dipakai tema lain.</div>}
+          </div>
+          <div style={{ width: 64 }}>
+            <label style={fieldLabel}>Ikon</label>
+            <input value={icon} onChange={(e) => setIcon(e.target.value)} placeholder="📘" style={{ ...fieldInput, textAlign: "center", fontSize: 18, padding: "6px 8px" }} />
+          </div>
+        </div>
+        <div style={{ marginBottom: 12 }}>
+          <label style={fieldLabel}>Deskripsi singkat (Indonesia)</label>
+          <input value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="mis. Olahraga" style={fieldInput} />
+        </div>
+        <div style={{ marginBottom: 16 }}>
+          <label style={fieldLabel}>Kana / furigana (opsional)</label>
+          <input value={kana} onChange={(e) => setKana(e.target.value)} placeholder="mis. スポーツ" style={{ ...fieldInput, fontFamily: "'Noto Sans JP', sans-serif" }} />
+        </div>
+        <div style={{ marginBottom: 20 }}>
+          <label style={fieldLabel}>Untuk kelas</label>
+          <div style={{ display: "flex", gap: 8 }}>
+            {[11, 12].map((k) => (
+              <button key={k} onClick={() => setKelas(k)} style={{ flex: 1, padding: "9px 0", borderRadius: 8, border: "none", cursor: "pointer", background: kelas === k ? "#F4B740" : t.panel2, color: kelas === k ? "#101B34" : t.text, fontWeight: 700, fontSize: 13.5 }}>Kelas {k}</button>
+            ))}
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <button onClick={onClose} style={{ background: "transparent", border: "none", color: t.dim, padding: "10px 14px", borderRadius: 8, cursor: "pointer", fontSize: 13 }}>Batal</button>
+          <button onClick={submit} disabled={!canSubmit} style={{ background: canSubmit ? "#F4B740" : t.panel2, color: canSubmit ? "#101B34" : t.faint, border: "none", padding: "10px 18px", borderRadius: 8, cursor: canSubmit ? "pointer" : "default", fontSize: 13, fontWeight: 700 }}>Tambah Tema</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// FITUR BARU: sekarang tema dikelompokkan per kelas (Kelas 11 / Kelas 12, sesuai kurikulum),
+// dan guru bisa menambah tema sendiri di luar 14 bawaan lewat "+ Tambah Tema" — tersimpan di
+// localStorage (loadCustomTema/saveCustomTema), dipakai bareng oleh Word Search & Mystery Box.
+// FITUR BARU: daftar tema custom ini sekarang JUGA dicadangkan ke Firestore
+// (users/{uid}/setupData/customTema), persis pola yang sudah dipakai kosakata Word Search/Mystery
+// Box (loadSetupFromCloud/saveSetupToCloud) — localStorage tetap sumber utama & tetap jalan
+// offline, Firestore cuma penyelamat kalau localStorage hilang/basi atau guru pindah device.
+function MateriPicker({ t, selected, onSelect, teacher }) {
+  const [customTema, setCustomTema] = useState(() => loadCustomTema());
+  const [addOpen, setAddOpen] = useState(false);
+  const cloudCheckedRef = useRef(false);
+  const allTema = [...MATERI_LIST, ...customTema];
+  const byKelas = { 11: allTema.filter((m) => m.kelas === 11), 12: allTema.filter((m) => m.kelas === 12) };
+
+  useEffect(() => {
+    if (!teacher || !teacher.uid || cloudCheckedRef.current) return;
+    cloudCheckedRef.current = true;
+    let localSavedAt = 0;
+    try {
+      const meta = localStorage.getItem("custom-tema-list-meta");
+      if (meta) localSavedAt = JSON.parse(meta).savedAt || 0;
+    } catch (e) {}
+    loadSetupFromCloud(teacher.uid, "customTema").then((cloud) => {
+      if (!cloud || !Array.isArray(cloud.list)) return;
+      if ((cloud.savedAt || 0) > localSavedAt) {
+        setCustomTema(cloud.list);
+        saveCustomTema(cloud.list);
+      }
+    });
+  }, [teacher]);
+
+  function persistCustomTema(updated) {
+    setCustomTema(updated);
+    saveCustomTema(updated);
+    try { localStorage.setItem("custom-tema-list-meta", JSON.stringify({ savedAt: Date.now() })); } catch (e) {}
+    if (teacher && teacher.uid) saveSetupToCloud(teacher.uid, "customTema", { list: updated });
+  }
+
+  function handleAdd(newTema) {
+    persistCustomTema([...customTema, newTema]);
+    onSelect(newTema.name);
+    setAddOpen(false);
+  }
+  function handleDelete(name) {
+    if (!window.confirm(`Hapus tema "${name}"? Kosakata yang mungkin sudah diisi untuk tema ini TIDAK ikut otomatis terhapus, tapi tema ini tidak akan muncul lagi di daftar pilihan.`)) return;
+    persistCustomTema(customTema.filter((m) => m.name !== name));
+    if (selected === name) onSelect(MATERI_LIST[0].name);
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+      {[11, 12].map((kelas) => (
+        <div key={kelas}>
+          <div className="sgt" style={{ fontSize: 12.5, fontWeight: 700, color: t.dim, marginBottom: 8, letterSpacing: 0.3 }}>KELAS {kelas}</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: 12 }}>
+            {byKelas[kelas].map((m, i) => (
+              <TemaCard key={m.name} t={t} m={m} i={i} isSelected={selected === m.name} onSelect={onSelect} onDelete={handleDelete} />
+            ))}
+          </div>
+        </div>
+      ))}
+      <button onClick={() => setAddOpen(true)} style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, background: "transparent", border: `1.5px dashed ${t.border}`, color: t.dim, borderRadius: 14, padding: "14px 0", cursor: "pointer", fontSize: 13.5, fontWeight: 600 }}>
+        <span style={{ fontSize: 16, lineHeight: 1, color: "inherit" }}>➕</span> Tambah Tema
+      </button>
+      {addOpen && <AddTemaModal t={t} existingNames={allTema.map((m) => m.name)} nextColorIndex={customTema.length} onAdd={handleAdd} onClose={() => setAddOpen(false)} />}
     </div>
   );
 }
@@ -1701,7 +1893,9 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
   /* ---- Cadangan kosakata: ekspor ke file .json & impor kembali ---- */
   const { exportBackup, importBackup } = makeBackupHandlers({
     appId: "tebak-cari-kata", appLabel: "Tebak & Cari Kata",
-    buildPayload: () => ({ selectedMateri, dataByMateri }),
+    buildPayload: (scope) => scope === "current"
+      ? { selectedMateri, dataByMateri: { [selectedMateri]: dataByMateri[selectedMateri] } }
+      : { selectedMateri, dataByMateri },
     applyPayload: (data) => {
       if (!data.dataByMateri) throw new Error("File ini bukan cadangan Tebak & Cari Kata.");
       const materiCount = Object.keys(data.dataByMateri).length;
@@ -1712,6 +1906,7 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
     },
     setImportMsg,
   });
+  const materiSlug = (selectedMateri || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
 
   function endGameDirect() {
     // Akhiri tanpa dialog — dipanggil dari BackConfirmModal yang sudah punya konfirmasi sendiri
@@ -2966,7 +3161,8 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
                 <span style={{ fontSize: 16, lineHeight: 1 }}>📜</span>
                 {historyList.length > 0 && <span style={{ position: "absolute", top: 1, right: 1, background: "#EF5B5B", color: "#fff", borderRadius: "50%", width: 15, height: 15, fontSize: 9, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>{historyList.length}</span>}
               </button>
-              <button onClick={exportBackup} title="Cadangkan ke file .json" style={iconBtn}><span style={{ fontSize: 16, lineHeight: 1 }}>💾</span></button>
+              <BackupExportButton t={t} compact iconStyle={iconBtn} currentLabel={selectedMateri}
+                onExportCurrent={() => exportBackup("current", materiSlug)} onExportAll={() => exportBackup("all", "semua-materi")} />
               <label title="Muat cadangan dari file .json" style={{ ...iconBtn, cursor: "pointer" }}>
                 <span style={{ fontSize: 16, lineHeight: 1 }}>📂</span>
                 <input type="file" accept="application/json,.json" onChange={(e) => { importBackup(e.target.files[0]); e.target.value = ""; }} style={{ display: "none" }} />
@@ -2986,15 +3182,15 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
         <div style={{ background: t.panel, borderRadius: 18, padding: "22px 24px", marginBottom: 20, boxShadow: t.shadowSm }}>
           <SectionLabel n={1} faint={t.faint} hint={
             <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-              <span style={{ fontWeight: 700, color: "#D98A2B", background: "rgba(244,183,64,.16)", padding: "2px 9px", borderRadius: 999, fontSize: 11 }}>9 Materi</span>
-              <span style={{ color: t.dim, fontSize: 13 }}>(sesuai Prota Bahasa Jepang kelas XI Fase F)</span>
+              <span style={{ fontWeight: 700, color: "#D98A2B", background: "rgba(244,183,64,.16)", padding: "2px 9px", borderRadius: 999, fontSize: 11 }}>14 Tema</span>
+              <span style={{ color: t.dim, fontSize: 13 }}>(sesuai Prota Bahasa Jepang kelas XI &amp; XII Fase F)</span>
             </span>
-          }>Pilih materi</SectionLabel>
+          }>Pilih Tema</SectionLabel>
           {/* Dulu tiap materi berupa chip pil satu baris (cuma teks, deskripsi di tooltip).
               Sekarang jadi kartu bernomor 1–9 dengan ikon & warna sendiri-sendiri — sesuai
               nama "SanKyuu" (san = 3 game, kyuu = 9 materi) supaya lebih menarik dilihat &
               jumlah materinya langsung kelihatan sekilas, bukan cuma dibaca dari tooltip. */}
-          <MateriPicker t={t} selected={selectedMateri}
+          <MateriPicker t={t} selected={selectedMateri} teacher={teacher}
             onSelect={(name) => { setSelectedMateri(name); setDataByMateri((prev) => ensureMateri(prev, name)); setBabakId(1); setBabakPanelOpen(true); }} />
         </div>
 
@@ -3499,6 +3695,14 @@ function ensureBoxMateri(data, materi) {
   return { ...data, [materi]: [] };
 }
 
+// FITUR BARU: Card Rush sekarang ikut punya konsep "14 Tema" seperti Word Search & Mystery
+// Box — dulu babak-nya satu daftar datar tanpa tema sama sekali (lihat komentar lama di
+// BackupExportButton). Bentuk default 1 tema baru: satu babak kosong, sama seperti sebelumnya.
+function ensureCardMateri(data, materi) {
+  if (data[materi]) return data;
+  return { ...data, [materi]: [makeBabak(1)] };
+}
+
 function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
   const t = THEMES[theme];
   const [stage, setStage] = useState("setup"); // 'setup' | 'play'
@@ -3598,7 +3802,9 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
   /* ---- Cadangan perintah: ekspor ke file .json & impor kembali ---- */
   const { exportBackup, importBackup } = makeBackupHandlers({
     appId: "buka-kotak", appLabel: "Buka Kotak",
-    buildPayload: () => ({ selectedMateri, dataByMateri }),
+    buildPayload: (scope) => scope === "current"
+      ? { selectedMateri, dataByMateri: { [selectedMateri]: dataByMateri[selectedMateri] } }
+      : { selectedMateri, dataByMateri },
     applyPayload: (data) => {
       if (!data.dataByMateri) throw new Error("File ini bukan cadangan Buka Kotak.");
       const materiCount = Object.keys(data.dataByMateri).length;
@@ -3609,6 +3815,7 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
     },
     setImportMsg,
   });
+  const materiSlug = (selectedMateri || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
 
   if (stage === "setup") {
     return (
@@ -3620,7 +3827,8 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
             <div style={{ fontSize: 14, color: t.dim, marginTop: 2 }}>Susun daftar perintah sebelum dimainkan. Individu, tanpa waktu, tanpa skor.</div>
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <button onClick={exportBackup} title="Unduh cadangan ke file .json" style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>💾</span> Cadangkan</button>
+            <BackupExportButton t={t} currentLabel={selectedMateri}
+              onExportCurrent={() => exportBackup("current", materiSlug)} onExportAll={() => exportBackup("all", "semua-materi")} />
             <label title="Muat cadangan dari file .json" style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}>
               <span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>📂</span> Muat Cadangan
               <input type="file" accept="application/json,.json" onChange={(e) => { importBackup(e.target.files[0]); e.target.value = ""; }} style={{ display: "none" }} />
@@ -3634,8 +3842,8 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
         <ImportMessageBanner t={t} msg={importMsg} onDismiss={() => setImportMsg(null)} />
 
         <div style={{ background: t.panel, borderRadius: 16, padding: "18px 20px", marginBottom: 20, boxShadow: t.shadowSm }}>
-          <SectionLabel n={1} faint={t.faint} hint={<span style={{ fontWeight: 700, color: "#D98A2B", background: "rgba(244,183,64,.16)", padding: "2px 8px", borderRadius: 999, fontSize: 10.5 }}>9 Materi</span>}>Pilih materi</SectionLabel>
-          <MateriPicker t={t} selected={selectedMateri}
+          <SectionLabel n={1} faint={t.faint} hint={<span style={{ fontWeight: 700, color: "#D98A2B", background: "rgba(244,183,64,.16)", padding: "2px 8px", borderRadius: 999, fontSize: 10.5 }}>14 Tema</span>}>Pilih Tema</SectionLabel>
+          <MateriPicker t={t} selected={selectedMateri} teacher={teacher}
             onSelect={(name) => { setSelectedMateri(name); setDataByMateri((prev) => ensureBoxMateri(prev, name)); }} />
         </div>
 
@@ -3747,7 +3955,21 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
   const t = THEMES[theme];
 
   const [stage, setStage] = useState("setup"); // 'setup' | 'play'
-  const [babaks, setBabaks] = useState(() => [makeBabak(1)]);
+  // FITUR BARU: babak sekarang disimpan PER TEMA (dataByMateri), bukan satu daftar datar lagi —
+  // menyusul Word Search & Mystery Box supaya ketiga game konsisten punya "14 Tema". `babaks` &
+  // `setBabaks` di bawah tetap dipertahankan sebagai alias tipis ke tema yang sedang dipilih,
+  // supaya semua fungsi lain di komponen ini (addBabak, addPair, dst — total >10 tempat pakai
+  // setBabaks) tidak perlu ditulis ulang satu-satu.
+  const [selectedMateri, setSelectedMateri] = useState("Gakkou no Seikatsu");
+  const [dataByMateri, setDataByMateri] = useState(() => ensureCardMateri({}, "Gakkou no Seikatsu"));
+  const babaks = dataByMateri[selectedMateri] || [makeBabak(1)];
+  function setBabaks(updater) {
+    setDataByMateri((prev) => {
+      const current = prev[selectedMateri] || [makeBabak(1)];
+      const next = typeof updater === "function" ? updater(current) : updater;
+      return { ...prev, [selectedMateri]: next };
+    });
+  }
   const [babakIdx, setBabakIdx] = useState(0);
   const [loaded, setLoaded] = useState(false);
   const [storageWarning, setStorageWarning] = useState(null); // pesan kalau localStorage gagal menyimpan
@@ -3766,25 +3988,43 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
 
   useEffect(() => {
     let localSavedAt = 0;
+    let migrated = false;
     try {
       const raw = localStorage.getItem("cck-setup-data");
       if (raw) {
         const parsed = JSON.parse(raw);
-        // FIX (bug): lihat catatan panjang di Word Search — field `theme` di blob ini sisa dari
-        // sebelum tema disatukan jadi satu state global. Diabaikan sepenuhnya sekarang.
-        if (Array.isArray(parsed.babaks) && parsed.babaks.length > 0) setBabaks(parsed.babaks);
+        if (parsed.dataByMateri) {
+          setDataByMateri((prev) => ({ ...prev, ...parsed.dataByMateri }));
+          if (parsed.selectedMateri) setSelectedMateri(parsed.selectedMateri);
+        } else if (Array.isArray(parsed.babaks) && parsed.babaks.length > 0) {
+          // MIGRASI: format lama (sebelum ada konsep Tema) cuma simpan satu daftar babak datar.
+          // Supaya kartu yang sudah dibuat guru sebelumnya tidak hilang, dipindah jadi isi tema
+          // default "Gakkou no Seikatsu" — bisa dipindah manual nanti kalau ternyata itu bukan tema
+          // yang dimaksud aslinya (dulu memang tidak ada pengelompokan tema sama sekali).
+          setDataByMateri((prev) => ({ ...prev, "Gakkou no Seikatsu": parsed.babaks }));
+          setSelectedMateri("Gakkou no Seikatsu");
+          migrated = true;
+        }
         localSavedAt = parsed.savedAt || 0;
       }
     } catch (e) { /* belum ada data tersimpan, atau data korup — mulai dari kosong */ }
     setLoaded(true);
     cleanupStaleRooms();
+    if (migrated) setImportMsg({ ok: true, text: "Kartu dari sebelum fitur Tema ditambahkan sudah dipindah otomatis ke tema \"Gakkou no Seikatsu\" — pindahkan manual kalau perlu." });
     // FITUR BARU: sama seperti Word Search — pulihkan dari cadangan cloud kalau lebih baru
     // daripada localStorage (atau localStorage-nya kosong sama sekali).
     loadSetupFromCloud(teacher.uid, "cardRush").then((cloud) => {
       if (!cloud) return;
-      if ((cloud.savedAt || 0) > localSavedAt && Array.isArray(cloud.babaks) && cloud.babaks.length > 0) {
-        setBabaks(cloud.babaks);
-        setImportMsg({ ok: true, text: "Kartu dipulihkan dari cadangan cloud (localStorage browser ini kosong/lebih basi)." });
+      if ((cloud.savedAt || 0) > localSavedAt) {
+        if (cloud.dataByMateri) {
+          setDataByMateri((prev) => ({ ...prev, ...cloud.dataByMateri }));
+          if (cloud.selectedMateri) setSelectedMateri(cloud.selectedMateri);
+          setImportMsg({ ok: true, text: "Kartu dipulihkan dari cadangan cloud (localStorage browser ini kosong/lebih basi)." });
+        } else if (Array.isArray(cloud.babaks) && cloud.babaks.length > 0) {
+          setDataByMateri((prev) => ({ ...prev, "Gakkou no Seikatsu": cloud.babaks }));
+          setSelectedMateri("Gakkou no Seikatsu");
+          setImportMsg({ ok: true, text: "Kartu dipulihkan dari cadangan cloud lama (sebelum fitur Tema) ke tema \"Gakkou no Seikatsu\"." });
+        }
       }
     });
   }, []);
@@ -3792,13 +4032,13 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
   useEffect(() => {
     if (!loaded) return;
     const tm = setTimeout(() => {
-      const payload = { babaks };
+      const payload = { dataByMateri, selectedMateri };
       const res = safeSetItem("cck-setup-data", JSON.stringify({ ...payload, savedAt: Date.now() }));
       setStorageWarning(res.ok ? null : res.message);
       saveSetupToCloud(teacher.uid, "cardRush", payload);
     }, 500);
     return () => clearTimeout(tm);
-  }, [babaks, loaded]);
+  }, [dataByMateri, selectedMateri, loaded]);
 
   const babak = babaks[babakIdx] || babaks[0];
 
@@ -3961,16 +4201,23 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
   /* ---- Cadangan pasangan kartu: ekspor ke file .json & impor kembali ---- */
   const { exportBackup, importBackup } = makeBackupHandlers({
     appId: "card-rush", appLabel: "Card Rush",
-    buildPayload: () => ({ babaks }),
+    buildPayload: (scope) => scope === "all" ? { dataByMateri } : { dataByMateri: { [selectedMateri]: babaks }, selectedMateri },
     applyPayload: (data) => {
-      if (!Array.isArray(data.babaks)) throw new Error("File ini bukan cadangan Card Rush.");
-      if (!window.confirm(`Muat cadangan ini? Seluruh ${data.babaks.length} babak yang ada sekarang akan DIGANTI oleh isi cadangan.`)) return;
-      setBabaks(data.babaks);
+      // Terima juga file cadangan format lama (sebelum ada Tema): { babaks: [...] } tanpa dataByMateri.
+      const incoming = data.dataByMateri
+        ? data.dataByMateri
+        : Array.isArray(data.babaks) ? { "Gakkou no Seikatsu": data.babaks } : null;
+      if (!incoming) throw new Error("File ini bukan cadangan Card Rush.");
+      const materiCount = Object.keys(incoming).length;
+      if (!window.confirm(`Muat cadangan ini? ${materiCount} tema di cadangan akan MENIMPA tema dengan nama sama yang ada sekarang. Tema lain tetap aman.`)) return;
+      setDataByMateri((prev) => ({ ...prev, ...incoming }));
+      if (data.selectedMateri) setSelectedMateri(data.selectedMateri);
       setBabakIdx(0);
-      setImportMsg({ ok: true, text: `Cadangan dimuat — ${data.babaks.length} babak dipulihkan.` });
+      setImportMsg({ ok: true, text: `Cadangan dimuat — ${materiCount} tema diperbarui.` });
     },
     setImportMsg,
   });
+  const materiSlug = (selectedMateri || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
 
   const sortedGroups = [...GROUP_NAMES].sort((a, b) => (scores[b] || 0) - (scores[a] || 0));
 
@@ -3985,7 +4232,8 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
             {!isMobile && <div style={{ fontSize: 14, color: t.dim, marginTop: 2 }}>Kartu gambar dipasangkan dengan kata (romaji/hiragana). Minimal 5 pasang per babak.</div>}
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <button onClick={exportBackup} title="Unduh cadangan ke file .json" style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>💾</span> Cadangkan</button>
+            <BackupExportButton t={t} currentLabel={selectedMateri}
+              onExportCurrent={() => exportBackup("current", materiSlug)} onExportAll={() => exportBackup("all", "semua-tema")} />
             <label title="Muat cadangan dari file .json" style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}>
               <span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>📂</span> Muat Cadangan
               <input type="file" accept="application/json,.json" onChange={(e) => { importBackup(e.target.files[0]); e.target.value = ""; }} style={{ display: "none" }} />
@@ -3998,9 +4246,20 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
         <StorageWarningBanner t={t} message={storageWarning} />
         <ImportMessageBanner t={t} msg={importMsg} onDismiss={() => setImportMsg(null)} />
 
+        <div style={{ background: t.panel, borderRadius: 18, padding: "22px 24px", marginBottom: 20, boxShadow: t.shadowSm }}>
+          <SectionLabel n={1} faint={t.faint} hint={
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontWeight: 700, color: "#D98A2B", background: "rgba(244,183,64,.16)", padding: "2px 9px", borderRadius: 999, fontSize: 11 }}>14 Tema</span>
+              <span style={{ color: t.dim, fontSize: 13 }}>(sesuai Prota Bahasa Jepang kelas XI &amp; XII Fase F)</span>
+            </span>
+          }>Pilih Tema</SectionLabel>
+          <MateriPicker t={t} selected={selectedMateri} teacher={teacher}
+            onSelect={(name) => { setSelectedMateri(name); setDataByMateri((prev) => ensureCardMateri(prev, name)); setBabakIdx(0); }} />
+        </div>
+
         <div style={{ background: t.panel, borderRadius: 16, padding: "18px 20px", marginBottom: 20, boxShadow: t.shadowSm }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
-            <div style={{ fontSize: 14, fontWeight: 700 }}>Babak</div>
+            <SectionLabel n={2} faint={t.faint}>Kartu per Babak</SectionLabel>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
               <div style={{ display: "flex", gap: 6, background: t.panel2, padding: 4, borderRadius: 10 }}>
                 {babaks.map((b, i) => (
@@ -4078,6 +4337,7 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button onClick={() => setQrOpen(true)} style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}>🔗 QR Join</button>
           <button onClick={endGame} style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: "1px solid #EF5B5B", color: "#EF5B5B", padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}>⏹ Akhiri Permainan</button>
+          <ThemeToggleButton theme={theme} onToggle={() => setTheme(theme === "dark" ? "light" : "dark")} style={{ background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: 10, borderRadius: 10, cursor: "pointer" }} />
         </div>
       </div>
 
@@ -4330,7 +4590,7 @@ function SettingsModal({ open, onClose, t, teacher }) {
       <div onClick={(e) => e.stopPropagation()} className="modal-pop" style={{ width: "min(560px, 94vw)", maxHeight: "84vh", display: "flex", flexDirection: "column", background: t.modalBg, borderRadius: 20, boxShadow: "0 20px 60px rgba(0,0,0,.4)", overflow: "hidden" }}>
         <div style={{ padding: "22px 24px 0" }}>
           <div className="sgt" style={{ fontSize: 18, fontWeight: 700, color: t.text, marginBottom: 2 }}>Panduan &amp; Info Aplikasi</div>
-          <div style={{ fontSize: 12.5, color: t.faint, marginBottom: 14 }}>SanKyuu — 3 Game · 9 Materi Bahasa Jepang Kelas XI</div>
+          <div style={{ fontSize: 12.5, color: t.faint, marginBottom: 14 }}>SanKyuu — 3 Game · 14 Tema Bahasa Jepang Kelas XI &amp; XII</div>
           <div style={{ display: "flex", gap: 6, background: t.panel2, padding: 4, borderRadius: 10 }}>
             {SETTINGS_TABS.map((s) => (
               <button key={s.id} onClick={() => setTab(s.id)} style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "8px 10px", borderRadius: 7, border: "none", cursor: "pointer", background: tab === s.id ? "#F4B740" : "transparent", color: tab === s.id ? "#101B34" : t.text, fontWeight: 600, fontSize: 12.5 }}>
@@ -4344,7 +4604,7 @@ function SettingsModal({ open, onClose, t, teacher }) {
           {tab === "panduan" && (
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
               {[
-                { t: "Pilih Materi & Susun Kosakata", d: "Buka \"Persiapan\", pilih salah satu dari 9 materi, lalu isi kosakata di Babak 1–3 (kata, petunjuk, dan audio opsional)." },
+                { t: "Pilih Tema & Susun Kosakata", d: "Buka \"Persiapan\", pilih salah satu dari 14 tema (Kelas XI/XII), atau tambah tema sendiri, lalu isi kosakata di Babak 1–3 (kata, petunjuk, dan audio opsional)." },
                 { t: "Mulai Permainan", d: "Klik \"Mulai Permainan\" — kode Room & QR untuk siswa join otomatis dibuat." },
                 { t: "Atur Mode Kelas", d: "Pilih mode angkat tangan (Digital/Manual) dan mode petunjuk (Audio/Nonaktif) sesuai kondisi kelas." },
                 { t: "Proyeksikan ke Layar", d: "Gunakan \"Mode Proyektor\" supaya siswa hanya melihat papan permainan, bukan panel guru." },
@@ -4373,7 +4633,7 @@ function SettingsModal({ open, onClose, t, teacher }) {
                 </div>
               </div>
               <div style={{ fontSize: 12.5, color: t.dim, lineHeight: 1.6 }}>
-                SanKyuu dibuat untuk membantu pembelajaran kosakata Bahasa Jepang kelas XI supaya lebih interaktif lewat permainan kelompok di kelas — namanya sendiri singkatan dari 3 (san) Game dan 9 (kyuu) Materi yang tersedia.
+                SanKyuu dibuat untuk membantu pembelajaran kosakata Bahasa Jepang kelas XI &amp; XII supaya lebih interaktif lewat permainan kelompok di kelas — namanya sendiri berasal dari 3 (san) Game yang tersedia, ditambah 9 (kyuu) tema di versi awal (kini sudah berkembang jadi 14 tema, mengikuti Kelas XI &amp; XII).
               </div>
               <div>
                 <div style={rowLabel}>Kontak / masukan</div>
@@ -4388,7 +4648,7 @@ function SettingsModal({ open, onClose, t, teacher }) {
                 ["Versi", "SanKyuu v1.0"],
                 ["Dibangun dengan", "React 18 + Firebase (Auth & Firestore) — satu file HTML statis, tanpa proses build"],
                 ["Kompatibilitas", "Browser modern (Chrome, Edge, Firefox versi terbaru); Chrome disarankan untuk pengalaman terbaik"],
-                ["Penyimpanan data", "Materi & kosakata disimpan di penyimpanan browser (localStorage) tempat guru mengedit — TIDAK ikut ke akun Google atau ke perangkat/browser lain. Riwayat Sesi & audio petunjuk yang tersimpan lewat \"Simpan & Jeda\" baru yang ikut per akun guru di Firestore."],
+                ["Penyimpanan data", "Tema & kosakata disimpan di penyimpanan browser (localStorage) tempat guru mengedit — TIDAK ikut ke akun Google atau ke perangkat/browser lain. Riwayat Sesi & audio petunjuk yang tersimpan lewat \"Simpan & Jeda\" baru yang ikut per akun guru di Firestore."],
                 ["Koneksi internet", "Dibutuhkan untuk login, sinkronisasi buzzer real-time antar perangkat, dan unggah audio petunjuk"],
               ].map(([k, v], i, arr) => (
                 <div key={k} style={{ paddingBottom: 12, borderBottom: i < arr.length - 1 ? `1px solid ${t.border}` : "none" }}>
@@ -4505,7 +4765,7 @@ function App() {
               <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.2, textTransform: "uppercase", color: pt.faint }}>Pilih Game</div>
               <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
                 <div className="sgt pilih-game-title" style={{ fontSize: 30, fontWeight: 700, letterSpacing: -0.4 }}>SanKyuu</div>
-                <span style={{ fontSize: 11.5, fontWeight: 700, color: "#D98A2B", background: "rgba(244,183,64,.16)", padding: "3px 10px", borderRadius: 999, letterSpacing: 0.2 }}>3 Game · 9 Materi</span>
+                <span style={{ fontSize: 11.5, fontWeight: 700, color: "#D98A2B", background: "rgba(244,183,64,.16)", padding: "3px 10px", borderRadius: 999, letterSpacing: 0.2 }}>3 Game · 14 Tema</span>
               </div>
               <div style={{ fontSize: 13, color: pt.dim, marginTop: 2 }}>{greetingByHour()}, {firstName} 👋</div>
             </div>
@@ -4516,7 +4776,7 @@ function App() {
             <button onClick={() => signOutTeacher()} style={{ background: pt.panel, border: `1px solid ${pt.border}`, color: pt.dim, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, boxShadow: "0 2px 10px rgba(0,0,0,.06)" }}>Keluar</button>
           </div>
         </div>
-        <div style={{ fontSize: 14, color: pt.dim, marginBottom: 26, maxWidth: 560 }}>Web interaktif siswa SMA berisi 3 game & 9 materi Bahasa Jepang kelas XI — pilih salah satu permainan di bawah ini untuk mulai sesi.</div>
+        <div style={{ fontSize: 14, color: pt.dim, marginBottom: 26, maxWidth: 560 }}>Web interaktif siswa SMA berisi 3 game & 14 tema Bahasa Jepang kelas XI &amp; XII — pilih salah satu permainan di bawah ini untuk mulai sesi.</div>
         <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} t={pt} teacher={authUser} />
         <div className="game-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 230px))", gap: 20, justifyContent: "center", perspective: 1200 }}>
           {GAMES.map((g, i) => (
