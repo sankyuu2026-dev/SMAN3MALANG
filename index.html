@@ -198,6 +198,82 @@ function formatBytes(n) {
   if (n < 1024 * 1024) return (n / 1024).toFixed(0) + " KB";
   return (n / (1024 * 1024)).toFixed(1) + " MB";
 }
+// FITUR BARU: format detik jadi "mm:ss" — dipakai buat pengatur & tampilan hitung mundur waktu
+// per babak Card Rush (baik di panel guru maupun layar siswa).
+function formatDuration(totalSec) {
+  const sec = Math.max(0, Math.round(totalSec));
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+// FITUR BARU (perbaikan kinerja): dulu gambar kartu Card Rush disimpan APA ADANYA dari file
+// yang dipilih guru (cuma ditolak kalau lebih dari 250KB) — jadi guru harus mengompres sendiri
+// dulu pakai aplikasi lain sebelum unggah, dan hasilnya sering "mepet" ke batas 250KB. Begitu
+// "Mulai Babak Ini" ditekan, SEMUA gambar valid babak itu diunggah ulang sekaligus ke Firestore
+// (lihat startRound()) — kalau satu babak punya 10+ pasang dan tiap gambar mepet 250KB, totalnya
+// bisa 2-3MB dikirim sekaligus, jadi tombolnya terasa macet beberapa detik.
+// Sekarang setiap foto OTOMATIS diperkecil & dikompres di browser guru (lewat <canvas>) sebelum
+// disimpan — foto HP yang aslinya beberapa MB & beresolusi besar diciutkan ke maksimal 480px sisi
+// terpanjang dan disimpan sebagai JPEG kualitas menengah, karena toh kartu ditampilkan kecil di
+// papan permainan, jadi resolusi tinggi cuma buang-buang ukuran file tanpa menambah kejelasan.
+// Hasilnya biasanya jauh di bawah 250KB TANPA guru perlu mengompres manual, sekaligus membuat
+// "Mulai Babak Ini" jauh lebih cepat karena total data yang diunggah ke Firestore jauh lebih kecil.
+function compressImageFile(file, maxDim = 480, quality = 0.82) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      let { width, height } = img;
+      if (width <= 0 || height <= 0) { reject(new Error("Gambar tidak valid.")); return; }
+      if (width > maxDim || height > maxDim) {
+        if (width >= height) { height = Math.round(height * (maxDim / width)); width = maxDim; }
+        else { width = Math.round(width * (maxDim / height)); height = maxDim; }
+      }
+      const canvas = document.createElement("canvas");
+      canvas.width = width; canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) { reject(new Error("Browser tidak mendukung pemrosesan gambar.")); return; }
+      // Latar putih dulu — kalau sumbernya PNG transparan, biar tidak berubah jadi hitam
+      // begitu disimpan ulang sebagai JPEG (JPEG tidak punya kanal transparansi).
+      ctx.fillStyle = "#FFFFFF";
+      ctx.fillRect(0, 0, width, height);
+      ctx.drawImage(img, 0, 0, width, height);
+      resolve(canvas.toDataURL("image/jpeg", quality));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Gagal memuat gambar — coba file lain.")); };
+    img.src = url;
+  });
+}
+
+/* ---------------------------------------------------------
+   BUGFIX (kebocoran data antar-guru): dulu SEMUA key localStorage kosakata/progres di bawah
+   ("tck-setup-data", "tck-progress", "bk-setup-data", "bk-progress", "cck-setup-data",
+   "custom-tema-list", "custom-tema-list-meta") bersifat GLOBAL satu browser — tidak dipisah
+   per akun guru sama sekali. Padahal Riwayat Sesi & audio petunjuk sudah sengaja dipisah per
+   `teacher.uid` di Firestore (lihat komentar TeacherLoginScreen), justru supaya data tiap guru
+   tidak sembarang tercampur. Kalau satu komputer/laptop dipakai bergantian oleh beberapa guru
+   (mis. komputer lab bahasa), Guru B yang login akan langsung melihat & bisa menimpa kosakata
+   Guru A tanpa peringatan apa pun, dan efek auto-save bahkan bisa menyalin data Guru A itu ke
+   cadangan cloud milik Guru B. scopedKey() menambahkan UID guru ke setiap key supaya tiap akun
+   punya "kotak" localStorage sendiri-sendiri. Untuk guru yang sudah lebih dulu punya data di key
+   lama (sebelum perbaikan ini), migrateLegacyKey() menyalin SEKALI SAJA data lama itu ke key baru
+   miliknya saat pertama kali key baru belum ada — supaya guru yang sudah pakai aplikasi ini tidak
+   kehilangan kosakata yang sudah disusun.
+--------------------------------------------------------- */
+function scopedKey(base, uid) {
+  return uid ? `${base}::${uid}` : base;
+}
+function migrateLegacyKey(base, uid) {
+  const newKey = scopedKey(base, uid);
+  try {
+    if (!uid) return newKey; // belum login (seharusnya tidak terjadi di layar guru) — pakai key lama apa adanya
+    if (localStorage.getItem(newKey) !== null) return newKey; // sudah punya key sendiri, tidak perlu migrasi
+    const legacy = localStorage.getItem(base);
+    if (legacy !== null) localStorage.setItem(newKey, legacy);
+  } catch (e) {}
+  return newKey;
+}
 
 /* ---------------------------------------------------------
    EKSPOR / IMPOR CADANGAN
@@ -521,15 +597,16 @@ const CUSTOM_TEMA_PALETTE = [
 // SATU localStorage key dipakai bareng oleh Word Search & Mystery Box (lewat MateriPicker yang
 // sama-sama dipakai keduanya), supaya tema yang ditambahkan dari game manapun langsung muncul
 // juga di game satunya, tanpa perlu didaftarkan ulang.
-function loadCustomTema() {
+function loadCustomTema(uid) {
   try {
-    const raw = localStorage.getItem("custom-tema-list");
+    const key = migrateLegacyKey("custom-tema-list", uid);
+    const raw = localStorage.getItem(key);
     const parsed = raw ? JSON.parse(raw) : [];
     return Array.isArray(parsed) ? parsed : [];
   } catch (e) { return []; }
 }
-function saveCustomTema(list) {
-  try { localStorage.setItem("custom-tema-list", JSON.stringify(list)); } catch (e) {}
+function saveCustomTema(list, uid) {
+  try { localStorage.setItem(scopedKey("custom-tema-list", uid), JSON.stringify(list)); } catch (e) {}
 }
 
 // FIX (dedup): kartu "Pilih materi" ini dipakai bareng di Word Search & Mystery Box.
@@ -593,9 +670,12 @@ function TemaCard({ t, m, i, isSelected, onSelect, onDelete }) {
         }}>{m.kana || ""}</div>
       </div>
       {/* Tema custom (dibuat guru sendiri) bisa dihapus lagi — 14 tema bawaan tidak. */}
+      {/* FIX: dulu ditaruh kanan ATAS (top:6,right:6) — menumpuk pas di atas ikon tema (m.icon)
+          yang juga ada di pojok kanan atas kartu ini, jadi salah satu ikonnya ketutup. Dipindah
+          ke kanan BAWAH supaya keduanya kelihatan jelas. */}
       {m.custom && (
         <span onClick={(e) => { e.stopPropagation(); onDelete(m.name); }} title="Hapus tema ini"
-          style={{ position: "absolute", top: 6, right: 6, width: 20, height: 20, borderRadius: "50%", background: "rgba(0,0,0,.35)", color: "#fff", fontSize: 11, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>🗑</span>
+          style={{ position: "absolute", bottom: 6, right: 6, width: 20, height: 20, borderRadius: "50%", background: "rgba(0,0,0,.35)", color: "#fff", fontSize: 11, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>🗑</span>
       )}
     </button>
   );
@@ -669,7 +749,7 @@ function AddTemaModal({ t, existingNames, nextColorIndex, onAdd, onClose }) {
 // Box (loadSetupFromCloud/saveSetupToCloud) — localStorage tetap sumber utama & tetap jalan
 // offline, Firestore cuma penyelamat kalau localStorage hilang/basi atau guru pindah device.
 function MateriPicker({ t, selected, onSelect, teacher }) {
-  const [customTema, setCustomTema] = useState(() => loadCustomTema());
+  const [customTema, setCustomTema] = useState(() => loadCustomTema(teacher && teacher.uid));
   const [addOpen, setAddOpen] = useState(false);
   const cloudCheckedRef = useRef(false);
   const allTema = [...MATERI_LIST, ...customTema];
@@ -688,22 +768,22 @@ function MateriPicker({ t, selected, onSelect, teacher }) {
     cloudCheckedRef.current = true;
     let localSavedAt = 0;
     try {
-      const meta = localStorage.getItem("custom-tema-list-meta");
+      const meta = localStorage.getItem(migrateLegacyKey("custom-tema-list-meta", teacher.uid));
       if (meta) localSavedAt = JSON.parse(meta).savedAt || 0;
     } catch (e) {}
     loadSetupFromCloud(teacher.uid, "customTema").then((cloud) => {
       if (!cloud || !Array.isArray(cloud.list)) return;
       if ((cloud.savedAt || 0) > localSavedAt) {
         setCustomTema(cloud.list);
-        saveCustomTema(cloud.list);
+        saveCustomTema(cloud.list, teacher.uid);
       }
     });
   }, [teacher]);
 
   function persistCustomTema(updated) {
     setCustomTema(updated);
-    saveCustomTema(updated);
-    try { localStorage.setItem("custom-tema-list-meta", JSON.stringify({ savedAt: Date.now() })); } catch (e) {}
+    saveCustomTema(updated, teacher && teacher.uid);
+    try { localStorage.setItem(scopedKey("custom-tema-list-meta", teacher && teacher.uid), JSON.stringify({ savedAt: Date.now() })); } catch (e) {}
     if (teacher && teacher.uid) saveSetupToCloud(teacher.uid, "customTema", { list: updated });
   }
 
@@ -1179,6 +1259,10 @@ const fontImport = `
   @keyframes scoreBump { 0%{transform:scale(1);} 45%{transform:scale(1.4); color:#3FBFAD;} 100%{transform:scale(1);} }
   @keyframes matchGlow { 0%{box-shadow:0 0 0 0 rgba(63,191,173,.65);} 70%{box-shadow:0 0 0 12px rgba(63,191,173,0);} 100%{box-shadow:0 0 0 0 rgba(63,191,173,0);} }
   @keyframes cardShakeX { 0%,100%{transform:translateX(0);} 20%{transform:translateX(-6px);} 40%{transform:translateX(6px);} 60%{transform:translateX(-4px);} 80%{transform:translateX(4px);} }
+  /* FITUR BARU: dipakai buat angka hitung mundur babak Card Rush begitu waktu tersisa sedikit
+     (≤10 detik) atau sudah habis — berkedip pelan supaya guru & siswa langsung sadar tanpa
+     harus terus menatap angkanya. */
+  @keyframes timerPulse { 0%,100%{opacity:1;} 50%{opacity:.45;} }
   /* FIX (UX): dipakai buat ikon loading tombol "Mulai Permainan" — startGame()/startSession()
      ada panggilan jaringan (cek kode room ke Firestore) yang bisa terasa "diam saja" beberapa
      detik kalau koneksinya lambat; ikon berputar ini jadi tanda klik-nya sudah diterima &
@@ -1512,6 +1596,19 @@ function CardsPlayArea({ roomCode, room, myGroup }) {
   const { w: viewportW, h: viewportH } = useViewportSize();
   const headerRef = useRef(null);
   const [headerH, setHeaderH] = useState(60);
+  // FITUR BARU: hitung mundur babak berjalan — dibaca dari field `cardsRoundEndsAt` di dokumen
+  // room yang sama (ditulis guru lewat startRound()), BUKAN dihitung sendiri dari durasi babak
+  // di sisi HP siswa, supaya jamnya identik dengan yang dilihat guru walau HP siswa baru buka
+  // halaman ini belakangan atau jam sistemnya sedikit meleset dari laptop guru.
+  const roundEndsAt = room.cardsRoundEndsAt || null;
+  const [nowTick, setNowTick] = useState(Date.now());
+  useEffect(() => {
+    if (!room.cardsRoundId || !roundEndsAt) return;
+    const iv = setInterval(() => setNowTick(Date.now()), 1000);
+    return () => clearInterval(iv);
+  }, [room.cardsRoundId, roundEndsAt]);
+  const remainingSec = roundEndsAt ? Math.max(0, Math.round((roundEndsAt - nowTick) / 1000)) : null;
+  const timeUp = remainingSec === 0;
   useEffect(() => {
     if (!headerRef.current || typeof ResizeObserver === "undefined") return;
     const el = headerRef.current;
@@ -1589,7 +1686,7 @@ function CardsPlayArea({ roomCode, room, myGroup }) {
   // Ketuk kartu lain yang SEJENIS (gambar↔gambar atau kata↔kata) akan mengganti pilihan,
   // bukan mencoba mencocokkan — karena satu gambar cuma bisa dipasangkan dengan satu kata.
   function tapCard(card) {
-    if (busy || finishedSent || card.matched) return;
+    if (busy || finishedSent || card.matched || timeUp) return;
     if (!selected) { setSelected(card); return; }
     if (selected.key === card.key) { setSelected(null); return; }
     if (selected.kind === card.kind) { setSelected(card); return; }
@@ -1718,20 +1815,38 @@ function CardsPlayArea({ roomCode, room, myGroup }) {
   const gridPixelH = cellSize * gridRows + (gridRows - 1) * GAP;
 
   return (
-    <div style={{ ...wrap, height: viewportH, minHeight: viewportH, display: "flex", flexDirection: "column", overflow: "hidden", padding: PAD, boxSizing: "border-box" }}>
+    <div style={{ ...wrap, height: viewportH, minHeight: viewportH, display: "flex", flexDirection: "column", overflow: "hidden", padding: PAD, boxSizing: "border-box", position: "relative" }}>
       <style>{fontImport}</style>
       <div ref={headerRef} style={{ flexShrink: 0, marginBottom: GAP_BELOW_HEADER }}>
         <div style={{ fontSize: 12, color: t.dim, textAlign: "center" }}>Room {roomCode} · Kelompok {myGroup}</div>
+        {/* FITUR BARU: hitung mundur babak juga ditampilkan ke siswa (bukan cuma guru), berubah
+            merah & berkedip begitu ≤10 detik atau sudah habis — sama seperti panel guru. */}
+        {remainingSec !== null && (
+          <div className="sgt" style={{
+            textAlign: "center", fontSize: 15, fontWeight: 700, margin: "2px 0",
+            color: (timeUp || remainingSec <= 10) ? "#EF5B5B" : t.text,
+            animation: (timeUp || remainingSec <= 10) ? "timerPulse 1s ease-in-out infinite" : "none",
+          }}>⏱ {timeUp ? "Waktu Habis!" : formatDuration(remainingSec)}</div>
+        )}
         <div style={{ fontSize: 12, color: t.dim, textAlign: "center", fontWeight: 600 }}>{matchedCount}/{totalPairs} pasangan ketemu</div>
         <div style={{ fontSize: 11, color: t.faint, textAlign: "center" }}>Ketuk satu gambar lalu satu kata yang cocok</div>
       </div>
-      <div style={{ height: gridAreaHeight, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ height: gridAreaHeight, display: "flex", alignItems: "center", justifyContent: "center", position: "relative" }}>
         <div style={{
           display: "grid", gridTemplateColumns: `repeat(${gridCols}, ${cellSize}px)`, gridTemplateRows: `repeat(${gridRows}, ${cellSize}px)`,
           gap: GAP, width: gridPixelW, height: gridPixelH, boxSizing: "border-box",
+          opacity: timeUp ? 0.35 : 1, transition: "opacity .2s ease", pointerEvents: timeUp ? "none" : "auto",
         }}>
           {cards.map((c) => <CardTile key={c.key} c={c} />)}
         </div>
+        {timeUp && (
+          <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
+            <div style={{ background: t.panel, boxShadow: "0 4px 18px rgba(0,0,0,.18)", borderRadius: 14, padding: "14px 22px", textAlign: "center" }}>
+              <div className="sgt" style={{ fontSize: 16, fontWeight: 700, color: "#EF5B5B", marginBottom: 2 }}>⏰ Waktu Habis</div>
+              <div style={{ fontSize: 12.5, color: t.dim }}>Tunggu instruksi guru, ya.</div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1888,7 +2003,7 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
   useEffect(() => {
     let localSavedAt = 0;
     try {
-      const raw = localStorage.getItem("tck-setup-data");
+      const raw = localStorage.getItem(migrateLegacyKey("tck-setup-data", teacher.uid));
       if (raw) {
         const parsed = JSON.parse(raw);
         // FIX (bug): baris `if (parsed.theme) setTheme(parsed.theme)` yang dulu ada di sini
@@ -1908,7 +2023,7 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
     } catch (e) { /* belum ada data tersimpan, atau data korup */ }
     // Muat progres permainan yang sedang berjalan (kalau ada), supaya refresh tidak mengulang dari awal
     try {
-      const rawP = localStorage.getItem("tck-progress");
+      const rawP = localStorage.getItem(migrateLegacyKey("tck-progress", teacher.uid));
       if (rawP) {
         const p = JSON.parse(rawP);
         if (p.stage) setStage(p.stage);
@@ -1946,7 +2061,7 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
   useEffect(() => {
     if (!loaded) return;
     const tm = setTimeout(() => {
-      const res = safeSetItem("tck-progress", JSON.stringify({
+      const res = safeSetItem(scopedKey("tck-progress", teacher.uid), JSON.stringify({
         stage, babakId, mode, audioMode, teksDurasiDetik, scores, roomCode, queue, foundMap,
         triedSet: Array.from(triedSet), puzzle, clueRevealed,
       }));
@@ -1986,7 +2101,7 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
 
   function endGameDirect() {
     // Akhiri tanpa dialog — dipanggil dari BackConfirmModal yang sudah punya konfirmasi sendiri
-    try { localStorage.removeItem("tck-progress"); } catch (e) {}
+    try { localStorage.removeItem(scopedKey("tck-progress", teacher.uid)); } catch (e) {}
     db.collection("rooms").doc(roomCode).delete().catch(() => {});
     setScores({ 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 });
     setFoundMap({}); setQueue([]); setTriedSet(new Set()); setPuzzle(null);
@@ -2005,7 +2120,7 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
     if (!loaded) return;
     const tm = setTimeout(() => {
       const payload = { dataByMateri, selectedMateri, puzzleByBabak: packPuzzleByBabakForSave(puzzleByBabak), pointByBabak };
-      const res = safeSetItem("tck-setup-data", JSON.stringify({ ...payload, savedAt: Date.now() }));
+      const res = safeSetItem(scopedKey("tck-setup-data", teacher.uid), JSON.stringify({ ...payload, savedAt: Date.now() }));
       setStorageWarning(res.ok ? null : res.message);
       saveSetupToCloud(teacher.uid, "wordSearch", payload);
     }, 500);
@@ -2204,7 +2319,7 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
       .finally(() => {
         setSavingSession(false);
         setSaveNameOpen(false);
-        try { localStorage.removeItem("tck-progress"); } catch (e) {}
+        try { localStorage.removeItem(scopedKey("tck-progress", teacher.uid)); } catch (e) {}
         setScores({ 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 });
         setFoundMap({}); setQueue([]); setTriedSet(new Set()); setPuzzle(null);
         setProjectorMode(false);
@@ -3810,7 +3925,7 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
   useEffect(() => {
     let localSavedAt = 0;
     try {
-      const raw = localStorage.getItem("bk-setup-data");
+      const raw = localStorage.getItem(migrateLegacyKey("bk-setup-data", teacher.uid));
       if (raw) {
         const parsed = JSON.parse(raw);
         // FIX (bug): lihat catatan panjang di Word Search — field `theme` di blob ini sisa dari
@@ -3822,7 +3937,7 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
       }
     } catch (e) { /* belum ada data tersimpan, atau data korup */ }
     try {
-      const rawP = localStorage.getItem("bk-progress");
+      const rawP = localStorage.getItem(migrateLegacyKey("bk-progress", teacher.uid));
       if (rawP) {
         const p = JSON.parse(rawP);
         if (p.stage) setStage(p.stage);
@@ -3845,7 +3960,7 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
     if (!loaded) return;
     const tm = setTimeout(() => {
       const payload = { dataByMateri, selectedMateri };
-      const res = safeSetItem("bk-setup-data", JSON.stringify({ ...payload, savedAt: Date.now() }));
+      const res = safeSetItem(scopedKey("bk-setup-data", teacher.uid), JSON.stringify({ ...payload, savedAt: Date.now() }));
       setStorageWarning(res.ok ? null : res.message);
       saveSetupToCloud(teacher.uid, "mysteryBox", payload);
     }, 500);
@@ -3854,7 +3969,7 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
   useEffect(() => {
     if (!loaded) return;
     const tm = setTimeout(() => {
-      const res = safeSetItem("bk-progress", JSON.stringify({ stage, opened }));
+      const res = safeSetItem(scopedKey("bk-progress", teacher.uid), JSON.stringify({ stage, opened }));
       setStorageWarning(res.ok ? null : res.message);
     }, 500);
     return () => clearTimeout(tm);
@@ -3862,7 +3977,7 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
 
   function endGame() {
     if (!window.confirm("Akhiri permainan ini? Progres kotak yang sudah dibuka akan dihapus.")) return;
-    try { localStorage.removeItem("bk-progress"); } catch (e) {}
+    try { localStorage.removeItem(scopedKey("bk-progress", teacher.uid)); } catch (e) {}
     setOpened({}); setActiveBox(null); setStage("setup");
     onBack();
   }
@@ -4040,7 +4155,10 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
    poin terbanyak; babaknya bisa berapa pun, minimal 5
    pasangan per babak.
 =========================================================== */
-function makeBabak(n) { return { id: uid(), label: `Babak ${n}`, pairs: [] }; }
+// FITUR BARU: tiap babak sekarang punya batas waktu sendiri (timeLimitSec, default 3 menit) —
+// guru bisa atur di layar Persiapan, dipakai buat hitung mundur ronde saat "play" (lihat
+// startRound() & CardsPlayArea) supaya guru bisa memaksa akhiri babak begitu waktu kelas habis.
+function makeBabak(n) { return { id: uid(), label: `Babak ${n}`, pairs: [], timeLimitSec: 180 }; }
 
 function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
   const isMobile = useIsMobile();
@@ -4077,12 +4195,27 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
   const [finishers, setFinishers] = useState([]);
   const [scored, setScored] = useState(false);
   const [publishing, setPublishing] = useState(false);
+  // FITUR BARU: batas waktu per babak (lihat makeBabak/startRound) — cardsRoundEndsAt disimpan
+  // di dokumen room (bukan state lokal) supaya panel guru DAN layar siswa (CardsPlayArea)
+  // sama-sama melihat hitung mundur yang identik, bukan jam yang berjalan sendiri-sendiri di
+  // tiap perangkat. nowTick cuma dipakai untuk memaksa komponen ini re-render tiap detik selama
+  // babak berjalan (Date.now() sendiri bukan state, jadi tidak akan memicu render kalau tidak
+  // "dipancing" seperti ini).
+  const [cardsRoundEndsAt, setCardsRoundEndsAt] = useState(null);
+  const [nowTick, setNowTick] = useState(Date.now());
+  // FITUR BARU: koreksi skor manual — kadang guru perlu membetulkan skor (mis. kelompok curang,
+  // salah pencet, atau ingin memberi bonus/pengurangan di luar hasil otomatis). Dulu skor MURNI
+  // hasil applyScores() dan sama sekali tidak bisa diubah tangan.
+  const [correctingScore, setCorrectingScore] = useState(false);
+  function adjustScore(g, delta) {
+    setScores((prev) => ({ ...prev, [g]: Math.max(0, (prev[g] || 0) + delta) }));
+  }
 
   useEffect(() => {
     let localSavedAt = 0;
     let migrated = false;
     try {
-      const raw = localStorage.getItem("cck-setup-data");
+      const raw = localStorage.getItem(migrateLegacyKey("cck-setup-data", teacher.uid));
       if (raw) {
         const parsed = JSON.parse(raw);
         if (parsed.dataByMateri) {
@@ -4125,7 +4258,7 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
     if (!loaded) return;
     const tm = setTimeout(() => {
       const payload = { dataByMateri, selectedMateri };
-      const res = safeSetItem("cck-setup-data", JSON.stringify({ ...payload, savedAt: Date.now() }));
+      const res = safeSetItem(scopedKey("cck-setup-data", teacher.uid), JSON.stringify({ ...payload, savedAt: Date.now() }));
       setStorageWarning(res.ok ? null : res.message);
       saveSetupToCloud(teacher.uid, "cardRush", payload);
     }, 500);
@@ -4140,6 +4273,13 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
     if (!window.confirm("Hapus babak ini beserta semua pasangan kartunya?")) return;
     setBabaks((prev) => prev.filter((_, i) => i !== idx));
     setBabakIdx((i) => Math.max(0, Math.min(i, babaks.length - 2)));
+  }
+  // FITUR BARU: batas waktu babak ini (detik) — dipakai startRound() untuk menghitung
+  // cardsRoundEndsAt. Dibatasi 30 detik–20 menit supaya tidak sengaja ter-set jadi 0/negatif
+  // (babak langsung "habis waktu" begitu dimulai) atau kelewat panjang tanpa sadar.
+  function setBabakTimeLimit(idx, sec) {
+    const clamped = Math.max(30, Math.min(1200, sec));
+    setBabaks((prev) => prev.map((b, i) => i === idx ? { ...b, timeLimitSec: clamped } : b));
   }
   function addPair(idx) {
     setBabaks((prev) => prev.map((b, i) => i === idx ? { ...b, pairs: [...b.pairs, { id: uid(), word: "", image: null }] } : b));
@@ -4162,25 +4302,23 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
   }
   function uploadImage(idx, pairId, file) {
     if (!file) return;
-    // Beda dari audio di Game 1: gambar ini WAJIB tersinkron ke Firestore (bukan cuma
-    // localStorage guru), karena tiap HP siswa perlu benar-benar menampilkannya. Batas ketat
-    // supaya ringan diunduh serentak oleh banyak HP sekaligus & jauh dari batas ukuran dokumen.
-    if (file.size > 250 * 1024) {
-      setImageUploadError((e) => ({ ...e, [pairId]: "Gambar maksimal 250KB. Kompres/perkecil dulu gambarnya." }));
-      return;
-    }
     setImageUploadError((e) => { const n = { ...e }; delete n[pairId]; return n; });
     setUploadingImage((u) => ({ ...u, [pairId]: true }));
-    const reader = new FileReader();
-    reader.onload = () => {
-      setBabaks((prev) => prev.map((b, i) => i === idx ? { ...b, pairs: b.pairs.map((p) => p.id === pairId ? { ...p, image: reader.result } : p) } : b));
-      setUploadingImage((u) => { const n = { ...u }; delete n[pairId]; return n; });
-    };
-    reader.onerror = () => {
-      setImageUploadError((e) => ({ ...e, [pairId]: "Gagal membaca gambar, coba lagi." }));
-      setUploadingImage((u) => { const n = { ...u }; delete n[pairId]; return n; });
-    };
-    reader.readAsDataURL(file);
+    compressImageFile(file)
+      .then((dataUrl) => {
+        // Base64 kira-kira 4/3 kali lebih besar dari data biner aslinya — dihitung dari panjang
+        // string data URL-nya (bukan file.size asli, karena itu sudah bukan ukuran final setelah
+        // dikompres). Ambang 250KB dipertahankan sebagai jaga-jaga terakhir; dalam praktiknya nyaris
+        // selalu lolos jauh di bawah itu berkat compressImageFile() di atas.
+        const approxBytes = Math.round((dataUrl.length * 3) / 4);
+        if (approxBytes > 250 * 1024) {
+          setImageUploadError((e) => ({ ...e, [pairId]: "Gambar masih terlalu besar walau sudah dikompres otomatis — coba foto lain." }));
+          return;
+        }
+        setBabaks((prev) => prev.map((b, i) => i === idx ? { ...b, pairs: b.pairs.map((p) => p.id === pairId ? { ...p, image: dataUrl } : p) } : b));
+      })
+      .catch(() => setImageUploadError((e) => ({ ...e, [pairId]: "Gagal memproses gambar, coba lagi." })))
+      .finally(() => setUploadingImage((u) => { const n = { ...u }; delete n[pairId]; return n; }));
   }
 
   function validPairs(b) { return b.pairs.filter((p) => p.word.trim() && p.image); }
@@ -4219,9 +4357,20 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
       setJoinedGroups(data.groups || {});
       setCardsRoundId(data.cardsRoundId || null);
       setFinishers(Array.isArray(data.cardsFinishers) ? data.cardsFinishers : []);
+      setCardsRoundEndsAt(data.cardsRoundEndsAt || null);
     });
     return () => unsub();
   }, [stage, roomCode]);
+
+  // Detak jam hitung mundur — cuma jalan selagi ada babak aktif & belum dinilai, supaya tidak
+  // terus-menerus re-render tanpa alasan saat guru masih di layar Persiapan atau menunggu join.
+  useEffect(() => {
+    if (stage !== "play" || !cardsRoundId || !cardsRoundEndsAt || scored) return;
+    const iv = setInterval(() => setNowTick(Date.now()), 1000);
+    return () => clearInterval(iv);
+  }, [stage, cardsRoundId, cardsRoundEndsAt, scored]);
+  const remainingSec = cardsRoundEndsAt ? Math.max(0, Math.round((cardsRoundEndsAt - nowTick) / 1000)) : null;
+  const timeUp = remainingSec === 0;
 
   function applyScores(finalFinishers) {
     const totalGroups = Object.keys(joinedGroups).length || finalFinishers.length;
@@ -4251,12 +4400,34 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
     try {
       const col = db.collection("rooms").doc(roomCode).collection("cardPairs");
       const existing = await col.get();
+      // FITUR BARU (perbaikan kinerja): dulu SEMUA dokumen kartu lama dihapus lalu SEMUA kartu
+      // baru ditulis ulang dari nol tiap kali "Mulai Babak Ini" ditekan — padahal kalau guru
+      // menekannya lagi untuk babak yang SAMA tanpa mengedit apa pun (mis. mengulang sesi ini
+      // untuk rombongan kelas berikutnya di hari yang sama), isinya persis sama dengan yang
+      // sudah ada di Firestore, jadi menghapus lalu mengunggah ulang semuanya cuma buang-buang
+      // waktu & kuota. Sekarang dibandingkan dulu: dokumen lama yang datanya SAMA PERSIS (kata +
+      // gambar) dibiarkan saja (tidak disentuh sama sekali), yang ditulis ulang cuma yang benar-
+      // benar baru atau berubah, dan yang dihapus cuma yang sudah tidak dipakai lagi.
+      const existingById = new Map(existing.docs.map((d) => [d.id, d.data()]));
+      const nextPairs = validPairs(babak).map((p) => ({ id: p.id, word: p.word.trim(), image: p.image }));
+      const nextIds = new Set(nextPairs.map((p) => p.id));
       const batch = db.batch();
-      existing.docs.forEach((d) => batch.delete(d.ref));
-      validPairs(babak).forEach((p) => batch.set(col.doc(p.id), { word: p.word.trim(), image: p.image }));
-      await batch.commit();
+      let changedCount = 0;
+      existing.docs.forEach((d) => { if (!nextIds.has(d.id)) { batch.delete(d.ref); changedCount++; } });
+      nextPairs.forEach((p) => {
+        const old = existingById.get(p.id);
+        if (old && old.word === p.word && old.image === p.image) return; // identik — tidak perlu ditulis ulang
+        batch.set(col.doc(p.id), { word: p.word, image: p.image });
+        changedCount++;
+      });
+      if (changedCount > 0) await batch.commit();
       const newRoundId = uid();
-      await db.collection("rooms").doc(roomCode).set({ cardsRoundId: newRoundId, cardsFinishers: [] }, { merge: true });
+      // FITUR BARU: batas waktu babak ini (timeLimitSec, diatur guru di Persiapan) diubah jadi
+      // TIMESTAMP absolut (bukan cuma "180 detik" yang disimpan mentah) supaya panel guru dan
+      // layar tiap siswa menghitung mundur ke titik akhir yang PERSIS SAMA, tidak peduli kapan
+      // masing-masing perangkat memuat/membaca datanya.
+      const roundEndsAt = Date.now() + (babak.timeLimitSec || 180) * 1000;
+      await db.collection("rooms").doc(roomCode).set({ cardsRoundId: newRoundId, cardsFinishers: [], cardsRoundEndsAt: roundEndsAt }, { merge: true });
       setScored(false);
     } catch (e) {
       alert("Gagal memulai babak, coba lagi.");
@@ -4267,7 +4438,9 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
 
   function endRoundNow() {
     if (scored) return;
-    if (finishers.length < Object.keys(joinedGroups).length) {
+    // FITUR BARU: kalau waktu babak memang sudah habis, tidak perlu tanya konfirmasi lagi —
+    // itulah justru fungsi tombol ini (paksa akhiri babak begitu waktu kelas habis).
+    if (!timeUp && finishers.length < Object.keys(joinedGroups).length) {
       if (!window.confirm("Masih ada kelompok yang belum selesai. Akhiri babak sekarang? Kelompok yang belum selesai tetap dapat 1 poin.")) return;
     }
     applyScores(finishers);
@@ -4277,8 +4450,8 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
     if (babakIdx >= babaks.length - 1) return;
     const nextIdx = babakIdx + 1;
     setBabakIdx(nextIdx);
-    db.collection("rooms").doc(roomCode).set({ babakIdx: nextIdx, cardsRoundId: null, cardsFinishers: [] }, { merge: true }).catch(() => {});
-    setFinishers([]); setCardsRoundId(null); setScored(false);
+    db.collection("rooms").doc(roomCode).set({ babakIdx: nextIdx, cardsRoundId: null, cardsFinishers: [], cardsRoundEndsAt: null }, { merge: true }).catch(() => {});
+    setFinishers([]); setCardsRoundId(null); setCardsRoundEndsAt(null); setScored(false);
   }
 
   function endGame() {
@@ -4286,7 +4459,7 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
     // BUGFIX: dulu cuma db.collection("rooms").doc(roomCode).delete() — subcollection "cardPairs"
     // (gambar-gambar kartu babak terakhir) tidak ikut terhapus & jadi sampah permanen di Firestore.
     deleteRoomWithSubcollections(db.collection("rooms").doc(roomCode)).catch(() => {});
-    setScores({}); setStage("setup"); setBabakIdx(0);
+    setScores({}); setStage("setup"); setBabakIdx(0); setCardsRoundEndsAt(null); setCorrectingScore(false);
     onBack();
   }
 
@@ -4367,14 +4540,26 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
             <div style={{ fontSize: 12.5, color: validPairs(babak).length >= 5 ? "#3FBFAD" : t.faint, fontWeight: 600 }}>
               {validPairs(babak).length} / {babak.pairs.length} pasangan siap{!isMobile ? " (minimal 5 pasangan lengkap kata + gambar)" : ""}
             </div>
-            <button onClick={() => setBulkAddOpen(true)} style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: `1px dashed ${t.border}`, color: t.dim, borderRadius: 8, padding: "8px 14px", cursor: "pointer", fontSize: 13 }}>📋 Tambah Banyak Sekaligus</button>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+              {/* FITUR BARU: batas waktu babak ini — dipakai untuk hitung mundur saat "play"
+                  (lihat startRound/CardsPlayArea). Langkah 30 detik, 30 detik–20 menit. */}
+              <div title="Batas waktu babak ini saat dimainkan" style={{ display: "flex", alignItems: "center", gap: 10, background: t.panel2, borderRadius: 10, padding: "8px 12px" }}>
+                <span style={{ fontSize: 12.5, color: t.dim }}>⏱ Waktu babak</span>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <button onClick={() => setBabakTimeLimit(babakIdx, (babak.timeLimitSec || 180) - 30)} title="Kurangi 30 detik" style={{ width: 26, height: 26, borderRadius: 7, border: "none", background: t.panel, color: t.text, fontSize: 15, fontWeight: 700, cursor: "pointer", lineHeight: 1 }}>−</button>
+                  <span className="sgt" style={{ minWidth: 42, textAlign: "center", fontWeight: 700, fontSize: 14, color: t.text }}>{formatDuration(babak.timeLimitSec || 180)}</span>
+                  <button onClick={() => setBabakTimeLimit(babakIdx, (babak.timeLimitSec || 180) + 30)} title="Tambah 30 detik" style={{ width: 26, height: 26, borderRadius: 7, border: "none", background: t.panel, color: t.text, fontSize: 15, fontWeight: 700, cursor: "pointer", lineHeight: 1 }}>+</button>
+                </div>
+              </div>
+              <button onClick={() => setBulkAddOpen(true)} style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: `1px dashed ${t.border}`, color: t.dim, borderRadius: 8, padding: "8px 14px", cursor: "pointer", fontSize: 13 }}>📋 Tambah Banyak Sekaligus</button>
+            </div>
           </div>
 
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             {babak.pairs.map((p, idx) => (
               <div key={p.id} className="list-row" style={{ display: "flex", gap: 12, alignItems: "center", background: t.panel2, borderRadius: 12, padding: "10px 14px", flexWrap: "wrap" }}>
                 <div style={{ width: 24, height: 24, borderRadius: "50%", background: t.panel, color: t.faint, fontSize: 11.5, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{idx + 1}</div>
-                <label title={p.image ? "Klik untuk ganti gambar" : "Unggah gambar"} style={{ width: 56, height: 56, borderRadius: 8, background: t.panel, flexShrink: 0, cursor: "pointer", overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", position: "relative" }}>
+                <label title={p.image ? "Klik untuk ganti gambar" : "Unggah gambar (otomatis dikompres, tidak perlu diperkecil dulu)"} style={{ width: 56, height: 56, borderRadius: 8, background: t.panel, flexShrink: 0, cursor: "pointer", overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", position: "relative" }}>
                   {uploadingImage[p.id] ? "⏳" : p.image ? <img src={p.image} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ fontSize: 15, color: t.dim }}>⬆</span>}
                   <input type="file" accept="image/*" disabled={uploadingImage[p.id]} onChange={(e) => uploadImage(babakIdx, p.id, e.target.files[0])} style={{ display: "none" }} />
                 </label>
@@ -4426,7 +4611,24 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
           <div className="sgt page-title" style={{ fontSize: 26, fontWeight: 700 }}>Card Rush — {babak.label}</div>
           <div style={{ fontSize: 13, color: t.dim, marginTop: 2 }}>Kode Room: <b>{roomCode}</b> · {totalGroups} kelompok sudah join</div>
         </div>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          {/* FITUR BARU: hitung mundur babak berjalan — timestamp akhirnya (cardsRoundEndsAt)
+              disimpan di dokumen room supaya guru & SEMUA siswa melihat angka yang sama persis
+              (lihat startRound() & CardsPlayArea), bukan jam yang berjalan sendiri-sendiri di
+              tiap perangkat. Berubah merah & berkedip begitu ≤10 detik atau sudah 0, supaya
+              langsung kelihatan kapan saatnya menekan "Akhiri Babak Sekarang". */}
+          {cardsRoundId && !scored && remainingSec !== null && (
+            <div title="Sisa waktu babak ini" style={{
+              display: "flex", alignItems: "center", gap: 8,
+              background: timeUp ? "#EF5B5B" : remainingSec <= 10 ? "rgba(239,91,91,.14)" : t.panel,
+              border: `1px solid ${(timeUp || remainingSec <= 10) ? "#EF5B5B" : t.border}`,
+              boxShadow: t.shadowSm, color: timeUp ? "#fff" : remainingSec <= 10 ? "#EF5B5B" : t.text,
+              padding: "10px 16px", borderRadius: 10, fontWeight: 700, fontSize: 15,
+              animation: (timeUp || remainingSec <= 10) ? "timerPulse 1s ease-in-out infinite" : "none",
+            }}>
+              <span className="sgt" style={{ fontSize: 15, lineHeight: 1 }}>⏱</span> {timeUp ? "Waktu Habis!" : formatDuration(remainingSec)}
+            </div>
+          )}
           <button onClick={() => setQrOpen(true)} style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}>🔗 QR Join</button>
           <button onClick={endGame} style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: "1px solid #EF5B5B", color: "#EF5B5B", padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}>⏹ Akhiri Permainan</button>
           <ThemeToggleButton theme={theme} onToggle={() => setTheme(theme === "dark" ? "light" : "dark")} style={{ background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: 10, borderRadius: 10, cursor: "pointer" }} />
@@ -4468,7 +4670,12 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
                 </div>
               )}
               {!scored ? (
-                <button onClick={endRoundNow} style={{ display: "flex", alignItems: "center", gap: 8, background: t.panel2, border: "none", color: t.text, borderRadius: 10, padding: "10px 16px", cursor: "pointer", fontSize: 13, fontWeight: 700 }}>⏹ Akhiri Babak Sekarang</button>
+                <button onClick={endRoundNow} style={{
+                  display: "flex", alignItems: "center", gap: 8,
+                  background: timeUp ? "#EF5B5B" : t.panel2, border: "none", color: timeUp ? "#fff" : t.text,
+                  borderRadius: 10, padding: "10px 16px", cursor: "pointer", fontSize: 13, fontWeight: 700,
+                  animation: timeUp ? "timerPulse 1s ease-in-out infinite" : "none",
+                }}>{timeUp ? "⏹ Waktu Habis — Akhiri Babak Sekarang" : "⏹ Akhiri Babak Sekarang"}</button>
               ) : (
                 <button onClick={babakIdx < babaks.length - 1 ? nextBabak : endGame} style={{ display: "flex", alignItems: "center", gap: 8, background: "#F4B740", border: "none", color: "#101B34", borderRadius: 10, padding: "10px 16px", cursor: "pointer", fontSize: 13, fontWeight: 700 }}>
                   {babakIdx < babaks.length - 1 ? "Lanjut Babak Berikutnya ➡" : "Selesaikan Sesi"}
@@ -4479,17 +4686,35 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
         </div>
 
         <div style={{ flex: "1 1 260px", background: t.panel, borderRadius: 16, padding: 20, boxSizing: "border-box", boxShadow: t.shadowSm }}>
-          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12 }}>🏆 Papan Skor</div>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+            <div style={{ fontSize: 13, fontWeight: 700 }}>🏆 Papan Skor</div>
+            {/* FITUR BARU: koreksi skor manual — untuk kasus di luar hasil otomatis (mis. kelompok
+                curang, salah pencet saat join, atau guru ingin memberi bonus/pengurangan). */}
+            <button onClick={() => setCorrectingScore((c) => !c)} style={{ display: "flex", alignItems: "center", gap: 5, background: correctingScore ? "#F4B740" : "transparent", color: correctingScore ? "#101B34" : t.dim, border: correctingScore ? "none" : `1px solid ${t.border}`, borderRadius: 8, padding: "5px 10px", cursor: "pointer", fontSize: 11.5, fontWeight: 600 }}>
+              ✏️ {correctingScore ? "Selesai Koreksi" : "Koreksi Skor"}
+            </button>
+          </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {sortedGroups.filter((g) => (scores[g] || 0) > 0 || joinedGroups[g]).map((g, i) => (
+            {sortedGroups.filter((g) => (scores[g] || 0) > 0 || joinedGroups[g] || correctingScore).map((g, i) => (
               <div key={g} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: t.panel2, borderRadius: 10, padding: "8px 12px" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <span style={{ width: 10, height: 10, borderRadius: 3, background: GROUP_COLORS[g - 1] }} />
-                  <span style={{ fontSize: 13, fontWeight: 600 }}>{(joinedGroups[g] && joinedGroups[g].name) || `Kelompok ${g}`}{i === 0 && (scores[g] || 0) > 0 ? " 👑" : ""}</span>
+                  <span style={{ fontSize: 13, fontWeight: 600 }}>{(joinedGroups[g] && joinedGroups[g].name) || `Kelompok ${g}`}{!correctingScore && i === 0 && (scores[g] || 0) > 0 ? " 👑" : ""}</span>
                 </div>
-                <span className="sgt" style={{ fontWeight: 700 }}>{scores[g] || 0}</span>
+                {correctingScore ? (
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <button onClick={() => adjustScore(g, -1)} title="Kurangi 1 poin" style={{ width: 24, height: 24, borderRadius: 6, border: "none", background: t.panel, color: t.text, fontSize: 14, fontWeight: 700, cursor: "pointer", lineHeight: 1 }}>−</button>
+                    <span className="sgt" style={{ minWidth: 20, textAlign: "center", fontWeight: 700 }}>{scores[g] || 0}</span>
+                    <button onClick={() => adjustScore(g, 1)} title="Tambah 1 poin" style={{ width: 24, height: 24, borderRadius: 6, border: "none", background: t.panel, color: t.text, fontSize: 14, fontWeight: 700, cursor: "pointer", lineHeight: 1 }}>+</button>
+                  </div>
+                ) : (
+                  <span className="sgt" style={{ fontWeight: 700 }}>{scores[g] || 0}</span>
+                )}
               </div>
             ))}
+            {correctingScore && sortedGroups.filter((g) => (scores[g] || 0) > 0 || joinedGroups[g]).length === 0 && (
+              <div style={{ fontSize: 12, color: t.faint, textAlign: "center", padding: "6px 0" }}>Belum ada kelompok yang join.</div>
+            )}
           </div>
         </div>
       </div>
@@ -4740,7 +4965,7 @@ function SettingsModal({ open, onClose, t, teacher }) {
                 ["Versi", "SanKyuu v1.0"],
                 ["Dibangun dengan", "React 18 + Firebase (Auth & Firestore) — satu file HTML statis, tanpa proses build"],
                 ["Kompatibilitas", "Browser modern (Chrome, Edge, Firefox versi terbaru); Chrome disarankan untuk pengalaman terbaik"],
-                ["Penyimpanan data", "Tema & kosakata disimpan di penyimpanan browser (localStorage) tempat guru mengedit — TIDAK ikut ke akun Google atau ke perangkat/browser lain. Riwayat Sesi & audio petunjuk yang tersimpan lewat \"Simpan & Jeda\" baru yang ikut per akun guru di Firestore."],
+                ["Penyimpanan data", "Tema & kosakata disimpan di penyimpanan browser (localStorage) tempat guru mengedit, dipisah per akun Google — dan otomatis dicadangkan ke Firestore di bawah akun itu supaya tetap bisa dipulihkan kalau pindah perangkat/browser atau localStorage-nya hilang. Riwayat Sesi & audio petunjuk yang tersimpan lewat \"Simpan & Jeda\" juga per akun guru di Firestore."],
                 ["Koneksi internet", "Dibutuhkan untuk login, sinkronisasi buzzer real-time antar perangkat, dan unggah audio petunjuk"],
               ].map(([k, v], i, arr) => (
                 <div key={k} style={{ paddingBottom: 12, borderBottom: i < arr.length - 1 ? `1px solid ${t.border}` : "none" }}>
