@@ -674,6 +674,14 @@ function MateriPicker({ t, selected, onSelect, teacher }) {
   const cloudCheckedRef = useRef(false);
   const allTema = [...MATERI_LIST, ...customTema];
   const byKelas = { 11: allTema.filter((m) => m.kelas === 11), 12: allTema.filter((m) => m.kelas === 12) };
+  // FITUR BARU: dulu Kelas 11 & 12 ditampilkan sekaligus bertumpuk ke bawah — makin panjang
+  // makin banyak tema custom ditambahkan. Sekarang cuma satu kelas ditampilkan sekaligus, dipilih
+  // lewat switch di atas grid — defaultnya ikut kelas tema yang sedang aktif, biar tidak perlu
+  // pindah switch dulu buat lihat tema yang sedang dipakai.
+  const [kelasFilter, setKelasFilter] = useState(() => {
+    const found = allTema.find((m) => m.name === selected);
+    return found ? found.kelas : 11;
+  });
 
   useEffect(() => {
     if (!teacher || !teacher.uid || cloudCheckedRef.current) return;
@@ -702,6 +710,7 @@ function MateriPicker({ t, selected, onSelect, teacher }) {
   function handleAdd(newTema) {
     persistCustomTema([...customTema, newTema]);
     onSelect(newTema.name);
+    setKelasFilter(newTema.kelas);
     setAddOpen(false);
   }
   function handleDelete(name) {
@@ -711,17 +720,21 @@ function MateriPicker({ t, selected, onSelect, teacher }) {
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-      {[11, 12].map((kelas) => (
-        <div key={kelas}>
-          <div className="sgt" style={{ fontSize: 12.5, fontWeight: 700, color: t.dim, marginBottom: 8, letterSpacing: 0.3 }}>KELAS {kelas}</div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: 12 }}>
-            {byKelas[kelas].map((m, i) => (
-              <TemaCard key={m.name} t={t} m={m} i={i} isSelected={selected === m.name} onSelect={onSelect} onDelete={handleDelete} />
-            ))}
-          </div>
-        </div>
-      ))}
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <div style={{ display: "inline-flex", background: t.panel2, borderRadius: 10, padding: 4, gap: 4, alignSelf: "flex-start" }}>
+        {[11, 12].map((k) => (
+          <button key={k} onClick={() => setKelasFilter(k)} className="sgt" style={{
+            padding: "8px 22px", borderRadius: 7, border: "none", cursor: "pointer",
+            background: kelasFilter === k ? "#F4B740" : "transparent", color: kelasFilter === k ? "#101B34" : t.text,
+            fontWeight: 700, fontSize: 13, transition: "background .15s ease",
+          }}>Kelas {k}</button>
+        ))}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: 12 }}>
+        {byKelas[kelasFilter].map((m, i) => (
+          <TemaCard key={m.name} t={t} m={m} i={i} isSelected={selected === m.name} onSelect={onSelect} onDelete={handleDelete} />
+        ))}
+      </div>
       <button onClick={() => setAddOpen(true)} style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, background: "transparent", border: `1.5px dashed ${t.border}`, color: t.dim, borderRadius: 14, padding: "14px 0", cursor: "pointer", fontSize: 13.5, fontWeight: 600 }}>
         <span style={{ fontSize: 16, lineHeight: 1, color: "inherit" }}>➕</span> Tambah Tema
       </button>
@@ -787,6 +800,69 @@ const HIRAGANA_FILL = Array.from(
 const DIRECTIONS = [[0,1],[1,0],[1,1],[-1,1]];
 
 function isKanaWord(letters) { return /[぀-ヿ]/.test(letters); }
+
+// FIX (bug: "Simpan & Jeda" macet permanen di "Menyimpan…"): Firestore TIDAK MENDUKUNG
+// array-di-dalam-array (nested array) sebagai nilai field — cuma array berisi object/string/
+// number yang diperbolehkan. puzzle.grid (string[][]) dan puzzle.placements / foundMap[...].cells
+// (masing-masing array pasangan [r,c]) semuanya nested array. Begitu dikirim langsung ke
+// Firestore, panggilannya melempar error SINKRON sebelum promise-nya sempat terbentuk —
+// akibatnya .then/.catch/.finally di confirmSaveSession() tidak pernah jalan, dan state
+// `savingSession` tidak pernah balik ke false (tombol "Menyimpan…" macet selamanya, tanpa pesan
+// error apa pun yang terlihat guru). Dua pasang fungsi ini mengubah struktur nested-array itu
+// jadi bentuk yang aman untuk Firestore sebelum dikirim (baris grid → string, pasangan [r,c] →
+// {r,c}), dan mengembalikannya lagi ke bentuk asli saat sesi itu dibuka lagi dari Riwayat.
+function packPuzzleForSave(puzzle) {
+  if (!puzzle) return null;
+  const placements = {};
+  Object.keys(puzzle.placements || {}).forEach((id) => {
+    placements[id] = puzzle.placements[id].map(([r, c]) => ({ r, c }));
+  });
+  return { size: puzzle.size, gridRows: puzzle.grid.map((row) => row.join("")), placements };
+}
+function unpackPuzzleFromSave(saved) {
+  if (!saved) return null;
+  const placements = {};
+  Object.keys(saved.placements || {}).forEach((id) => {
+    placements[id] = saved.placements[id].map((o) => [o.r, o.c]);
+  });
+  return { size: saved.size, grid: (saved.gridRows || []).map((rowStr) => rowStr.split("")), placements };
+}
+function packFoundMapForSave(foundMap) {
+  const packed = {};
+  Object.keys(foundMap || {}).forEach((id) => {
+    const f = foundMap[id];
+    packed[id] = { color: f.color, revealed: !!f.revealed, cells: (f.cells || []).map(([r, c]) => ({ r, c })) };
+  });
+  return packed;
+}
+function unpackFoundMapFromSave(saved) {
+  const foundMap = {};
+  Object.keys(saved || {}).forEach((id) => {
+    const f = saved[id];
+    foundMap[id] = { color: f.color, revealed: !!f.revealed, cells: (f.cells || []).map((o) => [o.r, o.c]) };
+  });
+  return foundMap;
+}
+// puzzleByBabak berbentuk { [babakId]: { signature, puzzle } } — dipakai buat menyimpan/memuat
+// cache "Kunci Jawaban" per babak baik ke localStorage MAUPUN ke Firestore (cadangan cloud lintas
+// device). Sama seperti di atas, `puzzle`-nya harus di-pack/unpack juga supaya aman dikirim ke
+// Firestore (lihat penjelasan nested-array di atas).
+function packPuzzleByBabakForSave(puzzleByBabak) {
+  const out = {};
+  Object.keys(puzzleByBabak || {}).forEach((id) => {
+    const entry = puzzleByBabak[id];
+    if (entry) out[id] = { signature: entry.signature, puzzle: packPuzzleForSave(entry.puzzle) };
+  });
+  return out;
+}
+function unpackPuzzleByBabakFromSave(saved) {
+  const out = {};
+  Object.keys(saved || {}).forEach((id) => {
+    const entry = saved[id];
+    if (entry) out[id] = { signature: entry.signature, puzzle: unpackPuzzleFromSave(entry.puzzle) };
+  });
+  return out;
+}
 
 function buildPuzzle(words) {
   const valid = words.filter((w) => w.letters && w.letters.trim().length > 0);
@@ -1825,7 +1901,7 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
         // penyimpanan di bawah).
         if (parsed.dataByMateri) setDataByMateri(parsed.dataByMateri);
         if (parsed.selectedMateri) setSelectedMateri(parsed.selectedMateri);
-        if (parsed.puzzleByBabak) setPuzzleByBabak(parsed.puzzleByBabak);
+        if (parsed.puzzleByBabak) setPuzzleByBabak(unpackPuzzleByBabakFromSave(parsed.puzzleByBabak));
         if (parsed.pointByBabak) setPointByBabak((prev) => ({ ...prev, ...parsed.pointByBabak }));
         localSavedAt = parsed.savedAt || 0;
       }
@@ -1859,7 +1935,7 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
       if ((cloud.savedAt || 0) > localSavedAt) {
         if (cloud.dataByMateri) setDataByMateri(cloud.dataByMateri);
         if (cloud.selectedMateri) setSelectedMateri(cloud.selectedMateri);
-        if (cloud.puzzleByBabak) setPuzzleByBabak(cloud.puzzleByBabak);
+        if (cloud.puzzleByBabak) setPuzzleByBabak(unpackPuzzleByBabakFromSave(cloud.puzzleByBabak));
         if (cloud.pointByBabak) setPointByBabak((prev) => ({ ...prev, ...cloud.pointByBabak }));
         setImportMsg({ ok: true, text: "Kosakata dipulihkan dari cadangan cloud (localStorage browser ini kosong/lebih basi)." });
       }
@@ -1928,7 +2004,7 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
   useEffect(() => {
     if (!loaded) return;
     const tm = setTimeout(() => {
-      const payload = { dataByMateri, selectedMateri, puzzleByBabak, pointByBabak };
+      const payload = { dataByMateri, selectedMateri, puzzleByBabak: packPuzzleByBabakForSave(puzzleByBabak), pointByBabak };
       const res = safeSetItem("tck-setup-data", JSON.stringify({ ...payload, savedAt: Date.now() }));
       setStorageWarning(res.ok ? null : res.message);
       saveSetupToCloud(teacher.uid, "wordSearch", payload);
@@ -2064,6 +2140,11 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
       const uniqueCode = await ensureUniqueRoomCode(roomCode);
       if (uniqueCode !== roomCode) setRoomCode(uniqueCode);
       babakSnapshotsRef.current = {};
+      // FITUR BARU: Mode angkat tangan (Digital/Manual) dipaksa balik ke Digital tiap kali
+      // "Mulai Permainan" ditekan — sebelumnya kalau guru sempat pindah ke Manual di sesi
+      // sebelumnya (mis. karena kendala buzzer), pilihan itu masih nyangkut ke sesi BARU
+      // berikutnya juga, padahal harusnya tiap sesi baru mulai dari Digital dulu.
+      setMode("digital");
       // FIX: babakId ikut berubah tiap kali guru buka accordion babak lain di Persiapan (buat lihat/
       // edit kosakata Babak 2 atau 3, misalnya) — jadi kalau langsung klik "Mulai Permainan" setelah
       // itu, permainan ikut mulai dari babak yang kebetulan masih terbuka, bukan dari Babak 1. Sengaja
@@ -2108,9 +2189,10 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
       materi: selectedMateri,
       babakId, mode, audioMode, teksDurasiDetik, scores, roomCode, pointByBabak,
       materiWordsSnapshot: wordsWithoutAudio,
-      queue, foundMap,
+      queue,
+      foundMap: packFoundMapForSave(foundMap),
       triedSet: Array.from(triedSet),
-      puzzle,
+      puzzle: packPuzzleForSave(puzzle),
       savedAt: firebase.firestore.FieldValue.serverTimestamp(),
     };
     historyCol.add(snapshot)
@@ -2158,9 +2240,9 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
     setScores(item.scores || { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 });
     setRoomCode(item.roomCode || makeRoomCode());
     setQueue(item.queue || []);
-    setFoundMap(item.foundMap || {});
+    setFoundMap(unpackFoundMapFromSave(item.foundMap));
     setTriedSet(new Set(item.triedSet || []));
-    setPuzzle(item.puzzle || null);
+    setPuzzle(unpackPuzzleFromSave(item.puzzle));
     setClueRevealed(false); setActiveGroup(null); setSelStart(null); setBuzzOrder([]); setOpenToAll(false);
     activeGroupRef.current = null; buzzOrderRef.current = []; triedSetRef.current = new Set(); openToAllRef.current = false;
     setHistoryOpen(false);
@@ -2311,6 +2393,16 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
 
   function playClue() {
     if (!currentWord) return;
+    // FITUR BARU: selama Mode Guru masih aktif, guru semestinya mengoreksi/melanjutkan lewat
+    // papan langsung (klik sel — lihat activeGroup === "guru" di handleCellClick), BUKAN lewat
+    // tombol petunjuk ini ("Tampilkan Teks di Layar" / putar audio / "Siap — Boleh Angkat
+    // Tangan"). Kalau dipakai bersamaan, bisa bikin status jadi tidak konsisten. Jadi tombol ini
+    // dikunci selama Mode Guru menyala, dan peringatan ditampilkan TIAP KALI ditekan (bukan cuma
+    // sekali) sampai guru mematikan Mode Guru dulu.
+    if (guruModeOn) {
+      alert("Mode Guru masih aktif. Matikan dulu Mode Guru sebelum melanjutkan ke soal berikutnya.");
+      return;
+    }
     // Mode Guru Bebas: TIDAK ada apa pun yang ditampilkan/diputar sistem — guru membacakan
     // petunjuknya sendiri secara lisan (dari catatannya sendiri). Klik tombol ini semata-mata
     // untuk membuka kunci angkat tangan siswa, tepat saat guru siap (biasanya sesaat sebelum atau
@@ -2901,12 +2993,12 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
 
         {currentWord && (
           <button onClick={playClue} className="grp-btn" style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", background: "#F4B740", color: "#101B34", border: "none", borderRadius: 10, padding: "12px 16px", fontWeight: 700, fontSize: 15, cursor: "pointer" }}>
-            {audioMode === "guru" && currentWord.audioUrl ? <span style={{ fontSize: 18, lineHeight: 1, color: 'inherit' }}>🔊</span>
+            {audioMode === "guru" ? <span style={{ fontSize: 18, lineHeight: 1, color: 'inherit' }}>🔊</span>
               : audioMode === "bebas" ? <span style={{ fontSize: 18, lineHeight: 1, color: 'inherit' }}>🎙️</span>
               : <span style={{ fontSize: 18, lineHeight: 1, color: 'inherit' }}>🔇</span>}
-            {audioMode === "guru" && currentWord.audioUrl ? (speaking ? "Memutar…" : "Putar Petunjuk")
+            {audioMode === "guru" ? (speaking ? "Memutar…" : "Putar Audio")
               : audioMode === "bebas" ? "Siap — Boleh Angkat Tangan"
-              : "Tampilkan Teks di Layar"}
+              : "Tampilkan Teks"}
           </button>
         )}
         {/* Sengaja TIDAK ada teks petunjuk permanen di sini, di ketiga mode:
@@ -2940,7 +3032,7 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
           </div>
         )}
         {!guruModeOn && currentWord && !clueRevealed && (
-          <div style={{ marginBottom: 10, fontSize: 12, color: "#F4B740", background: "rgba(244,183,64,.12)", borderRadius: 8, padding: "8px 10px" }}>Tombol masih terkunci — klik "{audioMode === "guru" && currentWord.audioUrl ? "Putar Petunjuk" : audioMode === "bebas" ? "Siap — Boleh Angkat Tangan" : "Tampilkan teks"}" di panel kanan dulu supaya kelompok bisa angkat tangan.</div>
+          <div style={{ marginBottom: 10, fontSize: 12, color: "#F4B740", background: "rgba(244,183,64,.12)", borderRadius: 8, padding: "8px 10px" }}>Tombol masih terkunci — klik "{audioMode === "guru" ? "Putar Audio" : audioMode === "bebas" ? "Siap — Boleh Angkat Tangan" : "Tampilkan Teks"}" di panel kanan dulu supaya kelompok bisa angkat tangan.</div>
         )}
         {/* FIX (fitur diminta): dulu di mode Manual, guru cuma bisa memilih SATU kelompok
             (klik langsung setActiveGroup), dan begitu satu kelompok aktif, tombol kelompok
