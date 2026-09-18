@@ -1872,9 +1872,17 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
       // FIX: babakId ikut berubah tiap kali guru buka accordion babak lain di Persiapan (buat lihat/
       // edit kosakata Babak 2 atau 3, misalnya) — jadi kalau langsung klik "Mulai Permainan" setelah
       // itu, permainan ikut mulai dari babak yang kebetulan masih terbuka, bukan dari Babak 1. Sengaja
-      // dipaksa mulai dari Babak 1 di sini, terlepas dari accordion mana yang terakhir dibuka.
-      setBabakId(1);
-      resetRound(1);
+      // dipaksa mulai dari Babak 1 (bukan babak terakhir yang dibuka) di sini.
+      //
+      // BUGFIX (ditemukan saat review kode): "dipaksa ke Babak 1" itu tadinya hardcode `1` — padahal
+      // canStart cuma mensyaratkan SALAH SATU dari Babak 1/2/3 terisi (lihat definisi canStart di
+      // bawah), jadi guru boleh saja cuma isi Babak 2 & biarkan Babak 1 kosong. Kalau tetap dipaksa
+      // ke Babak 1 yang kosong itu, resetRound(1) menghasilkan puzzle null & queue kosong — layar
+      // Bermain langsung macet tanpa papan/soal sama sekali begitu ditekan. Sekarang dicari babak
+      // PERTAMA (urut 1→2→3) yang benar-benar punya kosakata, baru dipakai sebagai titik mulai.
+      const firstNonEmptyBabak = [1, 2, 3].find((id) => (dataByMateri[selectedMateri]?.[id] || []).some((w) => w.letters.trim())) || 1;
+      setBabakId(firstNonEmptyBabak);
+      resetRound(firstNonEmptyBabak);
       setStage("play");
     } finally {
       setStartingGame(false);
@@ -4228,11 +4236,20 @@ function AccountsTab({ t, teacher }) {
   // catatan di isEmailAllowedForTeacher()), yang errornya berkode "permission-denied". Pesan
   // "cek koneksi" jelas menyesatkan kalau internetnya baik-baik saja — guru jadi bingung mencari
   // masalah di tempat yang salah. Sekarang errornya dibedakan berdasarkan kodenya.
+  //
+  // FIX LAGI: pesan yang "dibedakan" itu ternyata masih belum cukup — kalau ternyata BUKAN
+  // permission-denied ataupun soal koneksi (mis. Firestore/database belum benar-benar dibuat di
+  // Firebase Console, salah region, dsb.), guru tetap kebingungan karena pesannya jatuh ke
+  // fallback "cek koneksi internet" yang sama menyesatkannya. Sekarang kode & pesan error ASLI
+  // dari Firestore selalu ditampilkan juga di layar (bukan cuma disimpan di console), supaya
+  // penyebab sebenarnya langsung kelihatan tanpa perlu buka DevTools.
   function describeFirestoreError(err) {
+    console.error("teacherAllowlist error:", err);
+    const raw = err ? ` [kode: ${err.code || "tidak diketahui"}${err.message ? " — " + err.message : ""}]` : "";
     if (err && err.code === "permission-denied") {
-      return "Ditolak oleh Firestore (permission-denied) — koleksi \"teacherAllowlist\" belum diizinkan di Security Rules Firebase Console. Ini bukan soal koneksi internet.";
+      return "Ditolak oleh Firestore (permission-denied) — koleksi \"teacherAllowlist\" belum diizinkan di Security Rules Firebase Console. Ini bukan soal koneksi internet." + raw;
     }
-    return "Gagal terhubung ke server — cek koneksi internet, lalu coba lagi.";
+    return "Gagal terhubung ke server." + raw;
   }
 
   useEffect(() => {
