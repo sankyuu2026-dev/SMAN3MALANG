@@ -82,25 +82,51 @@ function ensureAnonymousAuth() {
     });
   });
 }
-// Untuk sementara, hanya email kampus @student.ub.ac.id yang boleh login sebagai guru.
-// Kalau nanti perlu menambahkan email guru lain (bukan @student.ub.ac.id), tambahkan alamat
-// lengkapnya (huruf kecil semua) ke TEACHER_EMAIL_ALLOWLIST.
+// FITUR BARU: dulu hanya email @student.ub.ac.id yang boleh login (daftar tetap di kode,
+// TEACHER_EMAIL_ALLOWLIST kosong selamanya kecuali diedit manual & di-deploy ulang). Sekarang
+// guru yang SUDAH login bisa menambahkan email guru lain langsung dari halaman Pengaturan
+// ("Akun" tab), tersimpan di Firestore (koleksi teacherAllowlist, id dokumen = email huruf
+// kecil) — tidak perlu edit kode/deploy ulang lagi tiap kali ada guru baru.
+//
+// PENTING (keamanan, wajib dikerjakan di Firebase Console → Firestore → Rules, bukan di file
+// ini): tanpa Firestore Security Rules yang membatasi, siapa pun yang tahu konfigurasi Firebase
+// project ini bisa menulis langsung ke koleksi teacherAllowlist dari luar aplikasi (melewati
+// tombol "Tambah" di halaman Pengaturan) dan menambahkan email sembarang supaya bisa login.
+// Contoh rule minimal yang perlu ditambahkan:
+//   match /teacherAllowlist/{email} {
+//     allow read: if request.auth != null;
+//     allow create, delete: if request.auth != null
+//       && exists(/databases/$(database)/documents/teacherAllowlist/$(request.auth.token.email.lower()))
+//       || request.auth.token.email.lower().matches('.*@student[.]ub[.]ac[.]id$');
+//   }
+// (Sesuaikan lagi kalau perlu — intinya: hanya guru yang SUDAH tercatat/berdomain kampus yang
+// boleh menambah/menghapus entri di koleksi ini.)
 const TEACHER_ALLOWED_DOMAINS = ["student.ub.ac.id"];
 const TEACHER_EMAIL_ALLOWLIST = [];
-function isEmailAllowedForTeacher(email) {
+async function isEmailAllowedForTeacher(email) {
   if (!email) return false;
   const lower = email.toLowerCase();
   if (TEACHER_EMAIL_ALLOWLIST.includes(lower)) return true;
-  return TEACHER_ALLOWED_DOMAINS.some((domain) => lower.endsWith("@" + domain));
+  if (TEACHER_ALLOWED_DOMAINS.some((domain) => lower.endsWith("@" + domain))) return true;
+  try {
+    const snap = await db.collection("teacherAllowlist").doc(lower).get();
+    return snap.exists;
+  } catch (e) {
+    return false; // offline/gagal cek — jangan diam-diam meloloskan siapa pun
+  }
 }
 function signInTeacherWithGoogle() {
   const provider = new firebase.auth.GoogleAuthProvider();
-  // Kalau student.ub.ac.id adalah Google Workspace, ini akan mempersempit pilihan akun Google
-  // yang ditawarkan ke domain tersebut (hanya bantuan tampilan, tetap dicek ulang di bawah).
-  provider.setCustomParameters({ hd: "student.ub.ac.id" });
-  return auth.signInWithPopup(provider).then((result) => {
+  // FIX: dulu ada `provider.setCustomParameters({ hd: "student.ub.ac.id" })` di sini — ini
+  // membatasi pilihan akun Google HANYA ke domain itu di level Google sendiri, SEBELUM kode kita
+  // sempat mengecek apa pun. Akibatnya guru dengan email lain (mis. guru pamong yang sudah
+  // ditambahkan lewat halaman Pengaturan) tidak akan bisa memilih akunnya sama sekali di jendela
+  // login Google — bukan ditolak sesudah login, tapi memang tidak muncul sebagai pilihan.
+  // Dihapus supaya semua akun Google bisa dipilih; pembatasan sesungguhnya tetap dilakukan
+  // sesudahnya lewat isEmailAllowedForTeacher() di bawah.
+  return auth.signInWithPopup(provider).then(async (result) => {
     const email = result.user && result.user.email;
-    if (!isEmailAllowedForTeacher(email)) {
+    if (!(await isEmailAllowedForTeacher(email))) {
       return auth.signOut().then(() => {
         const err = new Error("Email tidak diizinkan");
         err.code = "auth/email-not-allowed";
@@ -1907,7 +1933,12 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
     } catch (e) { return ""; }
   }
 
-  useEffect(() => () => { clearRetryTimer(); if (confettiTimerRef.current) clearTimeout(confettiTimerRef.current); if (autoNextIntervalRef.current) clearInterval(autoNextIntervalRef.current); }, []);
+  // FIX (bug): timer untuk hint overlay (teks petunjuk yang tampil beberapa detik di tengah
+  // layar, lihat playClue mode "Teks") tidak ikut dibersihkan di sini — kalau guru pindah
+  // halaman (klik "← Persiapan"/"Akhiri Permainan") tepat saat overlay itu masih menghitung
+  // mundur, timernya tetap jalan lalu memanggil setHintOverlayVisible() pada komponen yang
+  // sudah tidak ada lagi ("Can't perform a state update on an unmounted component").
+  useEffect(() => () => { clearRetryTimer(); if (confettiTimerRef.current) clearTimeout(confettiTimerRef.current); if (autoNextIntervalRef.current) clearInterval(autoNextIntervalRef.current); if (hintOverlayTimerRef.current) clearTimeout(hintOverlayTimerRef.current); }, []);
 
   const currentWord = queue.length > 0 ? babak.words.find((w) => w.id === queue[0]) : null;
   const totalWords = queue.length + Object.keys(foundMap).length;
@@ -2731,7 +2762,16 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
 
 
   /* ---------------- Modal: Simpan & Jeda (nama kelas) ---------------- */
-  const SaveNameModal = () => (
+  // FIX (bug): SaveNameModal & HistoryModal ini dulu ditulis sebagai `const X = () => (...)` —
+  // "komponen" yang didefinisikan ULANG setiap kali TebakCariKataGame render. Sama persis dengan
+  // penyebab bug kedipan papan yang sudah diperbaiki sebelumnya (lihat renderGrid dkk. di atas),
+  // tapi dampaknya di sini lebih terasa: SaveNameModal punya kotak isian teks (nama kelas). Kalau
+  // ada data real-time yang masuk (mis. siswa baru join lewat QR) SAAT guru sedang mengetik nama
+  // kelas, React membongkar-pasang ulang seluruh modal termasuk elemen <input>-nya — inputnya
+  // jadi KEHILANGAN FOKUS di tengah ketikan, guru harus klik ulang tiap beberapa huruf. Sekarang
+  // ditulis sebagai fungsi biasa yang dipanggil langsung, sama seperti renderGrid dkk., supaya
+  // React tidak menganggapnya komponen baru dan input tidak pernah dibongkar-pasang saat diketik.
+  function renderSaveNameModal() { return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 70 }} onClick={() => !savingSession && setSaveNameOpen(false)}>
       <div onClick={(e) => e.stopPropagation()} style={{ width: "min(360px, 90vw)", background: t.modalBg, borderRadius: 20, padding: 24, boxShadow: "0 20px 60px rgba(0,0,0,.4)" }}>
         <div className="sgt" style={{ fontSize: 17, fontWeight: 700, color: t.text, marginBottom: 6 }}>Simpan & Jeda Sesi</div>
@@ -2746,10 +2786,10 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
         </div>
       </div>
     </div>
-  );
+  ); }
 
   /* ---------------- Modal: Riwayat Sesi ---------------- */
-  const HistoryModal = () => (
+  function renderHistoryModal() { return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 70, padding: 20 }} onClick={() => setHistoryOpen(false)}>
       <div onClick={(e) => e.stopPropagation()} style={{ width: "min(520px, 92vw)", maxHeight: "80vh", overflowY: "auto", background: t.modalBg, borderRadius: 20, padding: 24, boxShadow: "0 20px 60px rgba(0,0,0,.4)" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
@@ -2777,11 +2817,17 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
         )}
       </div>
     </div>
-  );
+  ); }
 
 
   /* ---------------- Modal: Konfirmasi Kembali ke Persiapan ---------------- */
-  function BackConfirmModal() {
+  // FIX (bug, dedup): sama seperti SaveNameModal/HistoryModal — dulu ditulis sebagai fungsi yang
+  // dipakai lewat tag JSX (`<BackConfirmModal />`), yang berarti tetap dianggap "komponen baru"
+  // tiap render walau ditulis pakai kata kunci `function`. Modal ini memang tidak punya kotak
+  // isian (jadi tidak sampai kehilangan fokus ketikan), tapi tetap dirapikan ke pola yang sama
+  // (dipanggil langsung sebagai fungsi) supaya konsisten dan tidak ikut membongkar-pasang ulang
+  // tanpa perlu tiap kali ada data real-time yang masuk selagi modal ini terbuka.
+  function renderBackConfirmModal() {
     return (
       <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
         <div style={{ background: t.panel, borderRadius: 18, padding: "28px 24px", maxWidth: 380, width: "100%", boxShadow: "0 8px 40px rgba(0,0,0,0.25)" }}>
@@ -2842,7 +2888,7 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
       <div className="app-screen" style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: t.bg, color: t.text, minHeight: "100vh", padding: 28, boxSizing: "border-box", position: "relative", overflow: "hidden" }}>
         <style>{fontImport}</style>
         <JapaneseBackdrop theme={theme} />
-        {historyOpen && <HistoryModal />}
+        {historyOpen && renderHistoryModal()}
 
         {/* FIX: dulu cuma header yang dibungkus position:relative+zIndex:1 — sisanya (panel Pilih
             materi, Kosakata per babak, dst) tidak, jadi backdrop (position:fixed, zIndex:0) yang
@@ -3133,8 +3179,8 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
         <div style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: t.bg, color: t.text, height: "100vh", width: "100vw", boxSizing: "border-box", overflow: "hidden", display: "grid", gridTemplateColumns: "220px minmax(0,1fr) 320px", gap: 16, padding: "58px 16px 16px" }}>
           <style>{fontImport}</style>
           <audio ref={audioRef} style={{ display: "none" }} />
-          {saveNameOpen && <SaveNameModal />}
-      {showBackConfirm && <BackConfirmModal />}
+          {saveNameOpen && renderSaveNameModal()}
+      {showBackConfirm && renderBackConfirmModal()}
           <CelebrationOverlay particles={confetti} />
           {renderHintOverlay()}
           {topOverlayButtons}
@@ -3188,8 +3234,8 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
       <div style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: t.bg, color: t.text, minHeight: "100vh", boxSizing: "border-box", position: "relative", overflowX: "hidden" }}>
         <style>{fontImport}</style>
         <audio ref={audioRef} style={{ display: "none" }} />
-        {saveNameOpen && <SaveNameModal />}
-      {showBackConfirm && <BackConfirmModal />}
+        {saveNameOpen && renderSaveNameModal()}
+      {showBackConfirm && renderBackConfirmModal()}
         <CelebrationOverlay particles={confetti} />
         {renderHintOverlay()}
         {topOverlayButtons}
@@ -3241,8 +3287,8 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
     }}>
       <style>{fontImport}</style>
       <audio ref={audioRef} style={{ display: "none" }} />
-      {saveNameOpen && <SaveNameModal />}
-      {showBackConfirm && <BackConfirmModal />}
+      {saveNameOpen && renderSaveNameModal()}
+      {showBackConfirm && renderBackConfirmModal()}
       <CelebrationOverlay particles={confetti} />
       {renderHintOverlay()}
       <QrJoinModal open={qrOpen} onClose={() => setQrOpen(false)} roomCode={roomCode} joinedCount={Object.keys(joinedGroups).length} />
@@ -4082,10 +4128,92 @@ function JapaneseBackdrop({ theme }) {
 // halaman panjang yang harus di-scroll; guru tinggal klik bagian yang relevan.
 const SETTINGS_TABS = [
   { id: "panduan", label: "Panduan", icon: "📖" },
+  { id: "akun", label: "Akun", icon: "👥" },
   { id: "pengembang", label: "Pengembang", icon: "🧑\u200d💻" },
   { id: "teknis", label: "Teknis", icon: "⚙️" },
 ];
-function SettingsModal({ open, onClose, t }) {
+// FITUR BARU: tab "Akun" — guru yang sedang login bisa menambahkan email guru lain (mis. guru
+// pamong) supaya ikut bisa login dengan akun Google-nya sendiri, tanpa perlu edit kode/deploy
+// ulang. Lihat catatan keamanan panjang di dekat isEmailAllowedForTeacher() — fitur ini di sisi
+// tampilan saja, pembatasan sesungguhnya HARUS ditegakkan lewat Firestore Security Rules.
+function AccountsTab({ t, teacher }) {
+  const [emails, setEmails] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState(false);
+  const [newEmail, setNewEmail] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [formError, setFormError] = useState("");
+
+  useEffect(() => {
+    const unsub = db.collection("teacherAllowlist").onSnapshot(
+      (snap) => {
+        setEmails(snap.docs.map((d) => ({ email: d.id, ...d.data() })).sort((a, b) => a.email.localeCompare(b.email)));
+        setLoaded(true); setLoadError(false);
+      },
+      () => { setLoaded(true); setLoadError(true); }
+    );
+    return () => unsub();
+  }, []);
+
+  function addEmail() {
+    const lower = newEmail.trim().toLowerCase();
+    setFormError("");
+    if (!lower) return;
+    // Validasi format ringan saja (bukan verifikasi email sungguhan ada) — cukup untuk
+    // menyaring salah ketik jelas sebelum tersimpan.
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(lower)) { setFormError("Format email tidak valid."); return; }
+    if (lower.endsWith("@student.ub.ac.id")) { setFormError("Email @student.ub.ac.id sudah otomatis diizinkan, tidak perlu ditambahkan."); return; }
+    if (emails.some((e) => e.email === lower)) { setFormError("Email ini sudah ada di daftar."); return; }
+    setAdding(true);
+    db.collection("teacherAllowlist").doc(lower).set({
+      addedBy: teacher.email || null,
+      addedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    }).then(() => setNewEmail(""))
+      .catch(() => setFormError("Gagal menyimpan — cek koneksi internet, lalu coba lagi."))
+      .finally(() => setAdding(false));
+  }
+  function removeEmail(email) {
+    if (!window.confirm(`Hapus akses login untuk ${email}?`)) return;
+    db.collection("teacherAllowlist").doc(email).delete().catch(() => alert("Gagal menghapus, coba lagi."));
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <div style={{ fontSize: 12.5, color: t.dim, lineHeight: 1.6 }}>
+        Email @student.ub.ac.id selalu otomatis boleh login. Tambahkan di sini kalau ada guru lain (mis. guru pamong) yang perlu login pakai akun Google-nya sendiri di luar domain itu.
+      </div>
+
+      <div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input value={newEmail} onChange={(e) => setNewEmail(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") addEmail(); }}
+            placeholder="email.gurupamong@contoh.com" disabled={adding}
+            style={{ flex: 1, padding: "9px 12px", borderRadius: 8, border: `1px solid ${t.border}`, background: t.panel, color: t.text, fontSize: 13, boxSizing: "border-box" }} />
+          <button onClick={addEmail} disabled={adding || !newEmail.trim()} style={{ background: newEmail.trim() ? "#F4B740" : t.panel2, color: newEmail.trim() ? "#101B34" : t.faint, border: "none", padding: "9px 16px", borderRadius: 8, cursor: newEmail.trim() ? "pointer" : "default", fontSize: 13, fontWeight: 700, whiteSpace: "nowrap" }}>{adding ? "Menyimpan…" : "+ Tambah"}</button>
+        </div>
+        {formError && <div style={{ marginTop: 6, fontSize: 12, color: "#EF5B5B" }}>{formError}</div>}
+      </div>
+
+      {!loaded ? (
+        <div style={{ padding: "16px 0", textAlign: "center", color: t.faint, fontSize: 13 }}>Memuat daftar…</div>
+      ) : loadError ? (
+        <div style={{ padding: "16px 0", textAlign: "center", color: "#EF5B5B", fontSize: 13 }}>Gagal memuat — cek koneksi internet.</div>
+      ) : emails.length === 0 ? (
+        <div style={{ padding: "16px 0", textAlign: "center", color: t.faint, fontSize: 13 }}>Belum ada email tambahan yang ditambahkan.</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {emails.map((e) => (
+            <div key={e.email} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, background: t.panel2, borderRadius: 10, padding: "9px 12px" }}>
+              <span style={{ fontSize: 13, color: t.text, wordBreak: "break-all" }}>{e.email}</span>
+              <button onClick={() => removeEmail(e.email)} title="Hapus akses login email ini" style={{ background: "transparent", border: "none", color: t.faint, cursor: "pointer", padding: 6, flexShrink: 0 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>🗑</span></button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+function SettingsModal({ open, onClose, t, teacher }) {
   const [tab, setTab] = useState("panduan");
   if (!open) return null;
   const rowLabel = { fontSize: 11.5, fontWeight: 700, color: t.faint, textTransform: "uppercase", letterSpacing: 0.4 };
@@ -4125,6 +4253,8 @@ function SettingsModal({ open, onClose, t }) {
             </div>
           )}
 
+          {tab === "akun" && <AccountsTab t={t} teacher={teacher} />}
+
           {tab === "pengembang" && (
             <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -4150,7 +4280,7 @@ function SettingsModal({ open, onClose, t }) {
                 ["Versi", "SanKyuu v1.0"],
                 ["Dibangun dengan", "React 18 + Firebase (Auth & Firestore) — satu file HTML statis, tanpa proses build"],
                 ["Kompatibilitas", "Browser modern (Chrome, Edge, Firefox versi terbaru); Chrome disarankan untuk pengalaman terbaik"],
-                ["Penyimpanan data", "Materi & kosakata disimpan per akun guru di Firestore — datanya tidak bercampur antar guru"],
+                ["Penyimpanan data", "Materi & kosakata disimpan di penyimpanan browser (localStorage) tempat guru mengedit — TIDAK ikut ke akun Google atau ke perangkat/browser lain. Riwayat Sesi & audio petunjuk yang tersimpan lewat \"Simpan & Jeda\" baru yang ikut per akun guru di Firestore."],
                 ["Koneksi internet", "Dibutuhkan untuk login, sinkronisasi buzzer real-time antar perangkat, dan unggah audio petunjuk"],
               ].map(([k, v], i, arr) => (
                 <div key={k} style={{ paddingBottom: 12, borderBottom: i < arr.length - 1 ? `1px solid ${t.border}` : "none" }}>
@@ -4220,7 +4350,7 @@ function App() {
           "auth/operation-not-allowed": "Login Google belum diaktifkan di Firebase Console (Authentication → Sign-in method).",
           "auth/popup-blocked": "Jendela popup login diblokir browser. Izinkan popup untuk situs ini lalu coba lagi.",
           "auth/network-request-failed": "Gagal terhubung ke internet. Cek koneksi lalu coba lagi.",
-          "auth/email-not-allowed": "Login dibatasi hanya untuk email @student.ub.ac.id untuk sementara.",
+          "auth/email-not-allowed": "Email ini belum diizinkan untuk login. Minta guru yang sudah punya akses menambahkannya lewat halaman Pengaturan → Akun.",
         };
         setLoginError(messages[code] || `Gagal masuk${code ? ` (${code})` : ""}. Coba lagi.`);
       })
@@ -4279,7 +4409,7 @@ function App() {
           </div>
         </div>
         <div style={{ fontSize: 14, color: pt.dim, marginBottom: 26, maxWidth: 560 }}>Web interaktif siswa SMA berisi 3 game & 9 materi Bahasa Jepang kelas XI — pilih salah satu permainan di bawah ini untuk mulai sesi.</div>
-        <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} t={pt} />
+        <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} t={pt} teacher={authUser} />
         <div className="game-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 230px))", gap: 20, justifyContent: "center", perspective: 1200 }}>
           {GAMES.map((g, i) => (
             <button
