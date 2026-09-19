@@ -1709,6 +1709,23 @@ function CardsPlayArea({ roomCode, room, myGroup }) {
   const matchedCount = cards.filter((c) => c.matched).length / 2;
   const allMatched = totalPairs > 0 && matchedCount === totalPairs;
 
+  // FITUR BARU (Langkah 3 — bagian yang paling rumit dari rencana perbaikan, karena butuh HP
+  // siswa mengirim data baru ke Firestore, bukan cuma tampilan): dulu guru cuma tahu SIAPA yang
+  // sudah SELESAI (cardsFinishers), tapi buta total soal kelompok yang masih mengerjakan — tidak
+  // tahu mana yang baru mulai, mana yang hampir selesai, atau mana yang kelihatannya macet/
+  // kebingungan. Sekarang tiap kelompok melaporkan progresnya sendiri (matchedCount) ke field
+  // cardsProgress di dokumen room, setiap kali angkanya berubah — bukan tiap ketukan kartu,
+  // supaya tidak menulis Firestore dua kali untuk satu pasangan yang sama (sekali saat cocok,
+  // BUKAN saat kartu pertama/kedua baru dipilih). Ditulis dengan .catch(() => {}) senyap karena
+  // ini cuma data tampilan tambahan bagi guru — kalau sesekali gagal terkirim (mis. sinyal HP
+  // siswa putus-putus), permainan siswa itu sendiri tidak boleh ikut terganggu/macet karenanya.
+  useEffect(() => {
+    if (!roundId || matchedCount === 0) return;
+    db.collection("rooms").doc(roomCode).set({
+      cardsProgress: { [myGroup]: matchedCount },
+    }, { merge: true }).catch(() => {});
+  }, [matchedCount, roundId, roomCode, myGroup]);
+
   // Kirim sinyal "selesai" sekali saja begitu semua pasangan ketemu, lewat transaksi (sama
   // seperti pressBuzz di Game 1) supaya urutan siapa-selesai-duluan tercatat dengan benar.
   useEffect(() => {
@@ -1731,12 +1748,52 @@ function CardsPlayArea({ roomCode, room, myGroup }) {
   const centerWrap = { ...wrap, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center" };
 
   if (!roundId) {
+    // FITUR BARU (Langkah 1 dari rencana perbaikan — murni visual, tidak menyentuh data sama
+    // sekali): dulu layar ini cuma teks polos di latar kosong, terasa "mati" dan bikin siswa
+    // ragu apakah halamannya benar-benar tersambung atau macet. Sekarang dikasih dekorasi
+    // spotlight (senada dengan layar pilih kelompok), badge kelompok berwarna sesuai warna
+    // kelompoknya sendiri, dan pratinjau 6 kartu skeleton yang beranimasi masuk lalu berkilau
+    // bergantian — sekadar isyarat visual "sesuatu akan muncul di sini", bukan data sungguhan.
+    const myColor = GROUP_COLORS[myGroup - 1];
     return (
-      <div style={centerWrap}>
+      <div style={{ ...centerWrap, position: "relative", overflow: "hidden" }}>
         <style>{fontImport}</style>
-        <div style={{ fontSize: 12.5, color: t.dim, marginBottom: 4 }}>Room {roomCode} · Kelompok {myGroup}</div>
-        <div className="sgt" style={{ fontSize: 20, fontWeight: 700, marginBottom: 4 }}>Menunggu aba-aba guru…</div>
-        <div style={{ fontSize: 13, color: t.dim }}>Bersiap-siap, papan kartu akan muncul begitu guru menekan mulai.</div>
+        <div style={{ position: "fixed", inset: 0, background: "radial-gradient(480px 360px at 50% 8%, rgba(244,183,64,.28), transparent 65%)", pointerEvents: "none", zIndex: 0 }} />
+        <div style={{ position: "relative", zIndex: 1, width: "100%", maxWidth: 340 }}>
+          <div style={{ display: "inline-flex", alignItems: "center", gap: 8, background: t.panel, borderRadius: 999, padding: "7px 16px", marginBottom: 18, boxShadow: "0 8px 22px rgba(30,34,51,.10)" }}>
+            <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#3FBFAD", flexShrink: 0 }} />
+            <span className="sgt" style={{ fontSize: 13, fontWeight: 700, letterSpacing: 1.2 }}>ROOM {roomCode}</span>
+          </div>
+
+          <div style={{ display: "inline-flex", alignItems: "center", gap: 8, background: myColor, color: "#101B34", borderRadius: 999, padding: "6px 16px", marginBottom: 20, fontWeight: 700, fontSize: 13.5 }}>
+            Kelompok {myGroup}
+          </div>
+
+          {/* Pratinjau kartu skeleton — cuma bentuk & animasi, tidak mewakili data pasangan
+              sungguhan (yang mana pun juga belum ada, karena guru belum menekan Mulai Babak). */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 22 }}>
+            {[0, 1, 2, 3, 4, 5].map((i) => (
+              <div key={i} className="game-card" style={{
+                aspectRatio: "3 / 4", borderRadius: 12, background: t.panel2,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                animationDelay: `${i * 70}ms`, "--shimmer-delay": `${900 + i * 180}ms`,
+                boxShadow: t.shadowSm,
+              }}>
+                <span style={{ fontSize: 20, opacity: 0.35 }}>🃏</span>
+              </div>
+            ))}
+          </div>
+
+          <div className="sgt" style={{ fontSize: 19, fontWeight: 700, marginBottom: 6, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+            <span>Menunggu aba-aba guru</span>
+            <span style={{ display: "inline-flex", gap: 3 }}>
+              <span style={{ width: 5, height: 5, borderRadius: "50%", background: t.text, animation: "timerPulse 1.2s ease-in-out infinite" }} />
+              <span style={{ width: 5, height: 5, borderRadius: "50%", background: t.text, animation: "timerPulse 1.2s ease-in-out .2s infinite" }} />
+              <span style={{ width: 5, height: 5, borderRadius: "50%", background: t.text, animation: "timerPulse 1.2s ease-in-out .4s infinite" }} />
+            </span>
+          </div>
+          <div style={{ fontSize: 13, color: t.dim }}>Bersiap-siap, papan kartu akan muncul begitu guru menekan "Mulai Babak".</div>
+        </div>
       </div>
     );
   }
@@ -4193,6 +4250,11 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
   const [joinedGroups, setJoinedGroups] = useState({});
   const [cardsRoundId, setCardsRoundId] = useState(null);
   const [finishers, setFinishers] = useState([]);
+  // FITUR BARU (Langkah 3): progres langsung tiap kelompok SELAGI babak masih berjalan — bukan
+  // cuma tahu siapa yang sudah SELESAI (finishers) seperti sebelumnya. Diisi oleh HP tiap siswa
+  // sendiri-sendiri lewat field cardsProgress di dokumen room (lihat CardsPlayArea), guru cukup
+  // dengar lewat onSnapshot yang sama seperti field lain di bawah ini.
+  const [cardsProgress, setCardsProgress] = useState({});
   const [scored, setScored] = useState(false);
   const [publishing, setPublishing] = useState(false);
   // FITUR BARU: batas waktu per babak (lihat makeBabak/startRound) — cardsRoundEndsAt disimpan
@@ -4324,6 +4386,25 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
   function validPairs(b) { return b.pairs.filter((p) => p.word.trim() && p.image); }
   const canStart = babaks.length > 0 && babaks.every((b) => validPairs(b).length >= 5);
 
+  // Pratinjau papan (Langkah 2) — dibangun dari pasangan yang SUDAH ada di babak yang sedang
+  // dibuka, diacak sekali lewat useMemo (bukan di dalam render biasa) supaya urutannya stabil
+  // selama tidak ada perubahan pada pasangan babak ini, dan reshuffle otomatis begitu guru
+  // menambah/menghapus/mengedit pasangan (memberi gambaran acakan yang selalu mutakhir).
+  const previewDeck = useMemo(() => {
+    const vp = validPairs(babak);
+    if (vp.length === 0) return [];
+    const deck = vp.flatMap((p) => [
+      { key: p.id + "-img", kind: "image", content: p.image },
+      { key: p.id + "-word", kind: "word", content: p.word },
+    ]);
+    for (let i = deck.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [deck[i], deck[j]] = [deck[j], deck[i]];
+    }
+    return deck;
+  }, [babak.pairs]);
+  const previewCols = Math.min(5, Math.max(3, Math.round(Math.sqrt(previewDeck.length))));
+
   const [startingGame, setStartingGame] = useState(false);
   // FIX (UX): sama seperti Word Search — startSession() memanggil Firestore (cek kode room)
   // yang bisa terasa "diam saja" tanpa reaksi kalau koneksinya lambat. Tambah state loading
@@ -4357,6 +4438,7 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
       setJoinedGroups(data.groups || {});
       setCardsRoundId(data.cardsRoundId || null);
       setFinishers(Array.isArray(data.cardsFinishers) ? data.cardsFinishers : []);
+      setCardsProgress(data.cardsProgress || {});
       setCardsRoundEndsAt(data.cardsRoundEndsAt || null);
     });
     return () => unsub();
@@ -4372,17 +4454,27 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
   const remainingSec = cardsRoundEndsAt ? Math.max(0, Math.round((cardsRoundEndsAt - nowTick) / 1000)) : null;
   const timeUp = remainingSec === 0;
 
+  // FITUR BARU (perubahan sistem skor atas permintaan guru): dulu juara-1 dapat `totalGroups`
+  // poin, lalu tiap peringkat di bawahnya turun 1 poin (n, n-1, n-2, ...) dengan lantai minimal
+  // 1 poin, dan kelompok yang belum sempat selesai tetap dapat 1 poin flat. Sekarang diganti:
+  // - Juara 1 tetap dapat `totalGroups` poin (mis. 6 kelompok join → juara 1 dapat 6).
+  // - Mulai juara 2 dan seterusnya turun 1 poin per peringkat (BUKAN patokan dari totalGroups
+  //   lagi, tapi dari "totalGroups - 1" ke bawah), sampai juara paling akhir dapat PERSIS 0 —
+  //   jadi selisih juara 1 ke juara 2 sengaja 2 poin (satu kali saja di paling atas), baru
+  //   turun 1 poin rata tiap peringkat setelahnya. Contoh 6 kelompok: 6, 4, 3, 2, 1, 0.
+  // - Kelompok yang sudah join tapi TIDAK sempat menyelesaikan babak ini sekarang dapat 0 poin
+  //   (disamakan dengan finis paling akhir), bukan 1 poin flat seperti sebelumnya.
   function applyScores(finalFinishers) {
     const totalGroups = Object.keys(joinedGroups).length || finalFinishers.length;
     if (totalGroups === 0) { setScored(true); return; }
     setScores((prev) => {
       const next = { ...prev };
-      finalFinishers.forEach((f, i) => { next[f.group] = (next[f.group] || 0) + Math.max(totalGroups - i, 1); });
-      // Kelompok yang sudah join tapi belum menyelesaikan babak ini tetap dapat 1 poin (floor).
-      Object.keys(joinedGroups).forEach((gStr) => {
-        const g = Number(gStr);
-        if (!finalFinishers.some((f) => f.group === g)) next[g] = (next[g] || 0) + 1;
+      finalFinishers.forEach((f, i) => {
+        const points = i === 0 ? totalGroups : Math.max(totalGroups - 1 - i, 0);
+        next[f.group] = (next[f.group] || 0) + points;
       });
+      // Kelompok yang sudah join tapi belum menyelesaikan babak ini dapat 0 poin (tidak ada
+      // penambahan sama sekali) — disamakan dengan finis paling akhir.
       return next;
     });
     setScored(true);
@@ -4422,12 +4514,13 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
       });
       if (changedCount > 0) await batch.commit();
       const newRoundId = uid();
-      // FITUR BARU: batas waktu babak ini (timeLimitSec, diatur guru di Persiapan) diubah jadi
+      // FITUR BARU: batas waktu babak ini (timeLimitSec, diatur guru di layar Bermain sesaat
+      // sebelum babak dimulai — lihat kontrol "Waktu babak" di sebelah tombol ini) diubah jadi
       // TIMESTAMP absolut (bukan cuma "180 detik" yang disimpan mentah) supaya panel guru dan
       // layar tiap siswa menghitung mundur ke titik akhir yang PERSIS SAMA, tidak peduli kapan
       // masing-masing perangkat memuat/membaca datanya.
       const roundEndsAt = Date.now() + (babak.timeLimitSec || 180) * 1000;
-      await db.collection("rooms").doc(roomCode).set({ cardsRoundId: newRoundId, cardsFinishers: [], cardsRoundEndsAt: roundEndsAt }, { merge: true });
+      await db.collection("rooms").doc(roomCode).set({ cardsRoundId: newRoundId, cardsFinishers: [], cardsProgress: {}, cardsRoundEndsAt: roundEndsAt }, { merge: true });
       setScored(false);
     } catch (e) {
       alert("Gagal memulai babak, coba lagi.");
@@ -4450,7 +4543,7 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
     if (babakIdx >= babaks.length - 1) return;
     const nextIdx = babakIdx + 1;
     setBabakIdx(nextIdx);
-    db.collection("rooms").doc(roomCode).set({ babakIdx: nextIdx, cardsRoundId: null, cardsFinishers: [], cardsRoundEndsAt: null }, { merge: true }).catch(() => {});
+    db.collection("rooms").doc(roomCode).set({ babakIdx: nextIdx, cardsRoundId: null, cardsFinishers: [], cardsProgress: {}, cardsRoundEndsAt: null }, { merge: true }).catch(() => {});
     setFinishers([]); setCardsRoundId(null); setCardsRoundEndsAt(null); setScored(false);
   }
 
@@ -4541,16 +4634,6 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
               {validPairs(babak).length} / {babak.pairs.length} pasangan siap{!isMobile ? " (minimal 5 pasangan lengkap kata + gambar)" : ""}
             </div>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-              {/* FITUR BARU: batas waktu babak ini — dipakai untuk hitung mundur saat "play"
-                  (lihat startRound/CardsPlayArea). Langkah 30 detik, 30 detik–20 menit. */}
-              <div title="Batas waktu babak ini saat dimainkan" style={{ display: "flex", alignItems: "center", gap: 10, background: t.panel2, borderRadius: 10, padding: "8px 12px" }}>
-                <span style={{ fontSize: 12.5, color: t.dim }}>⏱ Waktu babak</span>
-                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <button onClick={() => setBabakTimeLimit(babakIdx, (babak.timeLimitSec || 180) - 30)} title="Kurangi 30 detik" style={{ width: 26, height: 26, borderRadius: 7, border: "none", background: t.panel, color: t.text, fontSize: 15, fontWeight: 700, cursor: "pointer", lineHeight: 1 }}>−</button>
-                  <span className="sgt" style={{ minWidth: 42, textAlign: "center", fontWeight: 700, fontSize: 14, color: t.text }}>{formatDuration(babak.timeLimitSec || 180)}</span>
-                  <button onClick={() => setBabakTimeLimit(babakIdx, (babak.timeLimitSec || 180) + 30)} title="Tambah 30 detik" style={{ width: 26, height: 26, borderRadius: 7, border: "none", background: t.panel, color: t.text, fontSize: 15, fontWeight: 700, cursor: "pointer", lineHeight: 1 }}>+</button>
-                </div>
-              </div>
               <button onClick={() => setBulkAddOpen(true)} style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: `1px dashed ${t.border}`, color: t.dim, borderRadius: 8, padding: "8px 14px", cursor: "pointer", fontSize: 13 }}>📋 Tambah Banyak Sekaligus</button>
             </div>
           </div>
@@ -4585,6 +4668,40 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
           />
         </div>
 
+        {/* FITUR BARU (Langkah 2 — masih murni tampilan, memakai data pasangan yang sudah ada di
+            babak.pairs, tidak menambah data baru): dulu guru cuma bisa membayangkan sendiri
+            seperti apa papan yang akan dilihat siswa. Sekarang ada pratinjau nyata memakai gambar
+            & kata yang sudah diunggah, disusun & diacak SEKALI per babak (useMemo) supaya tidak
+            berubah-ubah tiap kali komponen render ulang — persis gambaran satu contoh papan HP
+            siswa (tiap siswa nanti tetap dapat acakan sendiri-sendiri saat main sungguhan). */}
+        <div style={{ background: t.panel, borderRadius: 16, padding: "18px 20px", marginBottom: 20, boxShadow: t.shadowSm }}>
+          <SectionLabel n={3} faint={t.faint} hint="— contoh acakan, bukan yang dipakai persis saat main">Pratinjau Papan — {babak.label}</SectionLabel>
+          {previewDeck.length === 0 ? (
+            <div style={{ padding: 20, color: t.dim, fontSize: 13, textAlign: "center", background: t.panel2, borderRadius: 12, marginTop: 12 }}>
+              Lengkapi minimal 1 pasangan (kata + gambar) di atas dulu untuk melihat pratinjau papan.
+            </div>
+          ) : (
+            <>
+              <div style={{ display: "grid", gridTemplateColumns: `repeat(${previewCols}, 1fr)`, gap: 8, marginTop: 12, maxWidth: 460 }}>
+                {previewDeck.map((c, i) => (
+                  <div key={c.key} className="game-card" style={{
+                    aspectRatio: "3 / 4", borderRadius: 12, background: "#FFFFFF", padding: c.kind === "image" ? 0 : 6,
+                    display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden",
+                    boxShadow: t.shadowSm, animationDelay: `${Math.min(i, 12) * 40}ms`,
+                  }}>
+                    {c.kind === "image"
+                      ? <img src={c.content} alt="" style={{ width: "100%", height: "100%", objectFit: "contain", display: "block", background: "#FFFFFF" }} />
+                      : <div className="sgt" style={{ fontSize: 12, fontWeight: 700, color: "#1E2233", textAlign: "center", wordBreak: "break-word", lineHeight: 1.25 }}>{c.content}</div>}
+                  </div>
+                ))}
+              </div>
+              <div style={{ fontSize: 11.5, color: t.faint, marginTop: 10, lineHeight: 1.5 }}>
+                Ini cuma contoh susunan — tiap siswa nanti dapat acakan posisi sendiri-sendiri di HP masing-masing saat babak dimulai, bukan papan yang sama persis dengan ini.
+              </div>
+            </>
+          )}
+        </div>
+
         <button onClick={startSession} disabled={!canStart || startingGame} style={{
           display: "flex", alignItems: "center", gap: 8, background: canStart ? "#F4B740" : t.panel2, color: canStart ? "#101B34" : t.faint,
           border: "none", borderRadius: 12, padding: "14px 22px", fontWeight: 700, fontSize: 15, cursor: canStart && !startingGame ? "pointer" : "default",
@@ -4600,6 +4717,7 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
   }
 
   const totalGroups = Object.keys(joinedGroups).length;
+  const totalPairsThisRound = validPairs(babak).length;
 
   return (
     <div className="app-screen" style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: t.bg, color: t.text, minHeight: "100vh", padding: 28, boxSizing: "border-box" }}>
@@ -4650,12 +4768,59 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
           </div>
 
           {!cardsRoundId ? (
-            <button onClick={startRound} disabled={publishing || totalGroups === 0} style={{
-              display: "flex", alignItems: "center", gap: 8, background: totalGroups === 0 ? t.panel2 : "#F4B740", color: totalGroups === 0 ? t.faint : "#101B34",
-              border: "none", borderRadius: 12, padding: "14px 22px", fontWeight: 700, fontSize: 15, cursor: totalGroups === 0 ? "default" : "pointer",
-            }}>{publishing ? "Menyiapkan papan…" : "▶ Mulai Babak Ini"}</button>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              {/* FITUR BARU: kontrol "Waktu babak" dipindah ke sini dari layar Persiapan —
+                  supaya guru bisa mengoreksinya langsung sesaat sebelum tiap babak dimulai,
+                  tergantung situasi kelas saat itu (mis. waktu jam pelajaran mau habis), bukan
+                  cuma ditentukan jauh-jauh hari saat menyusun materi. Cuma tampil SEBELUM babak
+                  ini dimulai (!cardsRoundId) — begitu sudah berjalan, area ini digantikan hitung
+                  mundur beneran di pojok kanan atas yang tidak bisa diubah tengah jalan. */}
+              <div title="Batas waktu babak ini saat dimainkan" style={{ display: "flex", alignItems: "center", gap: 10, background: t.panel2, borderRadius: 10, padding: "8px 12px" }}>
+                <span style={{ fontSize: 12.5, color: t.dim }}>⏱ Waktu babak</span>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <button onClick={() => setBabakTimeLimit(babakIdx, (babak.timeLimitSec || 180) - 30)} title="Kurangi 30 detik" style={{ width: 26, height: 26, borderRadius: 7, border: "none", background: t.panel, color: t.text, fontSize: 15, fontWeight: 700, cursor: "pointer", lineHeight: 1 }}>−</button>
+                  <span className="sgt" style={{ minWidth: 42, textAlign: "center", fontWeight: 700, fontSize: 14, color: t.text }}>{formatDuration(babak.timeLimitSec || 180)}</span>
+                  <button onClick={() => setBabakTimeLimit(babakIdx, (babak.timeLimitSec || 180) + 30)} title="Tambah 30 detik" style={{ width: 26, height: 26, borderRadius: 7, border: "none", background: t.panel, color: t.text, fontSize: 15, fontWeight: 700, cursor: "pointer", lineHeight: 1 }}>+</button>
+                </div>
+              </div>
+              <button onClick={startRound} disabled={publishing || totalGroups === 0} style={{
+                display: "flex", alignItems: "center", gap: 8, background: totalGroups === 0 ? t.panel2 : "#F4B740", color: totalGroups === 0 ? t.faint : "#101B34",
+                border: "none", borderRadius: 12, padding: "14px 22px", fontWeight: 700, fontSize: 15, cursor: totalGroups === 0 ? "default" : "pointer",
+              }}>{publishing ? "Menyiapkan papan…" : "▶ Mulai Babak Ini"}</button>
+            </div>
           ) : (
             <React.Fragment>
+              {/* FITUR BARU (Langkah 3): progres langsung kelompok yang MASIH mengerjakan (belum
+                  masuk daftar finishers di bawah) — data matchedCount dikirim tiap HP siswa
+                  sendiri-sendiri lewat cardsProgress (lihat CardsPlayArea & onSnapshot di atas).
+                  Disembunyikan otomatis kalau semua yang join sudah selesai (list-nya kosong),
+                  supaya tidak ada judul seksi kosong tanpa isi. */}
+              {GROUP_NAMES.some((g) => joinedGroups[g] && !finishers.some((f) => f.group === g)) && (
+                <div style={{ marginBottom: 16 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>Progres kelompok</div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                    {GROUP_NAMES.filter((g) => joinedGroups[g] && !finishers.some((f) => f.group === g)).map((g) => {
+                      const done = Math.min(cardsProgress[g] || 0, totalPairsThisRound);
+                      const pct = totalPairsThisRound > 0 ? Math.round((done / totalPairsThisRound) * 100) : 0;
+                      return (
+                        <div key={g} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                          <span style={{ width: 20, height: 20, borderRadius: "50%", background: GROUP_COLORS[g - 1], flexShrink: 0 }} />
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 3 }}>
+                              <span style={{ fontWeight: 600 }}>{(joinedGroups[g] && joinedGroups[g].name) || `Kelompok ${g}`}</span>
+                              <span style={{ color: t.dim }}>{done}/{totalPairsThisRound} pasangan ketemu</span>
+                            </div>
+                            <div style={{ height: 6, borderRadius: 999, background: t.panel2, overflow: "hidden" }}>
+                              <div style={{ height: "100%", width: `${pct}%`, background: GROUP_COLORS[g - 1], borderRadius: 999, transition: "width .35s ease" }} />
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
               <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>Urutan kelompok selesai</div>
               {finishers.length === 0 ? (
                 <div style={{ fontSize: 13, color: t.dim, marginBottom: 14 }}>Belum ada yang selesai…</div>
