@@ -10,6 +10,14 @@
      tanpa ini, background cuma sepanjang konten & sisanya kelihatan putih kosong. */
   html, body { height: 100%; margin: 0; overflow-x: hidden; }
   #root { min-height: 100vh; }
+  /* FITUR BARU: perbesar tampilan khusus layar GURU (Persiapan, Main, halaman Pilih Game) —
+     supaya lebih nyaman dibaca. Dipasang lewat "zoom" (bukan font-size satu-satu) supaya semua
+     elemen — teks, tombol, ikon, jarak antar-elemen — ikut membesar proporsional bersamaan,
+     tanpa harus mengubah ratusan nilai fontSize satu per satu di kode. Class ini SENGAJA TIDAK
+     dipasang di layar HP siswa (StudentJoinScreen/CardsPlayArea) — di sana ukurannya sudah
+     dihitung presisi supaya pas 1 layar tanpa scroll, dan zoom bisa mengacaukan itu.
+     Angka 1.15 bisa diubah gampang di sini kalau masih dirasa kurang/kelebihan besar. */
+  .guru-zoom, .app-screen, .pilih-game-screen { zoom: 1.15; }
 </style>
 </head>
 <body style="margin:0;">
@@ -4400,7 +4408,11 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
   function removeBabak(idx) {
     if (babaks.length <= 1) return;
     if (!window.confirm("Hapus babak ini beserta semua pasangan kartunya?")) return;
-    setBabaks((prev) => prev.filter((_, i) => i !== idx));
+    // FIX: dulu setelah menghapus babak, sisa babak lain tetap pakai label lamanya (mis. hapus
+    // Babak 2 dari [Babak 1, Babak 2, Babak 3] hasilnya [Babak 1, Babak 3] — meloncat, bukan
+    // [Babak 1, Babak 2]). Sekarang label seluruh babak yang tersisa dinomori ulang berurutan
+    // sesuai posisi barunya.
+    setBabaks((prev) => prev.filter((_, i) => i !== idx).map((b, i) => ({ ...b, label: `Babak ${i + 1}` })));
     setBabakIdx((i) => Math.max(0, Math.min(i, babaks.length - 2)));
   }
   // FITUR BARU: batas waktu babak ini (detik) — dipakai startRound() untuk menghitung
@@ -4964,7 +4976,7 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
 =========================================================== */
 function TeacherLoginScreen({ onSignIn, busy, error }) {
   return (
-    <div style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: THEMES.light.bg, color: THEMES.light.text, minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 28, boxSizing: "border-box" }}>
+    <div className="guru-zoom" style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: THEMES.light.bg, color: THEMES.light.text, minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 28, boxSizing: "border-box" }}>
       <style>{fontImport}</style>
       <div style={{ width: "min(360px, 100%)", background: "#FFFFFF", borderRadius: 20, padding: 32, boxShadow: "0 2px 10px rgba(0,0,0,.06)", textAlign: "center", boxSizing: "border-box" }}>
         <div className="sgt" style={{ fontSize: 22, fontWeight: 700, marginBottom: 8 }}>Masuk sebagai Guru</div>
