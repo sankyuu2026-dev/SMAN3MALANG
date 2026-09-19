@@ -270,7 +270,18 @@ function migrateLegacyKey(base, uid) {
     if (!uid) return newKey; // belum login (seharusnya tidak terjadi di layar guru) — pakai key lama apa adanya
     if (localStorage.getItem(newKey) !== null) return newKey; // sudah punya key sendiri, tidak perlu migrasi
     const legacy = localStorage.getItem(base);
-    if (legacy !== null) localStorage.setItem(newKey, legacy);
+    if (legacy !== null) {
+      localStorage.setItem(newKey, legacy);
+      // BUGFIX: dulu key lama TIDAK dihapus setelah disalin — niatnya migrasi "sekali saja" untuk
+      // guru yang memang sudah lebih dulu punya data di key lama itu. Tapi karena tidak pernah
+      // dihapus, guru KEDUA/KETIGA/dst yang login PERTAMA KALINYA di perangkat yang sama (mis.
+      // komputer lab bahasa dipakai bergantian) ikut memicu migrasi ini juga — dan berakhir
+      // mewarisi SALINAN data milik guru yang paling pertama, bukan mulai dari kosong. Ini
+      // mengulang lagi masalah "data guru lain sembarang tercampur" yang justru ingin dihindari
+      // oleh fungsi ini. Key lama dihapus setelah migrasi pertama supaya cuma guru yang MEMANG
+      // pemilik data lama itu yang menerimanya; guru berikutnya mulai bersih.
+      localStorage.removeItem(base);
+    }
   } catch (e) {}
   return newKey;
 }
@@ -422,6 +433,39 @@ function playCorrectSound() {
     setTimeout(() => ctx.close(), 700);
   } catch (e) { /* browser tanpa Web Audio API — abaikan saja, tidak fatal */ }
 }
+// FITUR BARU (Mystery Box): nada "pop" pendek & lembut untuk buka kotak BIASA — sengaja dibuat
+// jauh lebih simpel/pelan daripada playCorrectSound() supaya kotak SPESIAL (yang pakai
+// playCorrectSound + confetti) terasa jelas lebih "wah", bukan cuma efek suara yang sama.
+function playPopSound() {
+  try {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(520, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(760, ctx.currentTime + 0.09);
+    gain.gain.setValueAtTime(0.14, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.14);
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.start(); osc.stop(ctx.currentTime + 0.16);
+    setTimeout(() => ctx.close(), 400);
+  } catch (e) { /* abaikan, tidak fatal */ }
+}
+// FITUR BARU (Mystery Box): pesan kejutan untuk kotak SPESIAL — dipilih acak saat kotak spesial
+// dibuka (bukan ditetapkan di awal), supaya kotak spesial yang sama bisa kasih kejutan berbeda
+// kalau papannya di-reset & dimainkan ulang. Sengaja ringan/menyenangkan, bukan soal tambahan —
+// karena Mystery Box ini permainan individu tanpa skor, "hadiah"-nya berupa apresiasi sosial
+// kecil, bukan poin (tidak ada sistem skor sama sekali di game ini untuk poin ditambahkan ke).
+const MYSTERY_BOX_SURPRISES = [
+  "🎉 Kotak Keberuntungan! Minta tepuk tangan meriah dari seisi kelas.",
+  "⭐ Jackpot! Kamu boleh lewati giliran menjawab kali ini — langsung pilih kotak lain.",
+  "🍀 Beruntung! Ajak satu teman untuk maju bareng menjawab kotak berikutnya.",
+  "🎁 Hadiah kejutan! Gurumu akan memberi pujian spesial untukmu.",
+  "🥳 Selamat! Kamu dapat giliran ekstra — boleh langsung pilih satu kotak lagi.",
+  "✨ Kotak Ajaib! Pilih teman yang harus bernyanyi lagu Jepang pendek sebagai hukuman lucu.",
+];
 // Sebaran partikel confetti di sekeliling titik tengah layar. `accentColor` biasanya warna
 // kelompok yang baru menjawab benar, supaya perayaannya terasa "milik" kelompok itu.
 function makeConfettiBurst(accentColor) {
@@ -2831,9 +2875,26 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
     if (!currentWord || activeGroup === null || !puzzle) return;
     if (!selStart) { setSelStart([r, c]); return; }
     const [sr, sc] = selStart;
-    const dr = Math.sign(r - sr), dc = Math.sign(c - sc);
-    const len = Math.max(Math.abs(r - sr), Math.abs(c - sc)) + 1;
-    const validLine = (dr === 0 && dc !== 0 && r === sr) || (dc === 0 && dr !== 0 && c === sc) || (dr !== 0 && dc !== 0 && Math.abs(r - sr) === Math.abs(c - sc));
+    const sameCell = r === sr && c === sc;
+    // BUGFIX (regresi — ini sempat diperbaiki lalu hilang lagi karena versi ini dibangun dari
+    // basis kode yang lebih lama): kata SATU HURUF (wajar untuk kosakata hiragana, mis. "め",
+    // "て", "き") sebelumnya MUSTAHIL dijawab benar sama sekali. Satu-satunya cara memilih
+    // rentang 1 huruf adalah klik sel yang sama dua kali, tapi validLine di bawah mewajibkan ada
+    // PERGERAKAN (dr atau dc harus bukan 0), jadi klik kedua di sel yang sama selalu dianggap
+    // "batal, mulai ulang pilihan" — tidak pernah "kunci jawaban". Sekarang klik kedua di sel
+    // yang sama dianggap kunci jawaban HANYA kalau memang ada kata 1-huruf yang masih mungkin
+    // jadi jawabannya (currentWord di mode biasa, atau salah satu kata di antrean untuk mode
+    // Guru Bebas / pseudo-kelompok Guru yang bisa mencocokkan kata mana pun); kalau tidak ada
+    // kemungkinan itu, perilaku lama (klik sel sama = mulai ulang pilihan) tetap dipertahankan
+    // supaya klik ganda pada kata biasa tidak sengaja disalahartikan.
+    const isFreeMatchMode = activeGroup === "guru" || audioMode === "bebas";
+    const singleLetterPossible = isFreeMatchMode
+      ? queue.some((id) => { const w = babak.words.find((x) => x.id === id); return w && w.letters.length === 1; })
+      : currentWord.letters.length === 1;
+    if (sameCell && !singleLetterPossible) { setSelStart([r, c]); return; }
+    const dr = sameCell ? 0 : Math.sign(r - sr), dc = sameCell ? 0 : Math.sign(c - sc);
+    const len = sameCell ? 1 : Math.max(Math.abs(r - sr), Math.abs(c - sc)) + 1;
+    const validLine = sameCell || (dr === 0 && dc !== 0 && r === sr) || (dc === 0 && dr !== 0 && c === sc) || (dr !== 0 && dc !== 0 && Math.abs(r - sr) === Math.abs(c - sc));
     if (!validLine) { setSelStart([r, c]); return; }
     const cells = Array.from({ length: len }, (_, i) => [sr + dr * i, sc + dc * i]);
     const str = cells.map(([rr, cc]) => puzzle.grid[rr][cc]).join("");
@@ -4056,6 +4117,21 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
   const [bulkAddOpen, setBulkAddOpen] = useState(false);
   const [opened, setOpened] = useState({}); // id -> true
   const [activeBox, setActiveBox] = useState(null); // instruction object or null
+  // FITUR BARU (elemen "Mystery"): sekitar 15% kotak ditandai "spesial" secara ACAK setiap kali
+  // "Mulai Permainan" diklik (bukan ditetapkan tetap dari setup) — disimpan sebagai Set berisi id
+  // kotak. Ditaruh terpisah dari `opened`/`activeBox` supaya urutan buka kotak siswa TIDAK
+  // membocorkan yang mana spesial (kotak spesial terlihat identik dengan kotak biasa sebelum
+  // dibuka), dan supaya papan yang sama bisa dapat kejutan di posisi berbeda tiap sesi.
+  const [mysteryBoxIds, setMysteryBoxIds] = useState(() => new Set());
+  // FITUR BARU: kejutan kotak spesial & frekuensinya sekarang bisa diatur guru sendiri di layar
+  // Persiapan (dulu tetap: pesan dari MYSTERY_BOX_SURPRISES, 15% kotak). Disimpan terpisah dari
+  // dataByMateri karena ini preferensi guru yang berlaku untuk SEMUA tema, bukan per-tema.
+  const [surprises, setSurprises] = useState(MYSTERY_BOX_SURPRISES);
+  const [mysteryChance, setMysteryChance] = useState(0.15);
+  const [previewSurprise, setPreviewSurprise] = useState(null); // teks kejutan yang lagi di-preview di layar Persiapan, atau null
+  const [confetti, setConfetti] = useState(null);
+  const confettiTimerRef = useRef(null);
+  useEffect(() => () => { if (confettiTimerRef.current) clearTimeout(confettiTimerRef.current); }, []);
 
   useEffect(() => {
     let localSavedAt = 0;
@@ -4068,6 +4144,8 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
         // bisa menimpa balik tema global dengan nilai basi. Diabaikan sepenuhnya sekarang.
         if (parsed.dataByMateri) setDataByMateri(parsed.dataByMateri);
         if (parsed.selectedMateri) setSelectedMateri(parsed.selectedMateri);
+        if (Array.isArray(parsed.surprises) && parsed.surprises.length > 0) setSurprises(parsed.surprises);
+        if (typeof parsed.mysteryChance === "number") setMysteryChance(parsed.mysteryChance);
         localSavedAt = parsed.savedAt || 0;
       }
     } catch (e) { /* belum ada data tersimpan, atau data korup */ }
@@ -4087,6 +4165,8 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
       if ((cloud.savedAt || 0) > localSavedAt) {
         if (cloud.dataByMateri) setDataByMateri(cloud.dataByMateri);
         if (cloud.selectedMateri) setSelectedMateri(cloud.selectedMateri);
+        if (Array.isArray(cloud.surprises) && cloud.surprises.length > 0) setSurprises(cloud.surprises);
+        if (typeof cloud.mysteryChance === "number") setMysteryChance(cloud.mysteryChance);
         setImportMsg({ ok: true, text: "Perintah dipulihkan dari cadangan cloud (localStorage browser ini kosong/lebih basi)." });
       }
     });
@@ -4094,13 +4174,13 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
   useEffect(() => {
     if (!loaded) return;
     const tm = setTimeout(() => {
-      const payload = { dataByMateri, selectedMateri };
+      const payload = { dataByMateri, selectedMateri, surprises, mysteryChance };
       const res = safeSetItem(scopedKey("bk-setup-data", teacher.uid), JSON.stringify({ ...payload, savedAt: Date.now() }));
       setStorageWarning(res.ok ? null : res.message);
       saveSetupToCloud(teacher.uid, "mysteryBox", payload);
     }, 500);
     return () => clearTimeout(tm);
-  }, [dataByMateri, selectedMateri, loaded]);
+  }, [dataByMateri, selectedMateri, surprises, mysteryChance, loaded]);
   useEffect(() => {
     if (!loaded) return;
     const tm = setTimeout(() => {
@@ -4137,9 +4217,62 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
     setDataByMateri((prev) => ({ ...prev, [selectedMateri]: [...(prev[selectedMateri] || []), ...lines.map((line) => ({ id: uid(), text: line }))] }));
     return lines.length;
   }
-  function startGame() { setOpened({}); setActiveBox(null); setStage("play"); }
-  function openBox(item) { setActiveBox(item); setOpened((o) => ({ ...o, [item.id]: true })); }
-  function resetBoard() { setOpened({}); setActiveBox(null); }
+  // Dipakai bareng oleh startGame() & resetBoard() — supaya logika "pilih sebagian kotak jadi
+  // spesial" tidak diketik ulang dua kali. Persentasenya sekarang dari mysteryChance (bisa
+  // diatur guru), bukan angka 0.15 tetap lagi.
+  function pickMysteryBoxes(list) {
+    const specialCount = list.length >= 3 && mysteryChance > 0 ? Math.max(1, Math.round(list.length * mysteryChance)) : 0;
+    const shuffled = [...list].sort(() => Math.random() - 0.5);
+    return new Set(shuffled.slice(0, specialCount).map((it) => it.id));
+  }
+  function startGame() {
+    setOpened({}); setActiveBox(null);
+    setMysteryBoxIds(pickMysteryBoxes(items));
+    setStage("play");
+  }
+  function openBox(item) {
+    setOpened((o) => ({ ...o, [item.id]: true }));
+    if (mysteryBoxIds.has(item.id)) {
+      const filled = surprises.filter((s) => s.trim());
+      const pool = filled.length > 0 ? filled : MYSTERY_BOX_SURPRISES;
+      const surprise = pool[Math.floor(Math.random() * pool.length)];
+      setActiveBox({ id: item.id, text: surprise, mystery: true });
+      setConfetti(makeConfettiBurst("#F4B740"));
+      playCorrectSound();
+      if (confettiTimerRef.current) clearTimeout(confettiTimerRef.current);
+      confettiTimerRef.current = setTimeout(() => setConfetti(null), 1300);
+    } else {
+      setActiveBox(item);
+      playPopSound();
+    }
+  }
+  function resetBoard() {
+    setOpened({}); setActiveBox(null);
+    // Sama seperti startGame() — acak ulang posisi kotak spesial biar tiap main ulang dapat
+    // kejutan yang beda, bukan selalu di kotak yang sama.
+    setMysteryBoxIds(pickMysteryBoxes(items));
+  }
+
+  /* ---- Kelola kejutan kotak spesial ---- */
+  function updateSurprise(idx, value) {
+    setSurprises((prev) => prev.map((s, i) => (i === idx ? value : s)));
+  }
+  function removeSurprise(idx) {
+    setSurprises((prev) => (prev.length <= 1 ? prev : prev.filter((_, i) => i !== idx)));
+  }
+  function addSurprise() {
+    setSurprises((prev) => [...prev, ""]);
+  }
+  function resetSurprisesToDefault() {
+    if (!window.confirm("Kembalikan daftar kejutan ke bawaan? Kejutan custom yang sudah kamu tulis akan diganti.")) return;
+    setSurprises(MYSTERY_BOX_SURPRISES);
+  }
+  // Coba acak: simulasikan siswa membuka kotak spesial, tanpa harus mulai permainan sungguhan.
+  function previewRandomSurprise() {
+    const filled = surprises.filter((s) => s.trim());
+    const pool = filled.length > 0 ? filled : MYSTERY_BOX_SURPRISES;
+    setPreviewSurprise(pool[Math.floor(Math.random() * pool.length)]);
+  }
 
   /* ---- Cadangan perintah: ekspor ke file .json & impor kembali ---- */
   const { exportBackup, importBackup } = makeBackupHandlers({
@@ -4207,6 +4340,61 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
           <button onClick={addItem} style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 6, background: t.panel2, border: "none", color: t.text, borderRadius: 8, padding: "9px 14px", cursor: "pointer", fontSize: 13 }}><span style={{ fontSize: 14, lineHeight: 1, color: 'inherit' }}>➕</span> Tambah Perintah</button>
         </div>
 
+        <div style={{ background: t.panel, borderRadius: 14, padding: 16, marginBottom: 20, boxShadow: t.shadowSm }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: 6 }}>
+            <SectionLabel n={3} hint="— kotak spesial berisi kejutan lucu, bukan soal" faint={t.faint}>🎁 Kejutan Kotak Spesial</SectionLabel>
+          </div>
+          <div style={{ fontSize: 12.5, color: t.dim, marginBottom: 14 }}>Sebagian kotak (diacak tiap main) berisi kejutan alih-alih perintah — kamu yang tentukan isinya.</div>
+
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 11.5, color: t.faint, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 8 }}>Seberapa sering muncul</div>
+            <div style={{ display: "inline-flex", background: t.panel2, borderRadius: 10, padding: 4, gap: 4 }}>
+              {[{ label: "Jarang", val: 0.08 }, { label: "Sedang", val: 0.15 }, { label: "Sering", val: 0.25 }, { label: "Nonaktif", val: 0 }].map((opt) => (
+                <button key={opt.label} onClick={() => setMysteryChance(opt.val)} className="sgt" style={{
+                  padding: "8px 16px", borderRadius: 7, border: "none", cursor: "pointer",
+                  background: mysteryChance === opt.val ? "#F4B740" : "transparent", color: mysteryChance === opt.val ? "#101B34" : t.text,
+                  fontWeight: 700, fontSize: 12.5,
+                }}>{opt.label}</button>
+              ))}
+            </div>
+          </div>
+
+          {mysteryChance > 0 && (
+            <div>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, flexWrap: "wrap", gap: 8 }}>
+                <div style={{ fontSize: 11.5, color: t.faint, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.4 }}>Daftar kejutan ({surprises.length})</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <button onClick={previewRandomSurprise} style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: `1px solid ${t.border}`, color: t.text, borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontSize: 12.5, fontWeight: 600 }}><span style={{ fontSize: 13, lineHeight: 1, color: 'inherit' }}>🔀</span> Coba Acak</button>
+                  <button onClick={resetSurprisesToDefault} style={{ background: "transparent", border: "none", color: t.dim, cursor: "pointer", fontSize: 12, textDecoration: "underline" }}>Kembalikan ke bawaan</button>
+                </div>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {surprises.map((s, i) => (
+                  <div key={i} className="list-row" style={{ display: "flex", gap: 8, alignItems: "center", background: t.panel2, borderRadius: 10, padding: "8px 10px" }}>
+                    <span style={{ fontSize: 15 }}>🎁</span>
+                    <input value={s} onChange={(e) => updateSurprise(i, e.target.value)} placeholder="Tulis pesan kejutan…"
+                      style={{ flex: 1, padding: "8px 10px", borderRadius: 7, border: `1px solid ${t.border}`, background: t.panel, color: t.text, fontSize: 13 }} />
+                    <button onClick={() => removeSurprise(i)} disabled={surprises.length <= 1} title="Hapus kejutan ini" className="row-del" style={{ background: "transparent", border: "none", color: surprises.length <= 1 ? t.panel2 : t.faint, cursor: surprises.length <= 1 ? "default" : "pointer", padding: 8, borderRadius: 8 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>🗑</span></button>
+                  </div>
+                ))}
+              </div>
+              <button onClick={addSurprise} style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 6, background: t.panel2, border: "none", color: t.text, borderRadius: 8, padding: "9px 14px", cursor: "pointer", fontSize: 13 }}><span style={{ fontSize: 14, lineHeight: 1, color: 'inherit' }}>➕</span> Tambah Kejutan</button>
+            </div>
+          )}
+        </div>
+
+        {previewSurprise && (
+          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 60 }} onClick={() => setPreviewSurprise(null)}>
+            <div onClick={(e) => e.stopPropagation()} className="modal-pop" style={{ width: "min(520px, 90vw)", background: "linear-gradient(135deg,#F4B740,#F2A93B)", borderRadius: 20, padding: "36px 30px", boxShadow: "0 20px 60px rgba(0,0,0,.4)", position: "relative" }}>
+              <button onClick={() => setPreviewSurprise(null)} style={{ position: "absolute", top: 12, right: 14, background: "none", border: "none", color: "#101B34", cursor: "pointer" }}><span style={{ fontSize: 20, lineHeight: 1, color: 'inherit' }}>✕</span></button>
+              <div className="sgt" style={{ fontSize: 12, fontWeight: 700, color: "#101B34", textAlign: "center", marginBottom: 4, letterSpacing: 0.5, textTransform: "uppercase", opacity: 0.75 }}>Pratinjau — begini tampilannya ke siswa</div>
+              <div className="sgt" style={{ fontSize: 13, fontWeight: 700, color: "#101B34", textAlign: "center", marginBottom: 10, letterSpacing: 0.5, textTransform: "uppercase" }}>🎁 Kotak Spesial!</div>
+              <div className="sgt" style={{ fontSize: 20, fontWeight: 700, color: "#101B34", textAlign: "center", lineHeight: 1.5 }}>{previewSurprise}</div>
+              <button onClick={previewRandomSurprise} style={{ display: "flex", alignItems: "center", gap: 6, justifyContent: "center", margin: "18px auto 0", background: "rgba(16,27,52,.12)", border: "none", color: "#101B34", borderRadius: 8, padding: "8px 16px", cursor: "pointer", fontSize: 12.5, fontWeight: 700 }}><span style={{ fontSize: 13, lineHeight: 1, color: 'inherit' }}>🔀</span> Acak Lagi</button>
+            </div>
+          </div>
+        )}
+
         <BulkAddModal
           open={bulkAddOpen}
           onClose={() => setBulkAddOpen(false)}
@@ -4230,12 +4418,20 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
 
       {activeBox && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50 }} onClick={() => setActiveBox(null)}>
-          <div onClick={(e) => e.stopPropagation()} className="modal-pop" style={{ width: "min(520px, 90vw)", background: "#F2879E", borderRadius: 20, padding: "36px 30px", boxShadow: "0 20px 60px rgba(0,0,0,.4)", position: "relative" }}>
+          <div onClick={(e) => e.stopPropagation()} className="modal-pop" style={{
+            width: "min(520px, 90vw)",
+            background: activeBox.mystery ? "linear-gradient(135deg,#F4B740,#F2A93B)" : "#F2879E",
+            borderRadius: 20, padding: "36px 30px", boxShadow: "0 20px 60px rgba(0,0,0,.4)", position: "relative",
+          }}>
             <button onClick={() => setActiveBox(null)} style={{ position: "absolute", top: 12, right: 14, background: "none", border: "none", color: "#101B34", cursor: "pointer" }}><span style={{ fontSize: 20, lineHeight: 1, color: 'inherit' }}>✕</span></button>
+            {activeBox.mystery && (
+              <div className="sgt" style={{ fontSize: 13, fontWeight: 700, color: "#101B34", textAlign: "center", marginBottom: 10, letterSpacing: 0.5, textTransform: "uppercase" }}>🎁 Kotak Spesial!</div>
+            )}
             <div className="sgt" style={{ fontSize: 20, fontWeight: 700, color: "#101B34", textAlign: "center", lineHeight: 1.5 }}>{activeBox.text}</div>
           </div>
         </div>
       )}
+      <CelebrationOverlay particles={confetti} />
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 16, marginBottom: 22 }}>
         <div>
@@ -4264,15 +4460,21 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(84px, 1fr))", gap: 12 }}>
             {items.map((it, i) => {
               const isOpen = opened[it.id];
+              // Cuma dicek/dipakai untuk gaya SETELAH kotak dibuka — sebelum diklik, kotak spesial
+              // tampil identik dengan kotak biasa (lihat catatan di deklarasi mysteryBoxIds), jadi
+              // tidak membocorkan yang mana spesial sebelum waktunya.
+              const wasMystery = isOpen && mysteryBoxIds.has(it.id);
               return (
                 <button key={it.id} onClick={() => openBox(it)} style={{
-                  aspectRatio: "1 / 1", borderRadius: 14, cursor: isOpen ? "default" : "pointer", border: "none",
-                  background: isOpen ? t.panel2 : BOX_COLORS[i % BOX_COLORS.length], color: isOpen ? t.faint : "#101B34",
+                  aspectRatio: "1 / 1", borderRadius: 14, cursor: isOpen ? "default" : "pointer",
+                  border: wasMystery ? "2px solid #F4B740" : "none",
+                  background: isOpen ? (wasMystery ? "#FBEBC7" : t.panel2) : BOX_COLORS[i % BOX_COLORS.length],
+                  color: isOpen ? (wasMystery ? "#8A6412" : t.faint) : "#101B34",
                   fontWeight: 800, fontSize: 19, display: "flex", alignItems: "center", justifyContent: "center",
-                  opacity: isOpen ? 0.45 : 1, boxShadow: isOpen ? "none" : "0 3px 0 rgba(0,0,0,.16)",
+                  opacity: isOpen ? (wasMystery ? 0.85 : 0.45) : 1, boxShadow: isOpen ? "none" : "0 3px 0 rgba(0,0,0,.16)",
                   transform: isOpen ? "scale(.94)" : "scale(1)", transition: "transform .15s ease, opacity .15s ease",
                   animation: isOpen ? "boxPop .5s cubic-bezier(.3,1.5,.4,1) both" : "none",
-                }} className="sgt">{isOpen ? <span style={{ fontSize: 20, lineHeight: 1, color: 'inherit' }}>✓</span> : i + 1}</button>
+                }} className="sgt">{isOpen ? <span style={{ fontSize: 20, lineHeight: 1, color: 'inherit' }}>{wasMystery ? "🎁" : "✓"}</span> : i + 1}</button>
               );
             })}
           </div>
@@ -4316,6 +4518,7 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
     });
   }
   const [babakIdx, setBabakIdx] = useState(0);
+  const [babakPanelOpen, setBabakPanelOpen] = useState(true); // panel accordion babak yang sedang terbuka
   const [loaded, setLoaded] = useState(false);
   const [storageWarning, setStorageWarning] = useState(null); // pesan kalau localStorage gagal menyimpan
   const [importMsg, setImportMsg] = useState(null); // { ok, text } hasil ekspor/impor cadangan
@@ -4407,7 +4610,12 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
 
   const babak = babaks[babakIdx] || babaks[0];
 
-  function addBabak() { setBabaks((prev) => [...prev, makeBabak(prev.length + 1)]); }
+  function addBabak() {
+    const newIdx = babaks.length;
+    setBabaks((prev) => [...prev, makeBabak(prev.length + 1)]);
+    setBabakIdx(newIdx);
+    setBabakPanelOpen(true);
+  }
   function removeBabak(idx) {
     if (babaks.length <= 1) return;
     if (!window.confirm("Hapus babak ini beserta semua pasangan kartunya?")) return;
@@ -4698,51 +4906,111 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
             </span>
           }>Pilih Tema</SectionLabel>
           <MateriPicker t={t} selected={selectedMateri} teacher={teacher}
-            onSelect={(name) => { setSelectedMateri(name); setDataByMateri((prev) => ensureCardMateri(prev, name)); setBabakIdx(0); }} />
+            onSelect={(name) => { setSelectedMateri(name); setDataByMateri((prev) => ensureCardMateri(prev, name)); setBabakIdx(0); setBabakPanelOpen(true); }} />
         </div>
 
-        <div style={{ background: t.panel, borderRadius: 16, padding: "18px 20px", marginBottom: 20, boxShadow: t.shadowSm }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
-            <SectionLabel n={2} faint={t.faint}>Kartu per Babak</SectionLabel>
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-              <div style={{ display: "flex", gap: 6, background: t.panel2, padding: 4, borderRadius: 10 }}>
-                {babaks.map((b, i) => (
-                  <button key={b.id} onClick={() => setBabakIdx(i)} style={{ padding: "7px 14px", borderRadius: 7, border: "none", cursor: "pointer", background: babakIdx === i ? "#F4B740" : "transparent", color: babakIdx === i ? "#101B34" : t.text, fontWeight: 600, fontSize: 13 }}>{b.label}</button>
-                ))}
-              </div>
-              <button onClick={addBabak} style={{ background: t.panel2, border: "none", color: t.text, borderRadius: 8, padding: "8px 12px", cursor: "pointer", fontSize: 13, fontWeight: 600 }}>➕ Babak</button>
-              {babaks.length > 1 && <button onClick={() => removeBabak(babakIdx)} style={{ background: "transparent", border: "none", color: "#EF5B5B", cursor: "pointer", padding: "8px 10px", fontSize: 13 }}>🗑 Hapus babak ini</button>}
-            </div>
-          </div>
+        <div style={{ background: t.panel, borderRadius: 18, padding: "22px 24px", marginBottom: 20, boxShadow: t.shadowSm }}>
+          <SectionLabel n={2} faint={t.faint} hint="— pasangan kartu & pratinjau papan">Kartu per Babak</SectionLabel>
+          {/* FIX (UX, sama seperti Word Search): dulu babak berupa tab yang saling
+              menggantikan konten di tempat yang sama, dan "Pratinjau Papan" selalu tampil penuh
+              di bawahnya terus-menerus — kalau kartunya banyak halaman jadi sangat panjang.
+              Sekarang tiap babak jadi panel accordion sendiri (ringkasan selalu kelihatan meski
+              tertutup), dan pratinjau papannya ikut masuk ke DALAM panel babak yang sedang
+              dibuka — otomatis ikut tersembunyi saat babaknya ditutup, tidak perlu tombol
+              sembunyi terpisah. babakIdx dipakai sebagai "yang sedang terbuka", sama seperti
+              dulu dipakai sebagai "tab aktif", jadi tidak perlu state baru untuk itu. */}
+          <div style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 10 }}>
+            {babaks.map((b, i) => {
+              const isOpen = babakIdx === i && babakPanelOpen;
+              const readyCount = validPairs(b).length;
+              return (
+                <div key={b.id} style={{ border: `1.5px solid ${isOpen ? "#F4B740" : t.border}`, borderRadius: 14, overflow: "hidden", background: t.panel2, transition: "border-color .2s ease", boxShadow: isOpen ? "0 2px 12px rgba(244,183,64,0.15)" : t.shadowSm }}>
+                  <button
+                    onClick={() => {
+                      if (babakIdx === i && babakPanelOpen) setBabakPanelOpen(false);
+                      else { setBabakIdx(i); setBabakPanelOpen(true); }
+                    }}
+                    className="babak-acc-header"
+                    style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "16px 20px", background: "transparent", border: "none", cursor: "pointer", textAlign: "left" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
+                      <div style={{ width: 28, height: 28, borderRadius: "50%", background: isOpen ? "#F4B740" : t.panel, border: isOpen ? "none" : `1px solid ${t.border}`, color: isOpen ? "#101B34" : t.dim, fontWeight: 700, fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{i + 1}</div>
+                      <div style={{ minWidth: 0 }}>
+                        <div className="sgt" style={{ fontWeight: 700, fontSize: 14, color: t.text }}>{b.label}</div>
+                        <div style={{ fontSize: 13, color: readyCount >= 5 ? "#3FBFAD" : t.dim, marginTop: 1 }}>{readyCount} / {b.pairs.length} pasangan siap</div>
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+                      {babaks.length > 1 && (
+                        <span onClick={(e) => { e.stopPropagation(); removeBabak(i); }} title="Hapus babak ini" style={{ width: 26, height: 26, borderRadius: 7, display: "flex", alignItems: "center", justifyContent: "center", color: t.faint, cursor: "pointer", fontSize: 14 }}>🗑</span>
+                      )}
+                      <span style={{ width: 26, height: 26, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, color: isOpen ? "#101B34" : t.dim, background: isOpen ? "#F4B740" : "transparent", transform: isOpen ? "rotate(180deg)" : "none", transition: "transform .15s ease, background .15s ease" }}>▾</span>
+                    </div>
+                  </button>
 
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: 12 }}>
-            <div style={{ fontSize: 12.5, color: validPairs(babak).length >= 5 ? "#3FBFAD" : t.faint, fontWeight: 600 }}>
-              {validPairs(babak).length} / {babak.pairs.length} pasangan siap{!isMobile ? " (minimal 5 pasangan lengkap kata + gambar)" : ""}
-            </div>
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-              <button onClick={() => setBulkAddOpen(true)} style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: `1px dashed ${t.border}`, color: t.dim, borderRadius: 8, padding: "8px 14px", cursor: "pointer", fontSize: 13 }}>📋 Tambah Banyak Sekaligus</button>
-            </div>
-          </div>
+                  {isOpen && (
+                    <div className="babak-acc-body" style={{ padding: "0 16px 16px", borderTop: `1px solid ${t.border}` }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", margin: "14px 0" }}>
+                        <button onClick={() => setBulkAddOpen(true)} style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: `1px dashed ${t.border}`, color: t.dim, borderRadius: 8, padding: "8px 14px", cursor: "pointer", fontSize: 13 }}>📋 Tambah Banyak Sekaligus</button>
+                      </div>
 
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            {babak.pairs.map((p, idx) => (
-              <div key={p.id} className="list-row" style={{ display: "flex", gap: 12, alignItems: "center", background: t.panel2, borderRadius: 12, padding: "10px 14px", flexWrap: "wrap" }}>
-                <div style={{ width: 24, height: 24, borderRadius: "50%", background: t.panel, color: t.faint, fontSize: 11.5, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{idx + 1}</div>
-                <label title={p.image ? "Klik untuk ganti gambar" : "Unggah gambar (otomatis dikompres, tidak perlu diperkecil dulu)"} style={{ width: 56, height: 56, borderRadius: 8, background: t.panel, flexShrink: 0, cursor: "pointer", overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", position: "relative" }}>
-                  {uploadingImage[p.id] ? "⏳" : p.image ? <img src={p.image} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ fontSize: 15, color: t.dim }}>⬆</span>}
-                  <input type="file" accept="image/*" disabled={uploadingImage[p.id]} onChange={(e) => uploadImage(babakIdx, p.id, e.target.files[0])} style={{ display: "none" }} />
-                </label>
-                <div style={{ display: "flex", flexDirection: "column", gap: 5, flex: 1, minWidth: 160 }}>
-                  {!isMobile && <label style={fieldLabelStyle}>Kata (romaji/hiragana)</label>}
-                  <input value={p.word} onChange={(e) => updatePairWord(babakIdx, p.id, e.target.value)} placeholder={isMobile ? "Kata (romaji/hiragana)" : "mis. ねこ"}
-                    style={{ padding: "9px 10px", borderRadius: 8, border: `1px solid ${t.border}`, background: t.panel, color: t.text, fontSize: 13 }} />
-                  {imageUploadError[p.id] && <div style={{ fontSize: 10, color: "#EF5B5B" }}>{imageUploadError[p.id]}</div>}
+                      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                        {b.pairs.map((p, idx) => (
+                          <div key={p.id} className="list-row" style={{ display: "flex", gap: 12, alignItems: "center", background: t.panel, borderRadius: 12, padding: "10px 14px", flexWrap: "wrap" }}>
+                            <div style={{ width: 24, height: 24, borderRadius: "50%", background: t.panel2, color: t.faint, fontSize: 11.5, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{idx + 1}</div>
+                            <label title={p.image ? "Klik untuk ganti gambar" : "Unggah gambar (otomatis dikompres, tidak perlu diperkecil dulu)"} style={{ width: 56, height: 56, borderRadius: 8, background: t.panel2, flexShrink: 0, cursor: "pointer", overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", position: "relative" }}>
+                              {uploadingImage[p.id] ? "⏳" : p.image ? <img src={p.image} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ fontSize: 15, color: t.dim }}>⬆</span>}
+                              <input type="file" accept="image/*" disabled={uploadingImage[p.id]} onChange={(e) => uploadImage(i, p.id, e.target.files[0])} style={{ display: "none" }} />
+                            </label>
+                            <div style={{ display: "flex", flexDirection: "column", gap: 5, flex: 1, minWidth: 160 }}>
+                              {!isMobile && <label style={fieldLabelStyle}>Kata (romaji/hiragana)</label>}
+                              <input value={p.word} onChange={(e) => updatePairWord(i, p.id, e.target.value)} placeholder={isMobile ? "Kata (romaji/hiragana)" : "mis. ねこ"}
+                                style={{ padding: "9px 10px", borderRadius: 8, border: `1px solid ${t.border}`, background: t.panel2, color: t.text, fontSize: 13 }} />
+                              {imageUploadError[p.id] && <div style={{ fontSize: 10, color: "#EF5B5B" }}>{imageUploadError[p.id]}</div>}
+                            </div>
+                            <button onClick={() => removePair(i, p.id)} title="Hapus pasangan ini" className="row-del" style={{ background: "transparent", border: "none", color: t.faint, cursor: "pointer", padding: 8, borderRadius: 8 }}>🗑</button>
+                          </div>
+                        ))}
+                      </div>
+                      <button onClick={() => addPair(i)} style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 6, background: t.panel, border: "none", color: t.text, borderRadius: 8, padding: "9px 14px", cursor: "pointer", fontSize: 13 }}>➕ Tambah Pasangan</button>
+
+                      {/* Pratinjau Papan — dipindah masuk ke sini (dulu panel terpisah, selalu
+                          tampil penuh di bawah); sekarang otomatis ikut tersembunyi saat babak
+                          ini ditutup, jadi tidak menambah panjang halaman kalau tidak dibutuhkan. */}
+                      <div style={{ marginTop: 20, paddingTop: 16, borderTop: `1px solid ${t.border}` }}>
+                        <SectionLabel n={3} faint={t.faint} hint="— contoh acakan, bukan yang dipakai persis saat main">Pratinjau Papan — {b.label}</SectionLabel>
+                        {previewDeck.length === 0 ? (
+                          <div style={{ padding: 20, color: t.dim, fontSize: 13, textAlign: "center", background: t.panel, borderRadius: 12 }}>
+                            Lengkapi minimal 1 pasangan (kata + gambar) di atas dulu untuk melihat pratinjau papan.
+                          </div>
+                        ) : (
+                          <>
+                            <div style={{ display: "grid", gridTemplateColumns: `repeat(${previewCols}, 1fr)`, gap: 8, maxWidth: 460 }}>
+                              {previewDeck.map((c, ci) => (
+                                <div key={c.key} className="game-card" style={{
+                                  aspectRatio: "3 / 4", borderRadius: 12, background: "#FFFFFF", padding: c.kind === "image" ? 0 : 6,
+                                  display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden",
+                                  boxShadow: t.shadowSm, animationDelay: `${Math.min(ci, 12) * 40}ms`,
+                                }}>
+                                  {c.kind === "image"
+                                    ? <img src={c.content} alt="" style={{ width: "100%", height: "100%", objectFit: "contain", display: "block", background: "#FFFFFF" }} />
+                                    : <div className="sgt" style={{ fontSize: 12, fontWeight: 700, color: "#1E2233", textAlign: "center", wordBreak: "break-word", lineHeight: 1.25 }}>{c.content}</div>}
+                                </div>
+                              ))}
+                            </div>
+                            <div style={{ fontSize: 11.5, color: t.faint, marginTop: 10, lineHeight: 1.5 }}>
+                              Ini cuma contoh susunan — tiap siswa nanti dapat acakan posisi sendiri-sendiri di HP masing-masing saat babak dimulai, bukan papan yang sama persis dengan ini.
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
-                <button onClick={() => removePair(babakIdx, p.id)} title="Hapus pasangan ini" className="row-del" style={{ background: "transparent", border: "none", color: t.faint, cursor: "pointer", padding: 8, borderRadius: 8 }}>🗑</button>
-              </div>
-            ))}
+              );
+            })}
           </div>
-          <button onClick={() => addPair(babakIdx)} style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 6, background: t.panel2, border: "none", color: t.text, borderRadius: 8, padding: "9px 14px", cursor: "pointer", fontSize: 13 }}>➕ Tambah Pasangan</button>
+
+          <button onClick={addBabak} style={{ marginTop: 14, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, width: "100%", background: "transparent", border: `1.5px dashed ${t.border}`, color: t.dim, borderRadius: 12, padding: "12px 0", cursor: "pointer", fontSize: 13.5, fontWeight: 600 }}>➕ Tambah Babak</button>
 
           <BulkAddModal
             open={bulkAddOpen}
@@ -4752,40 +5020,6 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
             formatHint="Satu kata per baris — hanya teksnya yang ikut ditambahkan. Gambar tetap harus diunggah manual satu per satu untuk tiap kartu baru di bawah."
             placeholder={"GOMIBAKO\nKARENDAA"}
           />
-        </div>
-
-        {/* FITUR BARU (Langkah 2 — masih murni tampilan, memakai data pasangan yang sudah ada di
-            babak.pairs, tidak menambah data baru): dulu guru cuma bisa membayangkan sendiri
-            seperti apa papan yang akan dilihat siswa. Sekarang ada pratinjau nyata memakai gambar
-            & kata yang sudah diunggah, disusun & diacak SEKALI per babak (useMemo) supaya tidak
-            berubah-ubah tiap kali komponen render ulang — persis gambaran satu contoh papan HP
-            siswa (tiap siswa nanti tetap dapat acakan sendiri-sendiri saat main sungguhan). */}
-        <div style={{ background: t.panel, borderRadius: 16, padding: "18px 20px", marginBottom: 20, boxShadow: t.shadowSm }}>
-          <SectionLabel n={3} faint={t.faint} hint="— contoh acakan, bukan yang dipakai persis saat main">Pratinjau Papan — {babak.label}</SectionLabel>
-          {previewDeck.length === 0 ? (
-            <div style={{ padding: 20, color: t.dim, fontSize: 13, textAlign: "center", background: t.panel2, borderRadius: 12, marginTop: 12 }}>
-              Lengkapi minimal 1 pasangan (kata + gambar) di atas dulu untuk melihat pratinjau papan.
-            </div>
-          ) : (
-            <>
-              <div style={{ display: "grid", gridTemplateColumns: `repeat(${previewCols}, 1fr)`, gap: 8, marginTop: 12, maxWidth: 460 }}>
-                {previewDeck.map((c, i) => (
-                  <div key={c.key} className="game-card" style={{
-                    aspectRatio: "3 / 4", borderRadius: 12, background: "#FFFFFF", padding: c.kind === "image" ? 0 : 6,
-                    display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden",
-                    boxShadow: t.shadowSm, animationDelay: `${Math.min(i, 12) * 40}ms`,
-                  }}>
-                    {c.kind === "image"
-                      ? <img src={c.content} alt="" style={{ width: "100%", height: "100%", objectFit: "contain", display: "block", background: "#FFFFFF" }} />
-                      : <div className="sgt" style={{ fontSize: 12, fontWeight: 700, color: "#1E2233", textAlign: "center", wordBreak: "break-word", lineHeight: 1.25 }}>{c.content}</div>}
-                  </div>
-                ))}
-              </div>
-              <div style={{ fontSize: 11.5, color: t.faint, marginTop: 10, lineHeight: 1.5 }}>
-                Ini cuma contoh susunan — tiap siswa nanti dapat acakan posisi sendiri-sendiri di HP masing-masing saat babak dimulai, bukan papan yang sama persis dengan ini.
-              </div>
-            </>
-          )}
         </div>
 
         <button onClick={startSession} disabled={!canStart || startingGame} style={{
