@@ -2526,14 +2526,46 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
         appliedGroupsRef.current = new Set();
       }
       data.buzzOrder.forEach((entry) => {
-        if (!appliedGroupsRef.current.has(entry.group)) {
-          appliedGroupsRef.current.add(entry.group);
-          buzz(entry.group);
-        }
+        if (appliedGroupsRef.current.has(entry.group)) return;
+        // BUGFIX: sebelumnya baris "sudah diterapkan" (appliedGroupsRef.add) dieksekusi DULUAN,
+        // baru panggil buzz() — padahal buzz() sendiri langsung berhenti diam-diam kalau Mode Guru
+        // lagi aktif (lihat guruModeOnRef di dalam buzz()). Akibatnya: kalau ada HP siswa yang
+        // angkat tangan TEPAT saat guru sedang Mode Guru, entri itu langsung ditandai "sudah
+        // diproses" walau buzz() sebenarnya tidak melakukan apa-apa — buzz itu HILANG PERMANEN
+        // untuk soal ini, tombol angkat tangan HP-nya pun ikut terkunci (dianggap "sudah pernah
+        // coba") tanpa pernah benar-benar diproses. Sekarang: kalau Mode Guru sedang aktif, entri
+        // ini SENGAJA belum ditandai selesai — ditunda dulu, baru diproses begitu Mode Guru
+        // dimatikan lagi (lihat efek "guruModeOn baru saja dimatikan" di bawah).
+        if (guruModeOnRef.current) return;
+        appliedGroupsRef.current.add(entry.group);
+        buzz(entry.group);
       });
     });
     return () => unsub();
   }, [stage, roomCode, currentWord?.id, mode, queue.length]);
+
+  // BUGFIX (lanjutan dari catatan di atas): begitu Mode Guru DIMATIKAN lagi, baca ulang sekali
+  // status room saat ini dan proses entri buzzOrder yang tadi sengaja ditunda selama Mode Guru
+  // masih menyala — supaya kelompok yang angkat tangan lewat HP di jendela waktu itu tidak hilang
+  // percuma, cukup baru diproses begitu guru selesai mengoreksi.
+  const prevGuruModeOnRef = useRef(false);
+  useEffect(() => {
+    const wasOn = prevGuruModeOnRef.current;
+    prevGuruModeOnRef.current = guruModeOn;
+    if (!wasOn || guruModeOn) return; // cuma jalan tepat saat transisi Aktif -> Nonaktif
+    if (stage !== "play" || mode !== "digital") return;
+    db.collection("rooms").doc(roomCode).get().then((snap) => {
+      const data = snap.data();
+      if (!data) return;
+      const roundId = currentWord ? `${currentWord.id}:${queue.length}` : null;
+      if (!roundId || data.roundId !== roundId || !Array.isArray(data.buzzOrder)) return;
+      data.buzzOrder.forEach((entry) => {
+        if (appliedGroupsRef.current.has(entry.group)) return;
+        appliedGroupsRef.current.add(entry.group);
+        buzz(entry.group);
+      });
+    }).catch(() => {});
+  }, [guruModeOn, stage, roomCode, mode, currentWord?.id, queue.length]);
 
   function scheduleRetry() {
     clearRetryTimer();
@@ -2744,6 +2776,37 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
     setFlash({ type: "revealed", word: target.letters });
     setTimeout(() => setFlash(null), 2400);
     nextQuestion(target.id);
+  }
+
+  // FITUR BARU: kadang ada kelompok yang angkat tangan (buzz) padahal cuma iseng pencet tanpa
+  // benar-benar tahu jawabannya. Ini beda dari "Lewati soal" (yang mengungkap jawaban & ganti
+  // soal) — ini cuma melewati SATU kelompok itu dari antrean angkat tangan, soal & antrean
+  // kelompok lain tetap jalan seperti biasa. Dipakai lewat tombol kecil di sebelah tiap nama
+  // kelompok di daftar "Urutan angkat tangan". Kalau kelompok yang dilewati kebetulan yang SEDANG
+  // pegang giliran, giliran langsung dilempar ke kelompok berikutnya di antrean (persis seperti
+  // kalau kelompok itu baru saja menjawab salah) — kalau bukan yang sedang aktif, cukup dicoret
+  // dari antrean tanpa mengganggu apa pun yang sedang berjalan.
+  function skipGroupFromQueue(group) {
+    if (!currentWord) return;
+    const wasActive = activeGroup === group;
+    const newOrder = buzzOrderRef.current.filter((o) => o.group !== group);
+    buzzOrderRef.current = newOrder;
+    setBuzzOrder(newOrder);
+    const updatedTried = new Set(triedSetRef.current);
+    updatedTried.add(group);
+    triedSetRef.current = updatedTried;
+    setTriedSet(updatedTried);
+    if (wasActive) {
+      const next = newOrder.find((o) => !updatedTried.has(o.group));
+      if (next) {
+        activeGroupRef.current = next.group;
+        setActiveGroup(next.group);
+        setSelStart(null);
+      } else {
+        releaseTurn();
+        scheduleRetry();
+      }
+    }
   }
 
   // Dipakai mode Guru Bebas (cek seluruh kata tersisa, bukan cuma currentWord) DAN oleh Guru
@@ -3257,7 +3320,8 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
             {buzzOrder.map((o, i) => (
               <div key={o.group} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
                 <span style={{ width: 18, height: 18, borderRadius: "50%", background: GROUP_COLORS[o.group - 1], color: "#101B34", fontSize: 10, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>{i + 1}</span>
-                <span style={{ color: t.text }}>Kelompok {o.group}{o.group === activeGroup ? " — sedang menjawab" : ""}</span>
+                <span style={{ color: t.text, flex: 1 }}>Kelompok {o.group}{o.group === activeGroup ? " — sedang menjawab" : ""}</span>
+                <button onClick={() => skipGroupFromQueue(o.group)} title={`Lewati Kelompok ${o.group} (angkat tangan tapi tidak tahu jawabannya)`} style={{ background: "transparent", border: "none", color: t.faint, cursor: "pointer", padding: 3, display: "flex", alignItems: "center" }}><span style={{ fontSize: 13, lineHeight: 1, color: "inherit" }}>⏭</span></button>
               </div>
             ))}
           </div>
@@ -3714,7 +3778,8 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
                 {buzzOrder.map((o, i) => (
                   <div key={o.group} style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, borderRadius: 10, padding: "5px 10px" }}>
                     <span style={{ width: 18, height: 18, borderRadius: "50%", background: GROUP_COLORS[o.group - 1], color: "#101B34", fontSize: 10, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{i + 1}</span>
-                    <span className="sgt" style={{ fontWeight: 700, fontSize: 12.5 }}>Kelompok {o.group}</span>
+                    <span className="sgt" style={{ fontWeight: 700, fontSize: 12.5, flex: 1 }}>Kelompok {o.group}</span>
+                    <button onClick={() => skipGroupFromQueue(o.group)} title={`Lewati Kelompok ${o.group} (angkat tangan tapi tidak tahu jawabannya)`} style={{ background: "transparent", border: "none", color: t.faint, cursor: "pointer", padding: 2, display: "flex", alignItems: "center", flexShrink: 0 }}><span style={{ fontSize: 12, lineHeight: 1, color: "inherit" }}>⏭</span></button>
                   </div>
                 ))}
               </div>
@@ -3765,6 +3830,7 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
                 <div key={o.group} style={{ display: "flex", alignItems: "center", gap: 8, background: t.panel, borderRadius: 10, padding: "8px 14px" }}>
                   <span style={{ width: 22, height: 22, borderRadius: "50%", background: GROUP_COLORS[o.group - 1], color: "#101B34", fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>{i + 1}</span>
                   <span className="sgt" style={{ fontWeight: 700, fontSize: 14 }}>Kelompok {o.group}</span>
+                  <button onClick={() => skipGroupFromQueue(o.group)} title={`Lewati Kelompok ${o.group} (angkat tangan tapi tidak tahu jawabannya)`} style={{ background: "transparent", border: "none", color: t.faint, cursor: "pointer", padding: 2, display: "flex", alignItems: "center" }}><span style={{ fontSize: 13, lineHeight: 1, color: "inherit" }}>⏭</span></button>
                 </div>
               ))}
             </div>
@@ -3868,7 +3934,8 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
               {buzzOrder.map((o, i) => (
                 <div key={o.group} style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, borderRadius: 8, padding: "4px 8px" }}>
                   <span style={{ width: 16, height: 16, borderRadius: "50%", background: GROUP_COLORS[o.group - 1], color: "#101B34", fontSize: 9, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{i + 1}</span>
-                  <span className="sgt" style={{ fontWeight: 700, fontSize: 11.5 }}>Kelompok {o.group}</span>
+                  <span className="sgt" style={{ fontWeight: 700, fontSize: 11.5, flex: 1 }}>Kelompok {o.group}</span>
+                  <button onClick={() => skipGroupFromQueue(o.group)} title={`Lewati Kelompok ${o.group} (angkat tangan tapi tidak tahu jawabannya)`} style={{ background: "transparent", border: "none", color: t.faint, cursor: "pointer", padding: 2, display: "flex", alignItems: "center", flexShrink: 0 }}><span style={{ fontSize: 11, lineHeight: 1, color: "inherit" }}>⏭</span></button>
                 </div>
               ))}
             </div>
@@ -4533,8 +4600,12 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
     if (scored) return;
     // FITUR BARU: kalau waktu babak memang sudah habis, tidak perlu tanya konfirmasi lagi —
     // itulah justru fungsi tombol ini (paksa akhiri babak begitu waktu kelas habis).
+    // BUGFIX: teks ini dulu bilang "tetap dapat 1 poin" — sisa dari sistem skor LAMA sebelum
+    // diubah (lihat catatan di applyScores) jadi kelompok yang belum selesai sekarang dapat 0 poin,
+    // bukan 1. Teksnya ketinggalan tidak ikut diperbarui saat sistem skornya diubah, jadi guru bisa
+    // salah kira kelompok itu masih dapat sesuatu.
     if (!timeUp && finishers.length < Object.keys(joinedGroups).length) {
-      if (!window.confirm("Masih ada kelompok yang belum selesai. Akhiri babak sekarang? Kelompok yang belum selesai tetap dapat 1 poin.")) return;
+      if (!window.confirm("Masih ada kelompok yang belum selesai. Akhiri babak sekarang? Kelompok yang belum selesai dapat 0 poin.")) return;
     }
     applyScores(finishers);
   }
