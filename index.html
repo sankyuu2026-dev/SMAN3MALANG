@@ -4102,6 +4102,27 @@ function shadeColor(hex, percent) {
   return `#${(0x1000000 + r * 0x10000 + g * 0x100 + b).toString(16).slice(1)}`;
 }
 
+// FIX (permintaan guru: rapikan posisi kotak Mystery Box supaya menyesuaikan jumlah kotak):
+// sebelumnya jumlah kolom di papan kotak ditentukan murni oleh lebar layar (Flexbox auto-wrap),
+// jadi kalau total kotaknya tidak pas habis dibagi jumlah kolom yang kebetulan muat di layar
+// (mis. 36 kotak jadi 8 kolom → baris terakhir cuma 4 kotak), baris terakhir itu terlihat
+// "menggantung" tanggung. Fungsi ini sengaja MEMILIH jumlah kolom yang membuat papan sepenuh/
+// serapi mungkin: diprioritaskan jumlah kolom yang paling mendekati akar kuadrat total kotak
+// (biar bentuknya mendekati persegi, enak dipandang), dan di antara pilihan yang sama-sama
+// dekat, dipilih yang bikin baris terakhir paling sedikit "bolong"-nya (idealnya pas habis
+// dibagi rata, seperti 36 kotak → 6×6, bukan 8 kolom bersisa 4).
+function bestGridCols(total) {
+  if (total <= 1) return 1;
+  const target = Math.max(1, Math.round(Math.sqrt(total)));
+  let best = target, bestScore = Infinity;
+  for (let c = Math.max(1, target - 2); c <= target + 2; c++) {
+    const remainder = total % c === 0 ? 0 : c - (total % c); // berapa "kotak kosong" tersisa di baris terakhir kalau pakai c kolom
+    const score = Math.abs(c - target) * 10 + remainder; // jarak ke akar kuadrat jadi prioritas utama, sisa baris cuma pemecah seri
+    if (score < bestScore) { best = c; bestScore = score; }
+  }
+  return Math.min(9, Math.max(3, best)); // dibatasi wajar: minimal 3 kolom, maksimal 9 (biar kotak tidak kekecilan di layar lebar)
+}
+
 const SEED_INSTRUCTIONS = [
   "Tuliskan 3 kosakata benda yang berhubungan dengan alat elektronik.",
   "Sebutkan 6 kosakata perlengkapan alat tulis yang ada di atas meja belajarmu.",
@@ -4246,6 +4267,16 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
         const p = JSON.parse(rawP);
         if (p.stage) setStage(p.stage);
         if (p.opened) setOpened(p.opened);
+        // BUGFIX: urutan acak papan (playOrder) dulu TIDAK ikut disimpan di sini — cuma `opened`
+        // (status kotak mana yang sudah dibuka) yang tersimpan. Akibatnya kalau halaman
+        // ter-refresh saat sedang main, playOrder balik ke array kosong (nilai awal useState),
+        // dan tampilan otomatis jatuh balik ke `items` (urutan ASLI di Persiapan) — bukan urutan
+        // acak yang tadi dilihat siswa. Kotak yang sudah dibuka tetap "benar" per isinya (karena
+        // `opened` disimpan per id, bukan per posisi), tapi POSISINYA di papan ikut berubah,
+        // padahal seharusnya tidak ada perubahan apa pun sebelum & sesudah refresh. Sekarang
+        // playOrder ikut disimpan & dipulihkan sama seperti `opened`.
+        if (Array.isArray(p.playOrder) && p.playOrder.length > 0) setPlayOrder(p.playOrder);
+        if (p.mysteryBoxIds) setMysteryBoxIds(new Set(p.mysteryBoxIds));
       }
     } catch (e) { /* belum ada progres tersimpan, atau data korup */ }
     setLoaded(true);
@@ -4275,11 +4306,11 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
   useEffect(() => {
     if (!loaded) return;
     const tm = setTimeout(() => {
-      const res = safeSetItem(scopedKey("bk-progress", teacher.uid), JSON.stringify({ stage, opened }));
+      const res = safeSetItem(scopedKey("bk-progress", teacher.uid), JSON.stringify({ stage, opened, playOrder, mysteryBoxIds: Array.from(mysteryBoxIds) }));
       setStorageWarning(res.ok ? null : res.message);
     }, 500);
     return () => clearTimeout(tm);
-  }, [stage, opened, loaded]);
+  }, [stage, opened, playOrder, mysteryBoxIds, loaded]);
 
   function endGame() {
     if (!window.confirm("Akhiri permainan ini? Progres kotak yang sudah dibuka akan dihapus.")) return;
@@ -4573,38 +4604,60 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
               — tiap baris, termasuk baris terakhir yang tidak penuh, otomatis dirapikan ke
               TENGAH sesuai jumlah kotak yang benar-benar ada di baris itu, bukan menyisakan
               celah kosong di salah satu sisi. */}
-          <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: 12 }}>
-            {(playOrder.length ? playOrder : items).map((it, i) => {
-              const isOpen = opened[it.id];
-              // Cuma dicek/dipakai untuk gaya SETELAH kotak dibuka — sebelum diklik, kotak spesial
-              // tampil identik dengan kotak biasa (lihat catatan di deklarasi mysteryBoxIds), jadi
-              // tidak membocorkan yang mana spesial sebelum waktunya.
-              const wasMystery = isOpen && mysteryBoxIds.has(it.id);
-              const baseColor = BOX_COLORS[i % BOX_COLORS.length];
-              return (
-                <button key={it.id} onClick={() => openBox(it)} className={`sgt${!isOpen ? " mbox-tile" : ""}`} style={{
-                  flex: "1 1 84px", maxWidth: 110, aspectRatio: "1 / 1", borderRadius: 16, cursor: isOpen ? "default" : "pointer", border: "none",
-                  // FITUR BARU: dulu warna kotak flat satu lapis — sekarang gradien miring dari
-                  // warna aslinya ke versi sedikit lebih gelap (shadeColor), dipadukan dengan
-                  // bayangan dua lapis (garis gelap solid di bawah untuk kesan "chunky button" +
-                  // bayangan lembut menyebar) supaya kotak terasa lebih tebal/berbentuk, bukan
-                  // stiker warna datar di atas kertas.
-                  background: isOpen
-                    ? (wasMystery ? "linear-gradient(160deg, #FFF3D6, #FBE3A6)" : t.panel2)
-                    : `linear-gradient(160deg, ${shadeColor(baseColor, 12)}, ${shadeColor(baseColor, -14)})`,
-                  color: isOpen ? (wasMystery ? "#8A6412" : t.faint) : "#101B34",
-                  fontWeight: 800, fontSize: 20, display: "flex", alignItems: "center", justifyContent: "center",
-                  opacity: isOpen ? (wasMystery ? 1 : 0.5) : 1,
-                  boxShadow: isOpen
-                    ? (wasMystery ? "0 0 0 2px #F4B740, 0 4px 14px rgba(244,183,64,.35)" : "inset 0 0 0 1px rgba(0,0,0,.04)")
-                    : `0 4px 0 ${shadeColor(baseColor, -28)}, 0 8px 18px rgba(28,32,51,.18)`,
-                  textShadow: isOpen ? "none" : "0 1px 0 rgba(255,255,255,.35), 0 -1px 0 rgba(0,0,0,.12)",
-                  transform: isOpen ? "scale(.94)" : "scale(1)", transition: "transform .15s ease, opacity .15s ease, box-shadow .15s ease",
-                  animation: isOpen ? "boxPop .5s cubic-bezier(.3,1.5,.4,1) both" : "none",
-                }}>{isOpen ? <span style={{ fontSize: 22, lineHeight: 1, color: 'inherit', position: "relative", zIndex: 1 }}>{wasMystery ? "🎁" : "✓"}</span> : <span style={{ position: "relative", zIndex: 1 }}>{i + 1}</span>}</button>
-              );
-            })}
-          </div>
+          {/* FIX (rapikan posisi kotak menyesuaikan jumlahnya): dulu satu blok Flexbox besar
+              (flexWrap + justifyContent:center) yang membiarkan browser sendiri yang menentukan
+              berapa kotak muat per baris berdasarkan lebar layar — hasilnya baris terakhir yang
+              tidak penuh (mis. 36 kotak jadi 8 kolom, sisa 4) jatuhnya tanggung. Sekarang jumlah
+              kolom DITENTUKAN LEBIH DULU lewat bestGridCols() (dipilih supaya papannya sedekat
+              mungkin ke bentuk persegi & baris terakhir sepenuh mungkin), lalu kotak-kotaknya
+              dikelompokkan jadi baris-baris eksplisit — tiap baris py sendiri container flex
+              dengan justifyContent:center, jadi baris manapun yang tidak penuh (termasuk baris
+              terakhir) pasti rapi di tengah, bukan menggantung rata kiri. */}
+          {(() => {
+            const boardItems = playOrder.length ? playOrder : items;
+            const cols = bestGridCols(boardItems.length);
+            const rows = [];
+            for (let r = 0; r < boardItems.length; r += cols) rows.push(boardItems.slice(r, r + cols));
+            return (
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                {rows.map((row, ri) => (
+                  <div key={ri} style={{ display: "flex", justifyContent: "center", gap: 12 }}>
+                    {row.map((it, ci) => {
+                      const i = ri * cols + ci; // indeks global — dipakai buat nomor kotak & rotasi warna, bukan cuma posisi di barisnya sendiri
+                      const isOpen = opened[it.id];
+                      // Cuma dicek/dipakai untuk gaya SETELAH kotak dibuka — sebelum diklik, kotak spesial
+                      // tampil identik dengan kotak biasa (lihat catatan di deklarasi mysteryBoxIds), jadi
+                      // tidak membocorkan yang mana spesial sebelum waktunya.
+                      const wasMystery = isOpen && mysteryBoxIds.has(it.id);
+                      const baseColor = BOX_COLORS[i % BOX_COLORS.length];
+                      return (
+                        <button key={it.id} onClick={() => openBox(it)} className={`sgt${!isOpen ? " mbox-tile" : ""}`} style={{
+                          flex: "1 1 84px", maxWidth: 110, aspectRatio: "1 / 1", borderRadius: 16, cursor: isOpen ? "default" : "pointer", border: "none",
+                          // FITUR BARU: dulu warna kotak flat satu lapis — sekarang gradien miring dari
+                          // warna aslinya ke versi sedikit lebih gelap (shadeColor), dipadukan dengan
+                          // bayangan dua lapis (garis gelap solid di bawah untuk kesan "chunky button" +
+                          // bayangan lembut menyebar) supaya kotak terasa lebih tebal/berbentuk, bukan
+                          // stiker warna datar di atas kertas.
+                          background: isOpen
+                            ? (wasMystery ? "linear-gradient(160deg, #FFF3D6, #FBE3A6)" : t.panel2)
+                            : `linear-gradient(160deg, ${shadeColor(baseColor, 12)}, ${shadeColor(baseColor, -14)})`,
+                          color: isOpen ? (wasMystery ? "#8A6412" : t.faint) : "#101B34",
+                          fontWeight: 800, fontSize: 20, display: "flex", alignItems: "center", justifyContent: "center",
+                          opacity: isOpen ? (wasMystery ? 1 : 0.5) : 1,
+                          boxShadow: isOpen
+                            ? (wasMystery ? "0 0 0 2px #F4B740, 0 4px 14px rgba(244,183,64,.35)" : "inset 0 0 0 1px rgba(0,0,0,.04)")
+                            : `0 4px 0 ${shadeColor(baseColor, -28)}, 0 8px 18px rgba(28,32,51,.18)`,
+                          textShadow: isOpen ? "none" : "0 1px 0 rgba(255,255,255,.35), 0 -1px 0 rgba(0,0,0,.12)",
+                          transform: isOpen ? "scale(.94)" : "scale(1)", transition: "transform .15s ease, opacity .15s ease, box-shadow .15s ease",
+                          animation: isOpen ? "boxPop .5s cubic-bezier(.3,1.5,.4,1) both" : "none",
+                        }}>{isOpen ? <span style={{ fontSize: 22, lineHeight: 1, color: 'inherit', position: "relative", zIndex: 1 }}>{wasMystery ? "🎁" : "✓"}</span> : <span style={{ position: "relative", zIndex: 1 }}>{i + 1}</span>}</button>
+                      );
+                    })}
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
         </div>
       </div>
     </div>
