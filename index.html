@@ -1303,6 +1303,14 @@ const fontImport = `
      skor "melompat" saat bertambah, dan modal muncul dengan pop lembut — dipakai bareng
      di ketiga game supaya aksi (klik, cocok, skor naik) selalu terasa "hidup". */
   @keyframes boxPop { 0%{transform:scale(1) rotate(0);} 35%{transform:scale(1.16) rotate(-4deg);} 62%{transform:scale(.93) rotate(3deg);} 100%{transform:scale(1) rotate(0);} }
+  /* FITUR BARU: kotak Mystery Box yang belum dibuka dulu blok warna polos datar — sekarang diberi
+     highlight kilau di pojok kiri-atas (radial-gradient putih transparan lewat ::before) supaya
+     terasa seperti tombol/kotak fisik yang mengilap, bukan kotak warna flat 2D. ".mbox-tile:hover"
+     memberi sedikit efek "terangkat" hanya saat kotak masih bisa diklik (belum dibuka). */
+  .mbox-tile { position: relative; overflow: hidden; }
+  .mbox-tile::before { content: ""; position: absolute; inset: 0; background: radial-gradient(circle at 28% 24%, rgba(255,255,255,.55), rgba(255,255,255,0) 55%); pointer-events: none; }
+  .mbox-tile:not(:disabled):hover { transform: translateY(-3px) scale(1.03) !important; }
+  @keyframes celebrateBadge { 0% { opacity: 0; transform: translateY(-6px) scale(.9); } 100% { opacity: 1; transform: translateY(0) scale(1); } }
   @keyframes modalPop { 0%{opacity:0; transform:scale(.92) translateY(8px);} 100%{opacity:1; transform:scale(1) translateY(0);} }
   @keyframes scoreBump { 0%{transform:scale(1);} 45%{transform:scale(1.4); color:#3FBFAD;} 100%{transform:scale(1);} }
   @keyframes matchGlow { 0%{box-shadow:0 0 0 0 rgba(63,191,173,.65);} 70%{box-shadow:0 0 0 12px rgba(63,191,173,0);} 100%{box-shadow:0 0 0 0 rgba(63,191,173,0);} }
@@ -4046,6 +4054,17 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
    Individu, tanpa batas waktu, tanpa skor — murni latihan.
 =========================================================== */
 const BOX_COLORS = ["#F4B740", "#EF5B5B", "#3FBFAD", "#F2879E", "#5DA9E9", "#8FBF6B"];
+// FITUR BARU: dipakai untuk memberi efek gradien pada kotak Mystery Box (dari warna aslinya ke
+// versi lebih gelap/terang) supaya kotaknya terasa lebih "berbentuk" (chunky button), bukan
+// blok warna polos satu lapis seperti sebelumnya. percent negatif = digelapkan, positif = diterangkan.
+function shadeColor(hex, percent) {
+  const num = parseInt(hex.slice(1), 16);
+  const amt = Math.round(2.55 * percent);
+  const r = Math.min(255, Math.max(0, (num >> 16) + amt));
+  const g = Math.min(255, Math.max(0, ((num >> 8) & 0x00ff) + amt));
+  const b = Math.min(255, Math.max(0, (num & 0x0000ff) + amt));
+  return `#${(0x1000000 + r * 0x10000 + g * 0x100 + b).toString(16).slice(1)}`;
+}
 
 const SEED_INSTRUCTIONS = [
   "Tuliskan 3 kosakata benda yang berhubungan dengan alat elektronik.",
@@ -4132,6 +4151,20 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
   const [confetti, setConfetti] = useState(null);
   const confettiTimerRef = useRef(null);
   useEffect(() => () => { if (confettiTimerRef.current) clearTimeout(confettiTimerRef.current); }, []);
+  // FITUR BARU: dulu tidak ada perayaan sama sekali begitu SEMUA kotak sudah dibuka — cuma progress
+  // bar diam di 100%. celebratedRef mencegah confetti ini meledak berkali-kali tiap re-render
+  // selama masih di kondisi 100% (cuma sekali per sesi papan ini) — direset lagi begitu papan
+  // dimulai ulang lewat resetBoard()/startGame().
+  const celebratedRef = useRef(false);
+  useEffect(() => {
+    const openedCount = Object.keys(opened).length;
+    if (items.length > 0 && openedCount === items.length && !celebratedRef.current) {
+      celebratedRef.current = true;
+      setConfetti(makeConfettiBurst("#F2879E"));
+      if (confettiTimerRef.current) clearTimeout(confettiTimerRef.current);
+      confettiTimerRef.current = setTimeout(() => setConfetti(null), 1600);
+    }
+  }, [opened, items.length]);
 
   useEffect(() => {
     let localSavedAt = 0;
@@ -4228,6 +4261,7 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
   function startGame() {
     setOpened({}); setActiveBox(null);
     setMysteryBoxIds(pickMysteryBoxes(items));
+    celebratedRef.current = false;
     setStage("play");
   }
   function openBox(item) {
@@ -4251,6 +4285,7 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
     // Sama seperti startGame() — acak ulang posisi kotak spesial biar tiap main ulang dapat
     // kejutan yang beda, bukan selalu di kotak yang sama.
     setMysteryBoxIds(pickMysteryBoxes(items));
+    celebratedRef.current = false;
   }
 
   /* ---- Kelola kejutan kotak spesial ---- */
@@ -4325,7 +4360,7 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
         <div style={{ background: t.panel, borderRadius: 14, padding: 16, marginBottom: 20, boxShadow: t.shadowSm }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
             <SectionLabel n={2} hint={`— ${items.length} kotak`} faint={t.faint}>Daftar perintah</SectionLabel>
-            <button onClick={() => setBulkAddOpen(true)} style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: `1px dashed ${t.border}`, color: t.dim, borderRadius: 8, padding: "8px 14px", cursor: "pointer", fontSize: 13 }}><span style={{ fontSize: 14, lineHeight: 1, color: 'inherit' }}>📋</span> Tambah Banyak Sekaligus</button>
+            <button onClick={() => setBulkAddOpen(true)} style={{ display: "flex", alignItems: "center", gap: 8, background: t.panel, border: `1.5px dashed ${t.accent || "#F4B740"}`, color: t.text, borderRadius: 10, padding: "10px 18px", cursor: "pointer", fontSize: 14, fontWeight: 600 }}><span style={{ fontSize: 16, lineHeight: 1 }}>📋</span> Tambah Banyak Sekaligus</button>
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {items.map((it, i) => (
@@ -4420,14 +4455,19 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50 }} onClick={() => setActiveBox(null)}>
           <div onClick={(e) => e.stopPropagation()} className="modal-pop" style={{
             width: "min(520px, 90vw)",
-            background: activeBox.mystery ? "linear-gradient(135deg,#F4B740,#F2A93B)" : "#F2879E",
-            borderRadius: 20, padding: "36px 30px", boxShadow: "0 20px 60px rgba(0,0,0,.4)", position: "relative",
+            // FITUR BARU: kotak perintah biasa dulu warna flat "#F2879E" polos — sekarang dibuat
+            // gradien juga (senada dengan kotak spesial yang sudah bergradien) supaya kedua jenis
+            // modal ini terasa satu keluarga desain, bukan satu bergradien satu polos.
+            background: activeBox.mystery ? "linear-gradient(135deg,#F4B740,#F2A93B)" : "linear-gradient(135deg,#F2879E,#EE6E92)",
+            borderRadius: 22, padding: "40px 30px 34px", boxShadow: "0 20px 60px rgba(0,0,0,.4)", position: "relative", overflow: "hidden",
           }}>
-            <button onClick={() => setActiveBox(null)} style={{ position: "absolute", top: 12, right: 14, background: "none", border: "none", color: "#101B34", cursor: "pointer" }}><span style={{ fontSize: 20, lineHeight: 1, color: 'inherit' }}>✕</span></button>
-            {activeBox.mystery && (
-              <div className="sgt" style={{ fontSize: 13, fontWeight: 700, color: "#101B34", textAlign: "center", marginBottom: 10, letterSpacing: 0.5, textTransform: "uppercase" }}>🎁 Kotak Spesial!</div>
-            )}
-            <div className="sgt" style={{ fontSize: 20, fontWeight: 700, color: "#101B34", textAlign: "center", lineHeight: 1.5 }}>{activeBox.text}</div>
+            {/* FITUR BARU: lingkaran dekoratif transparan di pojok, sekadar biar modalnya tidak
+                terasa datar/kosong — murni hiasan, tidak mengganggu keterbacaan teks di tengah. */}
+            <div style={{ position: "absolute", top: -40, right: -40, width: 130, height: 130, borderRadius: "50%", background: "rgba(255,255,255,.14)" }} />
+            <div style={{ position: "absolute", bottom: -50, left: -30, width: 110, height: 110, borderRadius: "50%", background: "rgba(255,255,255,.1)" }} />
+            <button onClick={() => setActiveBox(null)} style={{ position: "absolute", top: 12, right: 14, width: 28, height: 28, borderRadius: "50%", background: "rgba(16,27,52,.12)", border: "none", color: "#101B34", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1 }}><span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>✕</span></button>
+            <div className="sgt" style={{ position: "relative", fontSize: 12, fontWeight: 700, color: "#101B34", textAlign: "center", marginBottom: activeBox.mystery ? 12 : 14, letterSpacing: 0.5, textTransform: "uppercase", opacity: 0.7 }}>{activeBox.mystery ? "🎁 Kotak Spesial!" : "📋 Perintah"}</div>
+            <div className="sgt" style={{ position: "relative", fontSize: 20, fontWeight: 700, color: "#101B34", textAlign: "center", lineHeight: 1.5 }}>{activeBox.text}</div>
           </div>
         </div>
       )}
@@ -4449,11 +4489,19 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
       <div style={{ maxWidth: 860, margin: "0 auto" }}>
         <div style={{ marginBottom: 16 }}>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, color: t.dim, marginBottom: 6 }}>
-            <span>Progres</span><span>{openedCount}/{items.length} kotak dibuka</span>
+            <span>Progres</span><span>{openedCount}/{items.length} kotak dibuka{items.length ? ` (${Math.round((openedCount / items.length) * 100)}%)` : ""}</span>
           </div>
-          <div style={{ height: 8, borderRadius: 999, background: t.panel, overflow: "hidden" }}>
-            <div style={{ height: "100%", width: `${items.length ? (openedCount / items.length) * 100 : 0}%`, background: "#F4B740", borderRadius: 999, transition: "width .3s ease" }} />
+          <div style={{ height: 10, borderRadius: 999, background: t.panel, overflow: "hidden", boxShadow: "inset 0 1px 3px rgba(0,0,0,.12)" }}>
+            <div style={{ height: "100%", width: `${items.length ? (openedCount / items.length) * 100 : 0}%`, background: "linear-gradient(90deg, #F4B740, #F2879E)", borderRadius: 999, transition: "width .3s ease" }} />
           </div>
+          {/* FITUR BARU: dulu tidak ada penanda khusus saat SEMUA kotak sudah dibuka — progres cuma
+              diam di 100% tanpa ada yang menyambut. Sekarang muncul lencana ucapan selamat kecil
+              begitu openedCount menyentuh total kotaknya. */}
+          {items.length > 0 && openedCount === items.length && (
+            <div style={{ marginTop: 10, textAlign: "center", background: "linear-gradient(90deg, #FFF3D6, #FDE4EC)", color: "#8A6412", borderRadius: 10, padding: "8px 14px", fontSize: 13, fontWeight: 700, animation: "celebrateBadge .4s ease both" }}>
+              🎉 Semua kotak sudah dibuka!
+            </div>
+          )}
         </div>
 
         <div style={{ background: t.panel, borderRadius: 20, padding: 20, boxShadow: t.shadowSm }}>
@@ -4464,17 +4512,28 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
               // tampil identik dengan kotak biasa (lihat catatan di deklarasi mysteryBoxIds), jadi
               // tidak membocorkan yang mana spesial sebelum waktunya.
               const wasMystery = isOpen && mysteryBoxIds.has(it.id);
+              const baseColor = BOX_COLORS[i % BOX_COLORS.length];
               return (
-                <button key={it.id} onClick={() => openBox(it)} style={{
-                  aspectRatio: "1 / 1", borderRadius: 14, cursor: isOpen ? "default" : "pointer",
-                  border: wasMystery ? "2px solid #F4B740" : "none",
-                  background: isOpen ? (wasMystery ? "#FBEBC7" : t.panel2) : BOX_COLORS[i % BOX_COLORS.length],
+                <button key={it.id} onClick={() => openBox(it)} className={`sgt${!isOpen ? " mbox-tile" : ""}`} style={{
+                  aspectRatio: "1 / 1", borderRadius: 16, cursor: isOpen ? "default" : "pointer", border: "none",
+                  // FITUR BARU: dulu warna kotak flat satu lapis — sekarang gradien miring dari
+                  // warna aslinya ke versi sedikit lebih gelap (shadeColor), dipadukan dengan
+                  // bayangan dua lapis (garis gelap solid di bawah untuk kesan "chunky button" +
+                  // bayangan lembut menyebar) supaya kotak terasa lebih tebal/berbentuk, bukan
+                  // stiker warna datar di atas kertas.
+                  background: isOpen
+                    ? (wasMystery ? "linear-gradient(160deg, #FFF3D6, #FBE3A6)" : t.panel2)
+                    : `linear-gradient(160deg, ${shadeColor(baseColor, 12)}, ${shadeColor(baseColor, -14)})`,
                   color: isOpen ? (wasMystery ? "#8A6412" : t.faint) : "#101B34",
-                  fontWeight: 800, fontSize: 19, display: "flex", alignItems: "center", justifyContent: "center",
-                  opacity: isOpen ? (wasMystery ? 0.85 : 0.45) : 1, boxShadow: isOpen ? "none" : "0 3px 0 rgba(0,0,0,.16)",
-                  transform: isOpen ? "scale(.94)" : "scale(1)", transition: "transform .15s ease, opacity .15s ease",
+                  fontWeight: 800, fontSize: 20, display: "flex", alignItems: "center", justifyContent: "center",
+                  opacity: isOpen ? (wasMystery ? 1 : 0.5) : 1,
+                  boxShadow: isOpen
+                    ? (wasMystery ? "0 0 0 2px #F4B740, 0 4px 14px rgba(244,183,64,.35)" : "inset 0 0 0 1px rgba(0,0,0,.04)")
+                    : `0 4px 0 ${shadeColor(baseColor, -28)}, 0 8px 18px rgba(28,32,51,.18)`,
+                  textShadow: isOpen ? "none" : "0 1px 0 rgba(255,255,255,.35), 0 -1px 0 rgba(0,0,0,.12)",
+                  transform: isOpen ? "scale(.94)" : "scale(1)", transition: "transform .15s ease, opacity .15s ease, box-shadow .15s ease",
                   animation: isOpen ? "boxPop .5s cubic-bezier(.3,1.5,.4,1) both" : "none",
-                }} className="sgt">{isOpen ? <span style={{ fontSize: 20, lineHeight: 1, color: 'inherit' }}>{wasMystery ? "🎁" : "✓"}</span> : i + 1}</button>
+                }}>{isOpen ? <span style={{ fontSize: 22, lineHeight: 1, color: 'inherit', position: "relative", zIndex: 1 }}>{wasMystery ? "🎁" : "✓"}</span> : <span style={{ position: "relative", zIndex: 1 }}>{i + 1}</span>}</button>
               );
             })}
           </div>
@@ -4950,7 +5009,7 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
                   {isOpen && (
                     <div className="babak-acc-body" style={{ padding: "0 16px 16px", borderTop: `1px solid ${t.border}` }}>
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", margin: "14px 0" }}>
-                        <button onClick={() => setBulkAddOpen(true)} style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: `1px dashed ${t.border}`, color: t.dim, borderRadius: 8, padding: "8px 14px", cursor: "pointer", fontSize: 13 }}>📋 Tambah Banyak Sekaligus</button>
+                        <button onClick={() => setBulkAddOpen(true)} style={{ display: "flex", alignItems: "center", gap: 8, background: t.panel, border: `1.5px dashed ${t.accent || "#F4B740"}`, color: t.text, borderRadius: 10, padding: "10px 18px", cursor: "pointer", fontSize: 14, fontWeight: 600 }}><span style={{ fontSize: 16, lineHeight: 1 }}>📋</span> Tambah Banyak Sekaligus</button>
                       </div>
 
                       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
