@@ -4360,6 +4360,30 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
     setDataByMateri((prev) => ({ ...prev, [selectedMateri]: [...(prev[selectedMateri] || []), ...lines.map((line) => ({ id: uid(), text: line }))] }));
     return lines.length;
   }
+  // FITUR BARU: dulu tiap kotak spesial dibuka, kejutannya diundi murni acak (Math.random) —
+  // dengan itu wajar secara statistik ada kejutan yang muncul 3-4x dalam satu game sementara
+  // yang lain tidak muncul sama sekali. Sekarang pakai sistem "kartu kocok" (shuffle bag): satu
+  // putaran penuh berisi SEMUA kejutan dalam urutan acak, diambil satu-satu tanpa pengembalian.
+  // Begitu satu putaran habis (semua kejutan sudah pernah muncul), dikocok ulang jadi putaran
+  // baru yang urutannya beda lagi — jadi tetap tidak berurutan/predictable, tapi tiap kejutan
+  // dijamin dapat giliran yang sama rata sebelum ada yang diulang.
+  const surpriseBagRef = useRef({ remaining: [], poolKey: null });
+  function drawSurprise() {
+    const filled = surprises.filter((s) => s.trim());
+    const pool = filled.length > 0 ? filled : MYSTERY_BOX_SURPRISES;
+    const poolKey = pool.join("\n");
+    const bag = surpriseBagRef.current;
+    if (bag.poolKey !== poolKey) { bag.poolKey = poolKey; bag.remaining = []; }
+    if (bag.remaining.length === 0) {
+      const shuffled = [...pool];
+      for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+      }
+      bag.remaining = shuffled;
+    }
+    return bag.remaining.pop();
+  }
   // Dipakai bareng oleh startGame() & resetBoard() — supaya logika "pilih sebagian kotak jadi
   // spesial" tidak diketik ulang dua kali. Persentasenya sekarang dari mysteryChance (bisa
   // diatur guru), bukan angka 0.15 tetap lagi.
@@ -4371,6 +4395,7 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
   function startGame() {
     setOpened({}); setActiveBox(null);
     setMysteryBoxIds(pickMysteryBoxes(items));
+    surpriseBagRef.current = { remaining: [], poolKey: null };
     shuffleForPlay();
     celebratedRef.current = false;
     setStage("play");
@@ -4378,9 +4403,7 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
   function openBox(item) {
     setOpened((o) => ({ ...o, [item.id]: true }));
     if (mysteryBoxIds.has(item.id)) {
-      const filled = surprises.filter((s) => s.trim());
-      const pool = filled.length > 0 ? filled : MYSTERY_BOX_SURPRISES;
-      const surprise = pool[Math.floor(Math.random() * pool.length)];
+      const surprise = drawSurprise();
       setActiveBox({ id: item.id, text: surprise, mystery: true });
       setConfetti(makeConfettiBurst("#F4B740"));
       playCorrectSound();
@@ -4396,6 +4419,7 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
     // Sama seperti startGame() — acak ulang posisi kotak spesial DAN urutan kotaknya biar tiap
     // main ulang dapat susunan yang beda, bukan selalu di kotak & urutan yang sama.
     setMysteryBoxIds(pickMysteryBoxes(items));
+    surpriseBagRef.current = { remaining: [], poolKey: null };
     shuffleForPlay();
     celebratedRef.current = false;
   }
