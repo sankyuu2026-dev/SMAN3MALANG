@@ -4188,6 +4188,13 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
   const [confetti, setConfetti] = useState(null);
   const confettiTimerRef = useRef(null);
   useEffect(() => () => { if (confettiTimerRef.current) clearTimeout(confettiTimerRef.current); }, []);
+  // BUGFIX: `items` (dipakai persis di bawah ini, di dependency array useEffect konfeti) dulu
+  // baru dideklarasikan JAUH di bawah — mengevaluasi `items.length` di sini, SEBELUM baris
+  // `const items = ...`-nya sendiri sempat dijalankan, melanggar temporal dead zone JavaScript.
+  // Ini bukan cuma peringatan: benar-benar melempar "ReferenceError: Cannot access 'items'
+  // before initialization" setiap kali fungsi ini dijalankan — makanya Game 2 langsung blank
+  // total, tanpa terkecuali. Dipindah ke sini (sebelum dipakai) supaya urutannya benar.
+  const items = dataByMateri[selectedMateri] || [];
   // FITUR BARU: dulu tidak ada perayaan sama sekali begitu SEMUA kotak sudah dibuka — cuma progress
   // bar diam di 100%. celebratedRef mencegah confetti ini meledak berkali-kali tiap re-render
   // selama masih di kondisi 100% (cuma sekali per sesi papan ini) — direset lagi begitu papan
@@ -4267,7 +4274,6 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
     onBack();
   }
 
-  const items = dataByMateri[selectedMateri] || [];
   const canStart = items.some((it) => it.text.trim());
 
   function updateItem(id, value) {
