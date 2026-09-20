@@ -4195,6 +4195,20 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
   // before initialization" setiap kali fungsi ini dijalankan — makanya Game 2 langsung blank
   // total, tanpa terkecuali. Dipindah ke sini (sebelum dipakai) supaya urutannya benar.
   const items = dataByMateri[selectedMateri] || [];
+  // FITUR BARU: dulu urutan kotak saat main SELALU persis sama dengan urutan di Persiapan —
+  // gampang ditebak siswa yang sudah pernah lihat urutannya (mis. tahu kotak nomor 5 selalu
+  // perintah yang sama). playOrder menyimpan urutan ACAK khusus untuk sesi bermain kali ini,
+  // dibuat ulang tiap kali "Mulai Permainan"/"Reset Papan" diklik — `items` sendiri (urutan asli
+  // di Persiapan) tidak pernah diubah, cuma dipakai sebagai sumber untuk diacak.
+  const [playOrder, setPlayOrder] = useState([]);
+  function shuffleForPlay() {
+    const copy = [...items];
+    for (let i = copy.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [copy[i], copy[j]] = [copy[j], copy[i]];
+    }
+    setPlayOrder(copy);
+  }
   // FITUR BARU: dulu tidak ada perayaan sama sekali begitu SEMUA kotak sudah dibuka — cuma progress
   // bar diam di 100%. celebratedRef mencegah confetti ini meledak berkali-kali tiap re-render
   // selama masih di kondisi 100% (cuma sekali per sesi papan ini) — direset lagi begitu papan
@@ -4304,6 +4318,7 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
   function startGame() {
     setOpened({}); setActiveBox(null);
     setMysteryBoxIds(pickMysteryBoxes(items));
+    shuffleForPlay();
     celebratedRef.current = false;
     setStage("play");
   }
@@ -4325,9 +4340,10 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
   }
   function resetBoard() {
     setOpened({}); setActiveBox(null);
-    // Sama seperti startGame() — acak ulang posisi kotak spesial biar tiap main ulang dapat
-    // kejutan yang beda, bukan selalu di kotak yang sama.
+    // Sama seperti startGame() — acak ulang posisi kotak spesial DAN urutan kotaknya biar tiap
+    // main ulang dapat susunan yang beda, bukan selalu di kotak & urutan yang sama.
     setMysteryBoxIds(pickMysteryBoxes(items));
+    shuffleForPlay();
     celebratedRef.current = false;
   }
 
@@ -4549,8 +4565,16 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
         </div>
 
         <div style={{ background: t.panel, borderRadius: 20, padding: 20, boxShadow: t.shadowSm }}>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(84px, 1fr))", gap: 12 }}>
-            {items.map((it, i) => {
+          {/* FIX (UX): dulu pakai CSS Grid (gridTemplateColumns: repeat(auto-fill, ...)) — kalau
+              jumlah kotak tidak pas habis dibagi jumlah kolom (mis. 36 kotak dengan 8 kolom
+              menyisakan 4 kotak di baris terakhir), baris terakhir itu jatuhnya rata KIRI dengan
+              ruang kosong lebar di kanan, karena Grid menempatkan sel di posisi kolom yang tetap
+              walau tidak terisi penuh. Sekarang pakai Flexbox (flexWrap + justifyContent:center)
+              — tiap baris, termasuk baris terakhir yang tidak penuh, otomatis dirapikan ke
+              TENGAH sesuai jumlah kotak yang benar-benar ada di baris itu, bukan menyisakan
+              celah kosong di salah satu sisi. */}
+          <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: 12 }}>
+            {(playOrder.length ? playOrder : items).map((it, i) => {
               const isOpen = opened[it.id];
               // Cuma dicek/dipakai untuk gaya SETELAH kotak dibuka — sebelum diklik, kotak spesial
               // tampil identik dengan kotak biasa (lihat catatan di deklarasi mysteryBoxIds), jadi
@@ -4559,7 +4583,7 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
               const baseColor = BOX_COLORS[i % BOX_COLORS.length];
               return (
                 <button key={it.id} onClick={() => openBox(it)} className={`sgt${!isOpen ? " mbox-tile" : ""}`} style={{
-                  aspectRatio: "1 / 1", borderRadius: 16, cursor: isOpen ? "default" : "pointer", border: "none",
+                  flex: "1 1 84px", maxWidth: 110, aspectRatio: "1 / 1", borderRadius: 16, cursor: isOpen ? "default" : "pointer", border: "none",
                   // FITUR BARU: dulu warna kotak flat satu lapis — sekarang gradien miring dari
                   // warna aslinya ke versi sedikit lebih gelap (shadeColor), dipadukan dengan
                   // bayangan dua lapis (garis gelap solid di bawah untuk kesan "chunky button" +
