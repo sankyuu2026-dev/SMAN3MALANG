@@ -1229,7 +1229,7 @@ function QrJoinModal({ open, onClose, roomCode, joinedCount }) {
       loadQrLibrary().then(() => {
         if (cancelled || !box.isConnected) return;
         box.innerHTML = "";
-        new QRCode(box, { text: getJoinUrl(roomCode), width: 200, height: 200 });
+        new QRCode(box, { text: getJoinUrl(roomCode), width: 280, height: 280 });
       }).catch(() => {
         if (!cancelled && box.isConnected) box.textContent = "Gagal memuat QR — cek koneksi internet.";
       });
@@ -1811,16 +1811,24 @@ function CardsPlayArea({ roomCode, room, myGroup }) {
   // siswa putus-putus), permainan siswa itu sendiri tidak boleh ikut terganggu/macet karenanya.
   useEffect(() => {
     if (!roundId || matchedCount === 0) return;
-    // BUGFIX: {merge:true} di Firestore cuma menyatu di level FIELD PALING ATAS — kalau field-nya
-    // ditulis sebagai objek utuh seperti `cardsProgress: {[myGroup]: matchedCount}`, itu MENIMPA
-    // HABIS seluruh field cardsProgress (progres kelompok lain yang sudah tercatat ikut hilang),
-    // bukan menyatu ke isinya. Efeknya guru cuma pernah lihat kelompok yang PALING TERAKHIR
-    // mengirim update — kelompok lain kelihatan seolah 0/belum mulai padahal sedang mengerjakan.
-    // Diperbaiki pakai "dot path" (`cardsProgress.${myGroup}`) sebagai NAMA FIELD-nya sendiri —
-    // ini caranya Firestore menyatu ke SATU key di dalam map bersarang tanpa menyentuh key lain.
-    db.collection("rooms").doc(roomCode).set({
-      [`cardsProgress.${myGroup}`]: matchedCount,
-    }, { merge: true }).catch(() => {});
+    // BUGFIX (lanjutan): dot-path sebagai NAMA FIELD di dalam `.set(data, {merge:true})` sempat
+    // dikira cara yang benar untuk menyentuh satu key di dalam map bersarang tanpa mengganggu key
+    // lain (lihat catatan di atas). Ternyata Firestore CUMA MENJAMIN penafsiran dot-path seperti
+    // itu untuk `.update()` — bukan untuk `.set()+merge`. Akibatnya tulisan ini kemungkinan besar
+    // mendarat sebagai field aneh bernama literal "cardsProgress.3" di level ATAS dokumen (bukan
+    // masuk ke dalam field cardsProgress yang sebenarnya dibaca guru), jadi progres kelompok
+    // TIDAK PERNAH terbaca — persis gejala yang dilaporkan (macet di 0, semua kelompok, padahal
+    // kartu di HP-nya sendiri jelas berubah & fitur "selesai" yang polanya beda tetap normal).
+    // Diperbaiki pakai .update() — SATU-SATUNYA cara yang Firestore jamin resmi untuk menyasar
+    // field bersarang lewat dot-path — dengan fallback transaksi baca-ubah-tulis field
+    // cardsProgress secara utuh kalau .update() sampai gagal (mis. dokumen room sempat belum ada).
+    const ref = db.collection("rooms").doc(roomCode);
+    ref.update({ [`cardsProgress.${myGroup}`]: matchedCount }).catch(() => {
+      db.runTransaction((tx) => tx.get(ref).then((snap) => {
+        const current = (snap.data() || {}).cardsProgress || {};
+        tx.set(ref, { cardsProgress: { ...current, [myGroup]: matchedCount } }, { merge: true });
+      })).catch(() => {});
+    });
   }, [matchedCount, roundId, roomCode, myGroup]);
 
   // Kirim sinyal "selesai" sekali saja begitu semua pasangan ketemu, lewat transaksi (sama
