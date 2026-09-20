@@ -336,13 +336,47 @@ function loadSetupFromCloud(uid, docName) {
   if (!uid) return Promise.resolve(null);
   return db.collection("users").doc(uid).collection("setupData").doc(docName).get()
     .then((snap) => (snap.exists ? snap.data() : null))
-    .catch(() => null); // offline/gagal — diam-diam saja, localStorage yang sudah dimuat tetap dipakai
+    .catch((err) => { console.error("loadSetupFromCloud gagal:", docName, err); return null; }); // offline/gagal — diam-diam ke UI, localStorage yang sudah dimuat tetap dipakai, tapi tetap dicatat ke console supaya bisa dilacak
 }
 function saveSetupToCloud(uid, docName, payload) {
-  if (!uid) return;
-  db.collection("users").doc(uid).collection("setupData").doc(docName)
+  if (!uid) return Promise.reject(new Error("belum login"));
+  // FITUR BARU: dulu fungsi ini tidak me-return promise-nya sama sekali, jadi pemanggil tidak
+  // bisa tahu kapan proses simpan selesai atau gagal — makanya guru sempat was-was apa datanya
+  // BENAR-BENAR tersimpan di Firestore atau tidak (tidak ada penanda apa pun di layar). Sekarang
+  // promise-nya dikembalikan supaya pemanggil (lihat useCloudSaveStatus di bawah) bisa menunggu
+  // hasilnya dan menampilkan status "Tersimpan di cloud" / "Gagal" langsung di layar Persiapan.
+  return db.collection("users").doc(uid).collection("setupData").doc(docName)
     .set({ ...payload, savedAt: Date.now() })
-    .catch(() => {}); // best-effort — kegagalan di sini tidak boleh mengganggu penyimpanan lokal
+    .catch((err) => { console.error("saveSetupToCloud gagal:", docName, err); throw err; }); // best-effort ke UI (kegagalan di sini tidak boleh mengganggu penyimpanan lokal), tapi tetap dicatat & dilempar lagi supaya status di layar bisa diperbarui
+}
+
+// Hook kecil buat menampilkan status "Tersimpan di cloud" di layar Persiapan — dipakai bareng
+// oleh Word Search, Mystery Box, dan Card Rush (Langkah konsistensi visual: satu penanda yang
+// sama persis di ketiga game, bukan masing-masing bikin sendiri).
+function useCloudSaveStatus() {
+  const [status, setStatus] = useState("idle"); // idle | saving | saved | error
+  const [savedAt, setSavedAt] = useState(null);
+  function track(promise) {
+    setStatus("saving");
+    promise.then(() => { setStatus("saved"); setSavedAt(Date.now()); }).catch(() => setStatus("error"));
+  }
+  return { status, savedAt, track };
+}
+
+// Badge kecil penanda status simpan cloud, ditaruh di header layar Persiapan tiap game.
+function CloudSaveBadge({ t, status, savedAt }) {
+  if (status === "idle") return null;
+  const cfg = {
+    saving: { icon: "☁️", text: "Menyimpan ke cloud…", color: t.dim },
+    saved: { icon: "✅", text: savedAt ? `Tersimpan di cloud • ${new Date(savedAt).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })}` : "Tersimpan di cloud", color: "#3FBFAD" },
+    error: { icon: "⚠️", text: "Gagal simpan ke cloud (localStorage tetap aman)", color: "#EF5B5B" },
+  }[status];
+  return (
+    <div title={status === "error" ? "Koneksi bermasalah atau Firestore Security Rules belum mengizinkan users/{uid}/setupData. Kosakata TETAP tersimpan di browser ini." : "Kosakata ini juga tersalin ke Firestore, jadi tetap ada kalau kamu login dari device lain."}
+      style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, color: cfg.color, fontWeight: 600 }}>
+      <span style={{ fontSize: 13, lineHeight: 1 }}>{cfg.icon}</span> {cfg.text}
+    </div>
+  );
 }
 
 // Dulu tiap game (Tebak & Cari Kata, Buka Kotak, Card Rush) menulis ulang fungsi
@@ -1985,6 +2019,7 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
   const historyCol = db.collection("users").doc(teacher.uid).collection("history");
   const t = THEMES[theme];
   const isMobile = useIsMobile();
+  const cloudSave = useCloudSaveStatus();
 
   const [stage, setStage] = useState("setup"); // 'setup' | 'play'
   const [showBackConfirm, setShowBackConfirm] = useState(false); // dialog konfirmasi kembali ke persiapan
@@ -2242,7 +2277,7 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
       const payload = { dataByMateri, selectedMateri, puzzleByBabak: packPuzzleByBabakForSave(puzzleByBabak), pointByBabak };
       const res = safeSetItem(scopedKey("tck-setup-data", teacher.uid), JSON.stringify({ ...payload, savedAt: Date.now() }));
       setStorageWarning(res.ok ? null : res.message);
-      saveSetupToCloud(teacher.uid, "wordSearch", payload);
+      cloudSave.track(saveSetupToCloud(teacher.uid, "wordSearch", payload));
     }, 500);
     return () => clearTimeout(tm);
   }, [dataByMateri, selectedMateri, puzzleByBabak, pointByBabak, loaded]);
@@ -3561,6 +3596,7 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
           <div>
             <div className="sgt page-title" style={{ fontSize: 32, fontWeight: 800, letterSpacing: -0.5 }}>Persiapan Permainan</div>
             <div style={{ fontSize: 14.5, color: t.dim, marginTop: 3 }}>Susun materi &amp; kosakata sebelum mulai bermain bersama siswa.</div>
+            <div style={{ marginTop: 6 }}><CloudSaveBadge t={t} status={cloudSave.status} savedAt={cloudSave.savedAt} /></div>
           </div>
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             {/* Ikon utilitas */}
@@ -4127,6 +4163,7 @@ function ensureCardMateri(data, materi) {
 
 function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
   const t = THEMES[theme];
+  const cloudSave = useCloudSaveStatus();
   const [stage, setStage] = useState("setup"); // 'setup' | 'play'
   const [selectedMateri, setSelectedMateri] = useState("Gakkou no Seikatsu");
   const [dataByMateri, setDataByMateri] = useState(initialBoxDataByMateri);
@@ -4210,7 +4247,7 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
       const payload = { dataByMateri, selectedMateri, surprises, mysteryChance };
       const res = safeSetItem(scopedKey("bk-setup-data", teacher.uid), JSON.stringify({ ...payload, savedAt: Date.now() }));
       setStorageWarning(res.ok ? null : res.message);
-      saveSetupToCloud(teacher.uid, "mysteryBox", payload);
+      cloudSave.track(saveSetupToCloud(teacher.uid, "mysteryBox", payload));
     }, 500);
     return () => clearTimeout(tm);
   }, [dataByMateri, selectedMateri, surprises, mysteryChance, loaded]);
@@ -4335,6 +4372,7 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
           <div>
             <div className="sgt page-title" style={{ fontSize: 28, fontWeight: 700 }}>Persiapan — Mystery Box</div>
             <div style={{ fontSize: 14, color: t.dim, marginTop: 2 }}>Susun daftar perintah sebelum dimainkan. Individu, tanpa waktu, tanpa skor.</div>
+            <div style={{ marginTop: 6 }}><CloudSaveBadge t={t} status={cloudSave.status} savedAt={cloudSave.savedAt} /></div>
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <BackupExportButton t={t} currentLabel={selectedMateri}
@@ -4601,6 +4639,7 @@ function CardPreviewGrid({ pairs, t }) {
 function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
   const isMobile = useIsMobile();
   const t = THEMES[theme];
+  const cloudSave = useCloudSaveStatus();
 
   const [stage, setStage] = useState("setup"); // 'setup' | 'play'
   // FITUR BARU: babak sekarang disimpan PER TEMA (dataByMateri), bukan satu daftar datar lagi —
@@ -4705,7 +4744,7 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
       const payload = { dataByMateri, selectedMateri };
       const res = safeSetItem(scopedKey("cck-setup-data", teacher.uid), JSON.stringify({ ...payload, savedAt: Date.now() }));
       setStorageWarning(res.ok ? null : res.message);
-      saveSetupToCloud(teacher.uid, "cardRush", payload);
+      cloudSave.track(saveSetupToCloud(teacher.uid, "cardRush", payload));
     }, 500);
     return () => clearTimeout(tm);
   }, [dataByMateri, selectedMateri, loaded]);
@@ -4984,6 +5023,7 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
           <div>
             <div className="sgt page-title" style={{ fontSize: 28, fontWeight: 700 }}>Persiapan — Card Rush</div>
             {!isMobile && <div style={{ fontSize: 14, color: t.dim, marginTop: 2 }}>Kartu gambar dipasangkan dengan kata (romaji/hiragana). Minimal 5 pasang per babak.</div>}
+            <div style={{ marginTop: 6 }}><CloudSaveBadge t={t} status={cloudSave.status} savedAt={cloudSave.savedAt} /></div>
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <BackupExportButton t={t} currentLabel={selectedMateri}
