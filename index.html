@@ -246,6 +246,62 @@ function compressImageFile(file, maxDim = 480, quality = 0.82) {
   });
 }
 
+// FITUR BARU: kompresi audio petunjuk (dipakai Word Search) sebelum disimpan — semangatnya sama
+// dengan compressImageFile() di atas (audio HP guru sering beberapa MB, numpuk di kuota
+// localStorage yang cuma 5-10MB total), TAPI beda mendasar dari gambar: tidak ada API instan
+// semacam <canvas> untuk audio. Satu-satunya cara re-encode audio murni di browser tanpa memuat
+// pustaka eksternal adalah memutar ulang audionya lewat AudioContext sambil merekam ULANG dalam
+// format terkompresi (WebM/Opus) pakai MediaRecorder — dan karena ini benar-benar MEMUTAR ULANG
+// real-time (bukan diproses instan), prosesnya makan waktu SAMA PERSIS dengan durasi audio
+// aslinya (audio 8 detik → makan waktu ±8 detik untuk selesai dikompres), bukan sekejap.
+// Fallback aman: kalau browser tidak mendukung MediaRecorder/format Opus, atau hasil kompresinya
+// ternyata TIDAK lebih kecil dari aslinya, resolve(null) — pemanggilnya (uploadAudio) lalu
+// otomatis pakai file asli tanpa kompresi, tidak pernah gagal total karena ini.
+function compressAudioFile(file) {
+  return new Promise((resolve) => {
+    const AudioContextCls = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextCls || typeof MediaRecorder === "undefined") { resolve(null); return; }
+    let mimeType = null;
+    for (const candidate of ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus"]) {
+      if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(candidate)) { mimeType = candidate; break; }
+    }
+    if (!mimeType) { resolve(null); return; } // browser lawas (mis. Safari versi lama) — lewati kompresi
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const audioCtx = new AudioContextCls();
+      audioCtx.decodeAudioData(reader.result, (audioBuffer) => {
+        const source = audioCtx.createBufferSource();
+        source.buffer = audioBuffer;
+        const dest = audioCtx.createMediaStreamDestination();
+        source.connect(dest);
+        let recorder;
+        try {
+          recorder = new MediaRecorder(dest.stream, { mimeType, audioBitsPerSecond: 48000 });
+        } catch (e) { audioCtx.close(); resolve(null); return; }
+        const chunks = [];
+        recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+        recorder.onstop = () => {
+          audioCtx.close();
+          const blob = new Blob(chunks, { type: mimeType });
+          const fr = new FileReader();
+          fr.onload = () => resolve({ dataUrl: fr.result, size: blob.size });
+          fr.onerror = () => resolve(null);
+          fr.readAsDataURL(blob);
+        };
+        recorder.onerror = () => { audioCtx.close(); resolve(null); };
+        recorder.start();
+        source.start(0);
+        // Jeda kecil setelah audio selesai sebelum berhenti merekam, supaya ekor suara/gema
+        // terakhir tidak ikut terpotong persis di ujung durasi.
+        source.onended = () => setTimeout(() => { if (recorder.state !== "inactive") recorder.stop(); }, 150);
+      }, () => { audioCtx.close(); resolve(null); });
+    };
+    reader.onerror = () => resolve(null);
+    reader.readAsArrayBuffer(file);
+  });
+}
+
 /* ---------------------------------------------------------
    BUGFIX (kebocoran data antar-guru): dulu SEMUA key localStorage kosakata/progres di bawah
    ("tck-setup-data", "tck-progress", "bk-setup-data", "bk-progress", "cck-setup-data",
@@ -1229,7 +1285,7 @@ function QrJoinModal({ open, onClose, roomCode, joinedCount }) {
       loadQrLibrary().then(() => {
         if (cancelled || !box.isConnected) return;
         box.innerHTML = "";
-        new QRCode(box, { text: getJoinUrl(roomCode), width: 280, height: 280 });
+        new QRCode(box, { text: getJoinUrl(roomCode), width: 200, height: 200 });
       }).catch(() => {
         if (!cancelled && box.isConnected) box.textContent = "Gagal memuat QR — cek koneksi internet.";
       });
@@ -1811,24 +1867,16 @@ function CardsPlayArea({ roomCode, room, myGroup }) {
   // siswa putus-putus), permainan siswa itu sendiri tidak boleh ikut terganggu/macet karenanya.
   useEffect(() => {
     if (!roundId || matchedCount === 0) return;
-    // BUGFIX (lanjutan): dot-path sebagai NAMA FIELD di dalam `.set(data, {merge:true})` sempat
-    // dikira cara yang benar untuk menyentuh satu key di dalam map bersarang tanpa mengganggu key
-    // lain (lihat catatan di atas). Ternyata Firestore CUMA MENJAMIN penafsiran dot-path seperti
-    // itu untuk `.update()` — bukan untuk `.set()+merge`. Akibatnya tulisan ini kemungkinan besar
-    // mendarat sebagai field aneh bernama literal "cardsProgress.3" di level ATAS dokumen (bukan
-    // masuk ke dalam field cardsProgress yang sebenarnya dibaca guru), jadi progres kelompok
-    // TIDAK PERNAH terbaca — persis gejala yang dilaporkan (macet di 0, semua kelompok, padahal
-    // kartu di HP-nya sendiri jelas berubah & fitur "selesai" yang polanya beda tetap normal).
-    // Diperbaiki pakai .update() — SATU-SATUNYA cara yang Firestore jamin resmi untuk menyasar
-    // field bersarang lewat dot-path — dengan fallback transaksi baca-ubah-tulis field
-    // cardsProgress secara utuh kalau .update() sampai gagal (mis. dokumen room sempat belum ada).
-    const ref = db.collection("rooms").doc(roomCode);
-    ref.update({ [`cardsProgress.${myGroup}`]: matchedCount }).catch(() => {
-      db.runTransaction((tx) => tx.get(ref).then((snap) => {
-        const current = (snap.data() || {}).cardsProgress || {};
-        tx.set(ref, { cardsProgress: { ...current, [myGroup]: matchedCount } }, { merge: true });
-      })).catch(() => {});
-    });
+    // BUGFIX: {merge:true} di Firestore cuma menyatu di level FIELD PALING ATAS — kalau field-nya
+    // ditulis sebagai objek utuh seperti `cardsProgress: {[myGroup]: matchedCount}`, itu MENIMPA
+    // HABIS seluruh field cardsProgress (progres kelompok lain yang sudah tercatat ikut hilang),
+    // bukan menyatu ke isinya. Efeknya guru cuma pernah lihat kelompok yang PALING TERAKHIR
+    // mengirim update — kelompok lain kelihatan seolah 0/belum mulai padahal sedang mengerjakan.
+    // Diperbaiki pakai "dot path" (`cardsProgress.${myGroup}`) sebagai NAMA FIELD-nya sendiri —
+    // ini caranya Firestore menyatu ke SATU key di dalam map bersarang tanpa menyentuh key lain.
+    db.collection("rooms").doc(roomCode).set({
+      [`cardsProgress.${myGroup}`]: matchedCount,
+    }, { merge: true }).catch(() => {});
   }, [matchedCount, roundId, roomCode, myGroup]);
 
   // Kirim sinyal "selesai" sekali saja begitu semua pasangan ketemu, lewat transaksi (sama
@@ -3081,26 +3129,49 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
     });
     return newWords.length;
   }
+  // FITUR BARU: sekarang audio dikompres otomatis dulu (lihat compressAudioFile di atas) sebelum
+  // disimpan, jadi batas file ASLI dinaikkan dari 2MB jadi 8MB — tapi hasil AKHIR yang benar-benar
+  // disimpan (baik hasil kompresi, atau file asli kalau kompresinya gagal/tidak didukung browser)
+  // tetap wajib di bawah 2MB, supaya aman untuk kuota localStorage seperti sebelumnya.
   function uploadAudio(id, wordId, file) {
     if (!file) return;
-    // Batas lebih ketat (2MB) daripada versi Storage (5MB) karena base64 membengkakkan ukuran
-    // sekitar 33% dan semuanya numpuk di kuota localStorage browser (biasanya 5-10MB total).
-    if (file.size > 2 * 1024 * 1024) {
-      setAudioUploadError((e) => ({ ...e, [wordId]: "File audio maksimal 2MB (mode tanpa Storage)." }));
+    if (file.size > 8 * 1024 * 1024) {
+      setAudioUploadError((e) => ({ ...e, [wordId]: "File audio maksimal 8MB." }));
       return;
     }
     setAudioUploadError((e) => { const n = { ...e }; delete n[wordId]; return n; });
     setUploadingAudio((u) => ({ ...u, [wordId]: true }));
-    const reader = new FileReader();
-    reader.onload = () => {
-      updateWord(id, wordId, "audioUrl", reader.result);
+
+    const finish = (dataUrl) => {
+      updateWord(id, wordId, "audioUrl", dataUrl);
       setUploadingAudio((u) => { const n = { ...u }; delete n[wordId]; return n; });
     };
-    reader.onerror = () => {
-      setAudioUploadError((e) => ({ ...e, [wordId]: "Gagal membaca file audio, coba lagi." }));
+    const fail = (msg) => {
+      setAudioUploadError((e) => ({ ...e, [wordId]: msg }));
       setUploadingAudio((u) => { const n = { ...u }; delete n[wordId]; return n; });
     };
-    reader.readAsDataURL(file);
+    function readOriginalAsIs() {
+      if (file.size > 2 * 1024 * 1024) {
+        fail("File audio maksimal 2MB — browser ini tidak mendukung kompresi otomatis (atau hasil kompresinya masih terlalu besar), jadi filenya dipakai apa adanya.");
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => finish(reader.result);
+      reader.onerror = () => fail("Gagal membaca file audio, coba lagi.");
+      reader.readAsDataURL(file);
+    }
+
+    // FIX: compressAudioFile MEMUTAR ULANG audionya secara real-time untuk merekam versi
+    // terkompresi — jadi proses ini makan waktu sama persis dengan durasi audio aslinya (audio
+    // 8 detik ≈ 8 detik proses), bukan instan seperti kompresi gambar. Ikon ⏳ di tombol unggah
+    // (uploadingAudio[w.id]) tetap menyala sepanjang proses ini supaya guru tahu masih berjalan.
+    compressAudioFile(file).then((compressed) => {
+      if (compressed && compressed.size > 0 && compressed.size < file.size && compressed.size <= 2 * 1024 * 1024) {
+        finish(compressed.dataUrl);
+      } else {
+        readOriginalAsIs();
+      }
+    });
   }
 
   const canStart = [1, 2, 3].some((id) => (dataByMateri[selectedMateri]?.[id] || []).some((w) => w.letters.trim()));
@@ -3788,7 +3859,7 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
                                 <textarea value={w.clue} onChange={(e) => updateWord(babakId, w.id, "clue", e.target.value)} placeholder="Jelaskan kata ini dengan bahasa Indonesia" rows={1}
                                   style={{ flex: 1, minWidth: 220, padding: "9px 10px", borderRadius: 8, border: `1px solid ${t.border}`, background: t.panel2, color: t.text, fontSize: 13, resize: "vertical", fontFamily: "inherit", lineHeight: 1.45 }} />
                                 <div style={{ width: 44, display: "flex", flexDirection: "column", alignItems: "center", gap: 3, flexShrink: 0 }}>
-                                  <label title={uploadingAudio[w.id] ? "Sedang mengunggah…" : w.audioUrl ? "Audio sudah diunggah — klik untuk ganti" : "Unggah audio"} style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 36, height: 36, background: t.panel2, border: `1px solid ${t.border}`, borderRadius: 8, color: uploadingAudio[w.id] ? "#F4B740" : w.audioUrl ? "#3FBFAD" : t.faint, cursor: uploadingAudio[w.id] ? "default" : "pointer", opacity: uploadingAudio[w.id] ? 0.6 : 1 }}>
+                                  <label title={uploadingAudio[w.id] ? "Sedang memampatkan audio — bisa makan waktu semirip durasi klipnya, mohon tunggu…" : w.audioUrl ? "Audio sudah diunggah — klik untuk ganti" : "Unggah audio"} style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 36, height: 36, background: t.panel2, border: `1px solid ${t.border}`, borderRadius: 8, color: uploadingAudio[w.id] ? "#F4B740" : w.audioUrl ? "#3FBFAD" : t.faint, cursor: uploadingAudio[w.id] ? "default" : "pointer", opacity: uploadingAudio[w.id] ? 0.6 : 1 }}>
                                     {uploadingAudio[w.id] ? <span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>⏳</span> : w.audioUrl ? <span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>🎵</span> : <span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>⬆</span>}
                                     <input type="file" accept="audio/*" disabled={uploadingAudio[w.id]} onChange={(e) => uploadAudio(babakId, w.id, e.target.files[0])} style={{ display: "none" }} />
                                   </label>
@@ -4110,27 +4181,6 @@ function shadeColor(hex, percent) {
   return `#${(0x1000000 + r * 0x10000 + g * 0x100 + b).toString(16).slice(1)}`;
 }
 
-// FIX (permintaan guru: rapikan posisi kotak Mystery Box supaya menyesuaikan jumlah kotak):
-// sebelumnya jumlah kolom di papan kotak ditentukan murni oleh lebar layar (Flexbox auto-wrap),
-// jadi kalau total kotaknya tidak pas habis dibagi jumlah kolom yang kebetulan muat di layar
-// (mis. 36 kotak jadi 8 kolom → baris terakhir cuma 4 kotak), baris terakhir itu terlihat
-// "menggantung" tanggung. Fungsi ini sengaja MEMILIH jumlah kolom yang membuat papan sepenuh/
-// serapi mungkin: diprioritaskan jumlah kolom yang paling mendekati akar kuadrat total kotak
-// (biar bentuknya mendekati persegi, enak dipandang), dan di antara pilihan yang sama-sama
-// dekat, dipilih yang bikin baris terakhir paling sedikit "bolong"-nya (idealnya pas habis
-// dibagi rata, seperti 36 kotak → 6×6, bukan 8 kolom bersisa 4).
-function bestGridCols(total) {
-  if (total <= 1) return 1;
-  const target = Math.max(1, Math.round(Math.sqrt(total)));
-  let best = target, bestScore = Infinity;
-  for (let c = Math.max(1, target - 2); c <= target + 2; c++) {
-    const remainder = total % c === 0 ? 0 : c - (total % c); // berapa "kotak kosong" tersisa di baris terakhir kalau pakai c kolom
-    const score = Math.abs(c - target) * 10 + remainder; // jarak ke akar kuadrat jadi prioritas utama, sisa baris cuma pemecah seri
-    if (score < bestScore) { best = c; bestScore = score; }
-  }
-  return Math.min(9, Math.max(3, best)); // dibatasi wajar: minimal 3 kolom, maksimal 9 (biar kotak tidak kekecilan di layar lebar)
-}
-
 const SEED_INSTRUCTIONS = [
   "Tuliskan 3 kosakata benda yang berhubungan dengan alat elektronik.",
   "Sebutkan 6 kosakata perlengkapan alat tulis yang ada di atas meja belajarmu.",
@@ -4201,7 +4251,6 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
   const [importMsg, setImportMsg] = useState(null); // { ok, text } hasil ekspor/impor cadangan
   const [bulkAddOpen, setBulkAddOpen] = useState(false);
   const [opened, setOpened] = useState({}); // id -> true
-  const [projectorMode, setProjectorMode] = useState(false);
   const [activeBox, setActiveBox] = useState(null); // instruction object or null
   // FITUR BARU (elemen "Mystery"): sekitar 15% kotak ditandai "spesial" secara ACAK setiap kali
   // "Mulai Permainan" diklik (bukan ditetapkan tetap dari setup) — disimpan sebagai Set berisi id
@@ -4218,27 +4267,6 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
   const [confetti, setConfetti] = useState(null);
   const confettiTimerRef = useRef(null);
   useEffect(() => () => { if (confettiTimerRef.current) clearTimeout(confettiTimerRef.current); }, []);
-  // FITUR BARU (muat 1 layar): dulu grid kotak pakai lebar tetap (maxWidth 860px) & ukuran kotak
-  // per-baris yang menyesuaikan lebar itu saja — kalau kotaknya banyak (mis. 36), tingginya
-  // menumpuk jauh melebihi 1 layar dan halaman jadi scroll panjang (screenshot guru: baris ke-6
-  // terpotong). Sekarang lebar & tinggi AREA yang tersedia diukur pakai ResizeObserver, lalu
-  // ukuran tiap kotak dihitung supaya SELURUH papan (semua baris) muat sekaligus di layar yang
-  // tersedia — tanpa perlu scroll — sama seperti pendekatan Mode Proyektor di Game 1.
-  const boxGridAreaRef = useRef(null);
-  const [boxGridArea, setBoxGridArea] = useState({ w: 800, h: 400 });
-  useEffect(() => {
-    const el = boxGridAreaRef.current;
-    if (!el || typeof ResizeObserver === "undefined") return;
-    const measure = () => {
-      const w = el.clientWidth, h = el.clientHeight;
-      if (w < 10 || h < 10) return;
-      setBoxGridArea({ w, h });
-    };
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [stage, projectorMode]);
   // BUGFIX: `items` (dipakai persis di bawah ini, di dependency array useEffect konfeti) dulu
   // baru dideklarasikan JAUH di bawah — mengevaluasi `items.length` di sini, SEBELUM baris
   // `const items = ...`-nya sendiri sempat dijalankan, melanggar temporal dead zone JavaScript.
@@ -4297,16 +4325,6 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
         const p = JSON.parse(rawP);
         if (p.stage) setStage(p.stage);
         if (p.opened) setOpened(p.opened);
-        // BUGFIX: urutan acak papan (playOrder) dulu TIDAK ikut disimpan di sini — cuma `opened`
-        // (status kotak mana yang sudah dibuka) yang tersimpan. Akibatnya kalau halaman
-        // ter-refresh saat sedang main, playOrder balik ke array kosong (nilai awal useState),
-        // dan tampilan otomatis jatuh balik ke `items` (urutan ASLI di Persiapan) — bukan urutan
-        // acak yang tadi dilihat siswa. Kotak yang sudah dibuka tetap "benar" per isinya (karena
-        // `opened` disimpan per id, bukan per posisi), tapi POSISINYA di papan ikut berubah,
-        // padahal seharusnya tidak ada perubahan apa pun sebelum & sesudah refresh. Sekarang
-        // playOrder ikut disimpan & dipulihkan sama seperti `opened`.
-        if (Array.isArray(p.playOrder) && p.playOrder.length > 0) setPlayOrder(p.playOrder);
-        if (p.mysteryBoxIds) setMysteryBoxIds(new Set(p.mysteryBoxIds));
       }
     } catch (e) { /* belum ada progres tersimpan, atau data korup */ }
     setLoaded(true);
@@ -4336,11 +4354,11 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
   useEffect(() => {
     if (!loaded) return;
     const tm = setTimeout(() => {
-      const res = safeSetItem(scopedKey("bk-progress", teacher.uid), JSON.stringify({ stage, opened, playOrder, mysteryBoxIds: Array.from(mysteryBoxIds) }));
+      const res = safeSetItem(scopedKey("bk-progress", teacher.uid), JSON.stringify({ stage, opened }));
       setStorageWarning(res.ok ? null : res.message);
     }, 500);
     return () => clearTimeout(tm);
-  }, [stage, opened, playOrder, mysteryBoxIds, loaded]);
+  }, [stage, opened, loaded]);
 
   function endGame() {
     if (!window.confirm("Akhiri permainan ini? Progres kotak yang sudah dibuka akan dihapus.")) return;
@@ -4368,30 +4386,6 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
     setDataByMateri((prev) => ({ ...prev, [selectedMateri]: [...(prev[selectedMateri] || []), ...lines.map((line) => ({ id: uid(), text: line }))] }));
     return lines.length;
   }
-  // FITUR BARU: dulu tiap kotak spesial dibuka, kejutannya diundi murni acak (Math.random) —
-  // dengan itu wajar secara statistik ada kejutan yang muncul 3-4x dalam satu game sementara
-  // yang lain tidak muncul sama sekali. Sekarang pakai sistem "kartu kocok" (shuffle bag): satu
-  // putaran penuh berisi SEMUA kejutan dalam urutan acak, diambil satu-satu tanpa pengembalian.
-  // Begitu satu putaran habis (semua kejutan sudah pernah muncul), dikocok ulang jadi putaran
-  // baru yang urutannya beda lagi — jadi tetap tidak berurutan/predictable, tapi tiap kejutan
-  // dijamin dapat giliran yang sama rata sebelum ada yang diulang.
-  const surpriseBagRef = useRef({ remaining: [], poolKey: null });
-  function drawSurprise() {
-    const filled = surprises.filter((s) => s.trim());
-    const pool = filled.length > 0 ? filled : MYSTERY_BOX_SURPRISES;
-    const poolKey = pool.join("\n");
-    const bag = surpriseBagRef.current;
-    if (bag.poolKey !== poolKey) { bag.poolKey = poolKey; bag.remaining = []; }
-    if (bag.remaining.length === 0) {
-      const shuffled = [...pool];
-      for (let i = shuffled.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-      }
-      bag.remaining = shuffled;
-    }
-    return bag.remaining.pop();
-  }
   // Dipakai bareng oleh startGame() & resetBoard() — supaya logika "pilih sebagian kotak jadi
   // spesial" tidak diketik ulang dua kali. Persentasenya sekarang dari mysteryChance (bisa
   // diatur guru), bukan angka 0.15 tetap lagi.
@@ -4403,7 +4397,6 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
   function startGame() {
     setOpened({}); setActiveBox(null);
     setMysteryBoxIds(pickMysteryBoxes(items));
-    surpriseBagRef.current = { remaining: [], poolKey: null };
     shuffleForPlay();
     celebratedRef.current = false;
     setStage("play");
@@ -4411,7 +4404,9 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
   function openBox(item) {
     setOpened((o) => ({ ...o, [item.id]: true }));
     if (mysteryBoxIds.has(item.id)) {
-      const surprise = drawSurprise();
+      const filled = surprises.filter((s) => s.trim());
+      const pool = filled.length > 0 ? filled : MYSTERY_BOX_SURPRISES;
+      const surprise = pool[Math.floor(Math.random() * pool.length)];
       setActiveBox({ id: item.id, text: surprise, mystery: true });
       setConfetti(makeConfettiBurst("#F4B740"));
       playCorrectSound();
@@ -4427,62 +4422,8 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
     // Sama seperti startGame() — acak ulang posisi kotak spesial DAN urutan kotaknya biar tiap
     // main ulang dapat susunan yang beda, bukan selalu di kotak & urutan yang sama.
     setMysteryBoxIds(pickMysteryBoxes(items));
-    surpriseBagRef.current = { remaining: [], poolKey: null };
     shuffleForPlay();
     celebratedRef.current = false;
-  }
-
-  // FITUR BARU (muat 1 layar + Mode Proyektor): dipisah jadi fungsi sendiri supaya grid kotak
-  // yang sama persis bisa dipakai ulang oleh Panel Kontrol biasa MAUPUN Mode Proyektor, tanpa
-  // menyalin ~50 baris JSX dua kali. Butuh `boxGridAreaRef` terpasang di elemen pembungkusnya
-  // supaya ResizeObserver bisa mengukur ruang yang tersedia di layar mana pun ini dipakai.
-  function renderBoxGrid() {
-    const boardItems = playOrder.length ? playOrder : items;
-    const cols = bestGridCols(boardItems.length);
-    const rowCount = Math.ceil(boardItems.length / cols) || 1;
-    const gap = 12;
-    // Ukuran kotak dihitung dari LEBAR & TINGGI area yang benar-benar terukur (boxGridArea) —
-    // diambil yang PALING KECIL dari kedua batasan itu, supaya papan tidak pernah meluber baik
-    // ke samping maupun ke bawah. Dibatasi wajar (40-160px) biar tidak kekecilan di papan sangat
-    // penuh atau kebesaran di papan yang isinya cuma sedikit kotak.
-    const cellFromW = (boxGridArea.w - (cols - 1) * gap) / cols;
-    const cellFromH = (boxGridArea.h - (rowCount - 1) * gap) / rowCount;
-    const cellSize = Math.max(40, Math.min(160, Math.floor(Math.min(cellFromW, cellFromH))));
-    const rows = [];
-    for (let r = 0; r < boardItems.length; r += cols) rows.push(boardItems.slice(r, r + cols));
-    return (
-      <div ref={boxGridAreaRef} style={{ flex: 1, minHeight: 0, width: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
-        <div style={{ display: "flex", flexDirection: "column", gap, justifyContent: "center" }}>
-          {rows.map((row, ri) => (
-            <div key={ri} style={{ display: "flex", justifyContent: "center", gap }}>
-              {row.map((it, ci) => {
-                const i = ri * cols + ci; // indeks global — dipakai buat nomor kotak & rotasi warna, bukan cuma posisi di barisnya sendiri
-                const isOpen = opened[it.id];
-                const wasMystery = isOpen && mysteryBoxIds.has(it.id);
-                const baseColor = BOX_COLORS[i % BOX_COLORS.length];
-                return (
-                  <button key={it.id} onClick={() => openBox(it)} className={`sgt${!isOpen ? " mbox-tile" : ""}`} style={{
-                    width: cellSize, height: cellSize, flexShrink: 0, borderRadius: Math.max(8, cellSize * 0.15), cursor: isOpen ? "default" : "pointer", border: "none",
-                    background: isOpen
-                      ? (wasMystery ? "linear-gradient(160deg, #FFF3D6, #FBE3A6)" : t.panel2)
-                      : `linear-gradient(160deg, ${shadeColor(baseColor, 12)}, ${shadeColor(baseColor, -14)})`,
-                    color: isOpen ? (wasMystery ? "#8A6412" : t.faint) : "#101B34",
-                    fontWeight: 800, fontSize: Math.max(13, Math.floor(cellSize * 0.22)), display: "flex", alignItems: "center", justifyContent: "center",
-                    opacity: isOpen ? (wasMystery ? 1 : 0.5) : 1,
-                    boxShadow: isOpen
-                      ? (wasMystery ? "0 0 0 2px #F4B740, 0 4px 14px rgba(244,183,64,.35)" : "inset 0 0 0 1px rgba(0,0,0,.04)")
-                      : `0 4px 0 ${shadeColor(baseColor, -28)}, 0 8px 18px rgba(28,32,51,.18)`,
-                    textShadow: isOpen ? "none" : "0 1px 0 rgba(255,255,255,.35), 0 -1px 0 rgba(0,0,0,.12)",
-                    transform: isOpen ? "scale(.94)" : "scale(1)", transition: "transform .15s ease, opacity .15s ease, box-shadow .15s ease",
-                    animation: isOpen ? "boxPop .5s cubic-bezier(.3,1.5,.4,1) both" : "none",
-                  }}>{isOpen ? <span style={{ fontSize: Math.max(15, Math.floor(cellSize * 0.24)), lineHeight: 1, color: 'inherit', position: "relative", zIndex: 1 }}>{wasMystery ? "🎁" : "✓"}</span> : <span style={{ position: "relative", zIndex: 1 }}>{i + 1}</span>}</button>
-                );
-              })}
-            </div>
-          ))}
-        </div>
-      </div>
-    );
   }
 
   /* ---- Kelola kejutan kotak spesial ---- */
@@ -4645,56 +4586,8 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
 
   const openedCount = Object.keys(opened).length;
 
-  // FITUR BARU: Mode Proyektor untuk Mystery Box, sama konsepnya seperti Game 1 — layar penuh
-  // yang cuma menampilkan papan (buat ditayangkan ke kelas), panel kontrol guru (Reset/Akhiri/
-  // Keluar) ditaruh sebagai overlay kecil di pojok, tidak berdempetan dengan papan seperti di
-  // Panel Kontrol biasa. Karena game ini individu tanpa kelompok/skor, tidak ada panel "hanya
-  // guru yang lihat" terpisah seperti Game 1 — overlay tombolnya sendiri sudah cukup ringkas.
-  if (projectorMode) {
-    return (
-      <div className="app-screen" style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: t.bg, color: t.text, height: "100vh", boxSizing: "border-box", position: "relative", overflow: "hidden", display: "flex", flexDirection: "column", padding: "20px 28px" }}>
-        <style>{fontImport}</style>
-        {activeBox && (
-          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50 }} onClick={() => setActiveBox(null)}>
-            <div onClick={(e) => e.stopPropagation()} className="modal-pop" style={{
-              width: "min(560px, 90vw)",
-              background: activeBox.mystery ? "linear-gradient(135deg,#F4B740,#F2A93B)" : "linear-gradient(135deg,#F2879E,#EE6E92)",
-              borderRadius: 22, padding: "44px 34px 38px", boxShadow: "0 20px 60px rgba(0,0,0,.4)", position: "relative", overflow: "hidden",
-            }}>
-              <div style={{ position: "absolute", top: -40, right: -40, width: 130, height: 130, borderRadius: "50%", background: "rgba(255,255,255,.14)" }} />
-              <div style={{ position: "absolute", bottom: -50, left: -30, width: 110, height: 110, borderRadius: "50%", background: "rgba(255,255,255,.1)" }} />
-              <button onClick={() => setActiveBox(null)} style={{ position: "absolute", top: 12, right: 14, width: 30, height: 30, borderRadius: "50%", background: "rgba(16,27,52,.12)", border: "none", color: "#101B34", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1 }}><span style={{ fontSize: 17, lineHeight: 1, color: 'inherit' }}>✕</span></button>
-              <div className="sgt" style={{ position: "relative", fontSize: 13, fontWeight: 700, color: "#101B34", textAlign: "center", marginBottom: activeBox.mystery ? 12 : 14, letterSpacing: 0.5, textTransform: "uppercase", opacity: 0.7 }}>{activeBox.mystery ? "🎁 Kotak Spesial!" : "📋 Perintah"}</div>
-              <div className="sgt" style={{ position: "relative", fontSize: 24, fontWeight: 700, color: "#101B34", textAlign: "center", lineHeight: 1.5 }}>{activeBox.text}</div>
-            </div>
-          </div>
-        )}
-        <CelebrationOverlay particles={confetti} />
-
-        <div style={{ position: "fixed", top: 16, left: 16, zIndex: 40, display: "flex", gap: 8 }}>
-          <button onClick={() => setProjectorMode(false)} style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowMd, color: t.text, padding: "9px 13px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}><span style={{ fontSize: 14, lineHeight: 1 }}>⤡</span> Keluar Mode Proyektor</button>
-          <button onClick={resetBoard} style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowMd, color: t.text, padding: "9px 13px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}><span style={{ fontSize: 14, lineHeight: 1 }}>🔄</span> Reset</button>
-        </div>
-        <div style={{ position: "fixed", top: 16, right: 16, zIndex: 40 }}>
-          <button onClick={endGame} style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: "1px solid #EF5B5B", boxShadow: t.shadowMd, color: "#EF5B5B", padding: "9px 13px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}><span style={{ fontSize: 14, lineHeight: 1 }}>⏹</span> Akhiri</button>
-        </div>
-
-        <div className="sgt" style={{ fontSize: 22, fontWeight: 700, textAlign: "center", marginTop: 4, marginBottom: 6, flexShrink: 0 }}>Mystery Box — {selectedMateri}</div>
-        <div style={{ maxWidth: 480, width: "100%", margin: "0 auto 16px", flexShrink: 0 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, color: t.dim, marginBottom: 6 }}>
-            <span>Progres</span><span>{openedCount}/{items.length} kotak dibuka{items.length ? ` (${Math.round((openedCount / items.length) * 100)}%)` : ""}</span>
-          </div>
-          <div style={{ height: 10, borderRadius: 999, background: t.panel, overflow: "hidden", boxShadow: "inset 0 1px 3px rgba(0,0,0,.12)" }}>
-            <div style={{ height: "100%", width: `${items.length ? (openedCount / items.length) * 100 : 0}%`, background: "linear-gradient(90deg, #F4B740, #F2879E)", borderRadius: 999, transition: "width .3s ease" }} />
-          </div>
-        </div>
-        {renderBoxGrid()}
-      </div>
-    );
-  }
-
   return (
-    <div className="app-screen" style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: t.bg, color: t.text, height: "100vh", padding: 28, boxSizing: "border-box", position: "relative", overflow: "hidden", display: "flex", flexDirection: "column" }}>
+    <div className="app-screen" style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: t.bg, color: t.text, minHeight: "100vh", padding: 28, boxSizing: "border-box", position: "relative" }}>
       <style>{fontImport}</style>
 
       {activeBox && (
@@ -4719,28 +4612,21 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
       )}
       <CelebrationOverlay particles={confetti} />
 
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 16, marginBottom: 18, flexShrink: 0 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 16, marginBottom: 22 }}>
         <div>
-          <div className="sgt page-title" style={{ fontSize: 26, fontWeight: 700, letterSpacing: -0.5 }}>Mystery Box</div>
-          <div style={{ fontSize: 13, color: t.dim, marginTop: 2 }}>{selectedMateri} · {openedCount}/{items.length} kotak sudah dibuka · individu, tanpa skor</div>
+          <div className="sgt page-title" style={{ fontSize: 30, fontWeight: 700, letterSpacing: -0.5 }}>Mystery Box</div>
+          <div style={{ fontSize: 14, color: t.dim, marginTop: 2 }}>{selectedMateri} · {openedCount}/{items.length} kotak sudah dibuka · individu, tanpa skor</div>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button onClick={() => setStage("setup")} style={{ background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}>← Persiapan</button>
           <button onClick={resetBoard} style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: "10px 12px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>🔄</span> Reset papan</button>
           <button onClick={endGame} style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: "1px solid #EF5B5B", color: "#EF5B5B", padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>⏹</span> Akhiri Permainan</button>
-          <button onClick={() => setProjectorMode(true)} style={{ display: "flex", alignItems: "center", gap: 5, background: "#F4B740", border: "none", color: "#101B34", padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}><span style={{ fontSize: 15, lineHeight: 1 }}>⤢</span> Mode Proyektor</button>
           <ThemeToggleButton theme={theme} onToggle={() => setTheme(theme === "dark" ? "light" : "dark")} style={{ background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: 10, borderRadius: 10, cursor: "pointer" }} />
         </div>
       </div>
 
-      {/* FITUR BARU (muat 1 layar): dulu wrapper ini cuma `maxWidth:860, margin:"0 auto"` dengan
-          tinggi mengikuti konten apa adanya — kalau kotaknya banyak, tingginya menumpuk melebihi
-          1 layar dan halaman jadi scroll panjang. Sekarang wrapper ini `flex:1, minHeight:0` (ikut
-          mengisi PERSIS sisa tinggi layar di bawah header), dan ukuran tiap kotak di bawah dihitung
-          dari ruang yang benar-benar tersedia (lihat boxGridArea/ResizeObserver di atas) supaya
-          SELURUH papan, berapa pun jumlah kotaknya, selalu muat tanpa perlu scroll. */}
-      <div style={{ maxWidth: 1000, width: "100%", margin: "0 auto", flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
-        <div style={{ marginBottom: 12, flexShrink: 0 }}>
+      <div style={{ maxWidth: 860, margin: "0 auto" }}>
+        <div style={{ marginBottom: 16 }}>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, color: t.dim, marginBottom: 6 }}>
             <span>Progres</span><span>{openedCount}/{items.length} kotak dibuka{items.length ? ` (${Math.round((openedCount / items.length) * 100)}%)` : ""}</span>
           </div>
@@ -4757,7 +4643,7 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
           )}
         </div>
 
-        <div style={{ background: t.panel, borderRadius: 20, padding: 20, boxShadow: t.shadowSm, flex: 1, minHeight: 0, display: "flex" }}>
+        <div style={{ background: t.panel, borderRadius: 20, padding: 20, boxShadow: t.shadowSm }}>
           {/* FIX (UX): dulu pakai CSS Grid (gridTemplateColumns: repeat(auto-fill, ...)) — kalau
               jumlah kotak tidak pas habis dibagi jumlah kolom (mis. 36 kotak dengan 8 kolom
               menyisakan 4 kotak di baris terakhir), baris terakhir itu jatuhnya rata KIRI dengan
@@ -4766,16 +4652,38 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
               — tiap baris, termasuk baris terakhir yang tidak penuh, otomatis dirapikan ke
               TENGAH sesuai jumlah kotak yang benar-benar ada di baris itu, bukan menyisakan
               celah kosong di salah satu sisi. */}
-          {/* FIX (rapikan posisi kotak menyesuaikan jumlahnya): dulu satu blok Flexbox besar
-              (flexWrap + justifyContent:center) yang membiarkan browser sendiri yang menentukan
-              berapa kotak muat per baris berdasarkan lebar layar — hasilnya baris terakhir yang
-              tidak penuh (mis. 36 kotak jadi 8 kolom, sisa 4) jatuhnya tanggung. Sekarang jumlah
-              kolom DITENTUKAN LEBIH DULU lewat bestGridCols() (dipilih supaya papannya sedekat
-              mungkin ke bentuk persegi & baris terakhir sepenuh mungkin), lalu kotak-kotaknya
-              dikelompokkan jadi baris-baris eksplisit — tiap baris py sendiri container flex
-              dengan justifyContent:center, jadi baris manapun yang tidak penuh (termasuk baris
-              terakhir) pasti rapi di tengah, bukan menggantung rata kiri. */}
-          {renderBoxGrid()}
+          <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: 12 }}>
+            {(playOrder.length ? playOrder : items).map((it, i) => {
+              const isOpen = opened[it.id];
+              // Cuma dicek/dipakai untuk gaya SETELAH kotak dibuka — sebelum diklik, kotak spesial
+              // tampil identik dengan kotak biasa (lihat catatan di deklarasi mysteryBoxIds), jadi
+              // tidak membocorkan yang mana spesial sebelum waktunya.
+              const wasMystery = isOpen && mysteryBoxIds.has(it.id);
+              const baseColor = BOX_COLORS[i % BOX_COLORS.length];
+              return (
+                <button key={it.id} onClick={() => openBox(it)} className={`sgt${!isOpen ? " mbox-tile" : ""}`} style={{
+                  flex: "1 1 84px", maxWidth: 110, aspectRatio: "1 / 1", borderRadius: 16, cursor: isOpen ? "default" : "pointer", border: "none",
+                  // FITUR BARU: dulu warna kotak flat satu lapis — sekarang gradien miring dari
+                  // warna aslinya ke versi sedikit lebih gelap (shadeColor), dipadukan dengan
+                  // bayangan dua lapis (garis gelap solid di bawah untuk kesan "chunky button" +
+                  // bayangan lembut menyebar) supaya kotak terasa lebih tebal/berbentuk, bukan
+                  // stiker warna datar di atas kertas.
+                  background: isOpen
+                    ? (wasMystery ? "linear-gradient(160deg, #FFF3D6, #FBE3A6)" : t.panel2)
+                    : `linear-gradient(160deg, ${shadeColor(baseColor, 12)}, ${shadeColor(baseColor, -14)})`,
+                  color: isOpen ? (wasMystery ? "#8A6412" : t.faint) : "#101B34",
+                  fontWeight: 800, fontSize: 20, display: "flex", alignItems: "center", justifyContent: "center",
+                  opacity: isOpen ? (wasMystery ? 1 : 0.5) : 1,
+                  boxShadow: isOpen
+                    ? (wasMystery ? "0 0 0 2px #F4B740, 0 4px 14px rgba(244,183,64,.35)" : "inset 0 0 0 1px rgba(0,0,0,.04)")
+                    : `0 4px 0 ${shadeColor(baseColor, -28)}, 0 8px 18px rgba(28,32,51,.18)`,
+                  textShadow: isOpen ? "none" : "0 1px 0 rgba(255,255,255,.35), 0 -1px 0 rgba(0,0,0,.12)",
+                  transform: isOpen ? "scale(.94)" : "scale(1)", transition: "transform .15s ease, opacity .15s ease, box-shadow .15s ease",
+                  animation: isOpen ? "boxPop .5s cubic-bezier(.3,1.5,.4,1) both" : "none",
+                }}>{isOpen ? <span style={{ fontSize: 22, lineHeight: 1, color: 'inherit', position: "relative", zIndex: 1 }}>{wasMystery ? "🎁" : "✓"}</span> : <span style={{ position: "relative", zIndex: 1 }}>{i + 1}</span>}</button>
+              );
+            })}
+          </div>
         </div>
       </div>
     </div>
@@ -4843,7 +4751,6 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
   const cloudSave = useCloudSaveStatus();
 
   const [stage, setStage] = useState("setup"); // 'setup' | 'play'
-  const [projectorMode, setProjectorMode] = useState(false);
   // FITUR BARU: babak sekarang disimpan PER TEMA (dataByMateri), bukan satu daftar datar lagi —
   // menyusul Word Search & Mystery Box supaya ketiga game konsisten punya "14 Tema". `babaks` &
   // `setBabaks` di bawah tetap dipertahankan sebagai alias tipis ke tema yang sedang dipilih,
@@ -5018,6 +4925,25 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
 
   function validPairs(b) { return b.pairs.filter((p) => p.word.trim() && p.image); }
   const canStart = babaks.length > 0 && babaks.every((b) => validPairs(b).length >= 5);
+
+  // Pratinjau papan (Langkah 2) — dibangun dari pasangan yang SUDAH ada di babak yang sedang
+  // dibuka, diacak sekali lewat useMemo (bukan di dalam render biasa) supaya urutannya stabil
+  // selama tidak ada perubahan pada pasangan babak ini, dan reshuffle otomatis begitu guru
+  // menambah/menghapus/mengedit pasangan (memberi gambaran acakan yang selalu mutakhir).
+  const previewDeck = useMemo(() => {
+    const vp = validPairs(babak);
+    if (vp.length === 0) return [];
+    const deck = vp.flatMap((p) => [
+      { key: p.id + "-img", kind: "image", content: p.image },
+      { key: p.id + "-word", kind: "word", content: p.word },
+    ]);
+    for (let i = deck.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [deck[i], deck[j]] = [deck[j], deck[i]];
+    }
+    return deck;
+  }, [babak.pairs]);
+  const previewCols = Math.min(5, Math.max(3, Math.round(Math.sqrt(previewDeck.length))));
 
   const [startingGame, setStartingGame] = useState(false);
   // FIX (UX): sama seperti Word Search — startSession() memanggil Firestore (cek kode room)
@@ -5306,6 +5232,37 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
                         ))}
                       </div>
                       <button onClick={() => addPair(i)} style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 6, background: t.panel, border: "none", color: t.text, borderRadius: 8, padding: "9px 14px", cursor: "pointer", fontSize: 13 }}>➕ Tambah Pasangan</button>
+
+                      {/* Pratinjau Papan — dipindah masuk ke sini (dulu panel terpisah, selalu
+                          tampil penuh di bawah); sekarang otomatis ikut tersembunyi saat babak
+                          ini ditutup, jadi tidak menambah panjang halaman kalau tidak dibutuhkan. */}
+                      <div style={{ marginTop: 20, paddingTop: 16, borderTop: `1px solid ${t.border}` }}>
+                        <SectionLabel n={3} faint={t.faint} hint="— contoh acakan, bukan yang dipakai persis saat main">Pratinjau Papan — {b.label}</SectionLabel>
+                        {previewDeck.length === 0 ? (
+                          <div style={{ padding: 20, color: t.dim, fontSize: 13, textAlign: "center", background: t.panel, borderRadius: 12 }}>
+                            Lengkapi minimal 1 pasangan (kata + gambar) di atas dulu untuk melihat pratinjau papan.
+                          </div>
+                        ) : (
+                          <>
+                            <div style={{ display: "grid", gridTemplateColumns: `repeat(${previewCols}, 1fr)`, gap: 8, maxWidth: 460 }}>
+                              {previewDeck.map((c, ci) => (
+                                <div key={c.key} className="game-card" style={{
+                                  aspectRatio: "3 / 4", borderRadius: 12, background: "#FFFFFF", padding: c.kind === "image" ? 0 : 6,
+                                  display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden",
+                                  boxShadow: t.shadowSm, animationDelay: `${Math.min(ci, 12) * 40}ms`,
+                                }}>
+                                  {c.kind === "image"
+                                    ? <img src={c.content} alt="" style={{ width: "100%", height: "100%", objectFit: "contain", display: "block", background: "#FFFFFF" }} />
+                                    : <div className="sgt" style={{ fontSize: 12, fontWeight: 700, color: "#1E2233", textAlign: "center", wordBreak: "break-word", lineHeight: 1.25 }}>{c.content}</div>}
+                                </div>
+                              ))}
+                            </div>
+                            <div style={{ fontSize: 11.5, color: t.faint, marginTop: 10, lineHeight: 1.5 }}>
+                              Ini cuma contoh susunan — tiap siswa nanti dapat acakan posisi sendiri-sendiri di HP masing-masing saat babak dimulai, bukan papan yang sama persis dengan ini.
+                            </div>
+                          </>
+                        )}
+                      </div>
                     </div>
                   )}
                 </div>
@@ -5342,138 +5299,6 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
   const totalGroups = Object.keys(joinedGroups).length;
   const totalPairsThisRound = validPairs(babak).length;
 
-  // FITUR BARU: Mode Proyektor untuk Card Rush. Beda dari Game 1/2 — game ini tidak punya papan
-  // bersama untuk ditampilkan (tiap kelompok main di HP masing-masing dengan susunan kartu acak
-  // sendiri-sendiri), jadi yang paling berguna diproyeksikan ke kelas adalah PAPAN SKOR &
-  // status "siapa sudah selesai" secara live & besar — versi "siaran langsung" hasil balapan,
-  // bukan papan permainan. Kontrol detail (koreksi skor manual) sengaja tidak disertakan di sini
-  // supaya tampilannya tetap bersih untuk ditonton kelas — guru balik ke Panel Kontrol untuk itu.
-  if (projectorMode) {
-    return (
-      <div className="app-screen" style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: t.bg, color: t.text, height: "100vh", boxSizing: "border-box", position: "relative", overflow: "hidden", display: "flex", flexDirection: "column", padding: "20px 32px" }}>
-        <style>{fontImport}</style>
-        <QrJoinModal open={qrOpen} onClose={() => setQrOpen(false)} roomCode={roomCode} joinedCount={totalGroups} />
-
-        <div style={{ position: "fixed", top: 16, left: 16, zIndex: 40, display: "flex", gap: 8 }}>
-          <button onClick={() => setProjectorMode(false)} style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowMd, color: t.text, padding: "9px 13px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}>⤡ Keluar Mode Proyektor</button>
-          <button onClick={() => setQrOpen(true)} style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowMd, color: t.text, padding: "9px 13px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}>🔗 QR Join</button>
-        </div>
-        <div style={{ position: "fixed", top: 16, right: 16, zIndex: 40 }}>
-          <button onClick={endGame} style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: "1px solid #EF5B5B", boxShadow: t.shadowMd, color: "#EF5B5B", padding: "9px 13px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}>⏹ Akhiri</button>
-        </div>
-
-        <div style={{ textAlign: "center", flexShrink: 0, marginTop: 4, marginBottom: 14 }}>
-          <div className="sgt" style={{ fontSize: 26, fontWeight: 700 }}>Card Rush — {babak.label}</div>
-          <div style={{ fontSize: 13, color: t.dim, marginTop: 2 }}>Kode Room: <b>{roomCode}</b> · {totalGroups} kelompok sudah join</div>
-          {cardsRoundId && !scored && remainingSec !== null && (
-            <div style={{
-              display: "inline-flex", alignItems: "center", gap: 8, marginTop: 10,
-              background: timeUp ? "#EF5B5B" : remainingSec <= 10 ? "rgba(239,91,91,.14)" : t.panel,
-              border: `1px solid ${(timeUp || remainingSec <= 10) ? "#EF5B5B" : t.border}`,
-              boxShadow: t.shadowSm, color: timeUp ? "#fff" : remainingSec <= 10 ? "#EF5B5B" : t.text,
-              padding: "10px 22px", borderRadius: 12, fontWeight: 700, fontSize: 22,
-              animation: (timeUp || remainingSec <= 10) ? "timerPulse 1s ease-in-out infinite" : "none",
-            }}>⏱ {timeUp ? "Waktu Habis!" : formatDuration(remainingSec)}</div>
-          )}
-        </div>
-
-        <div style={{ flex: 1, minHeight: 0, display: "flex", gap: 24, alignItems: "stretch", justifyContent: "center" }}>
-          <div style={{ flex: "1 1 380px", maxWidth: 460, overflowY: "auto" }}>
-            <div className="sgt" style={{ fontSize: 15, fontWeight: 700, marginBottom: 12 }}>Kelompok yang sudah join</div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 20 }}>
-              {GROUP_NAMES.map((g) => {
-                const joined = !!joinedGroups[g];
-                return (
-                  <div key={g} style={{ padding: "8px 14px", borderRadius: 10, background: joined ? GROUP_COLORS[g - 1] : t.panel2, color: joined ? "#101B34" : t.faint, fontWeight: 700, fontSize: 13, opacity: joined ? 1 : 0.5 }}>
-                    {(joinedGroups[g] && joinedGroups[g].name) || `Kelompok ${g}`}{joined ? " ✓" : ""}
-                  </div>
-                );
-              })}
-            </div>
-
-            {!cardsRoundId ? (
-              <button onClick={startRound} disabled={publishing || totalGroups === 0} style={{
-                display: "flex", alignItems: "center", gap: 8, background: totalGroups === 0 ? t.panel2 : "#F4B740", color: totalGroups === 0 ? t.faint : "#101B34",
-                border: "none", borderRadius: 12, padding: "16px 24px", fontWeight: 700, fontSize: 16, cursor: totalGroups === 0 ? "default" : "pointer", width: "100%", justifyContent: "center",
-              }}>{publishing ? "Menyiapkan papan…" : "▶ Mulai Babak Ini"}</button>
-            ) : (
-              <React.Fragment>
-                {GROUP_NAMES.some((g) => joinedGroups[g] && !finishers.some((f) => f.group === g)) && (
-                  <div style={{ marginBottom: 16 }}>
-                    <div className="sgt" style={{ fontSize: 14, fontWeight: 700, marginBottom: 10 }}>Progres kelompok</div>
-                    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                      {GROUP_NAMES.filter((g) => joinedGroups[g] && !finishers.some((f) => f.group === g)).map((g) => {
-                        const done = Math.min(cardsProgress[g] || 0, totalPairsThisRound);
-                        const pct = totalPairsThisRound > 0 ? Math.round((done / totalPairsThisRound) * 100) : 0;
-                        return (
-                          <div key={g} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                            <span style={{ width: 20, height: 20, borderRadius: "50%", background: GROUP_COLORS[g - 1], flexShrink: 0 }} />
-                            <div style={{ flex: 1, minWidth: 0 }}>
-                              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, marginBottom: 3 }}>
-                                <span style={{ fontWeight: 600 }}>{(joinedGroups[g] && joinedGroups[g].name) || `Kelompok ${g}`}</span>
-                                <span style={{ color: t.dim }}>{done}/{totalPairsThisRound}</span>
-                              </div>
-                              <div style={{ height: 7, borderRadius: 999, background: t.panel2, overflow: "hidden" }}>
-                                <div style={{ height: "100%", width: `${pct}%`, background: GROUP_COLORS[g - 1], borderRadius: 999, transition: "width .35s ease" }} />
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-                <div className="sgt" style={{ fontSize: 14, fontWeight: 700, marginBottom: 10 }}>Urutan kelompok selesai</div>
-                {finishers.length === 0 ? (
-                  <div style={{ fontSize: 13, color: t.dim, marginBottom: 16 }}>Belum ada yang selesai…</div>
-                ) : (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 16 }}>
-                    {finishers.map((f, i) => (
-                      <div key={f.group} style={{ display: "flex", alignItems: "center", gap: 10, background: t.panel2, borderRadius: 10, padding: "9px 14px" }}>
-                        <span style={{ width: 24, height: 24, borderRadius: "50%", background: GROUP_COLORS[f.group - 1], color: "#101B34", fontSize: 13, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>{i + 1}</span>
-                        <span className="sgt" style={{ fontWeight: 700, fontSize: 15 }}>{f.name || `Kelompok ${f.group}`}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                {!scored ? (
-                  <button onClick={endRoundNow} style={{
-                    display: "flex", alignItems: "center", gap: 8, justifyContent: "center", width: "100%",
-                    background: timeUp ? "#EF5B5B" : t.panel2, border: "none", color: timeUp ? "#fff" : t.text,
-                    borderRadius: 10, padding: "12px 16px", cursor: "pointer", fontSize: 14, fontWeight: 700,
-                    animation: timeUp ? "timerPulse 1s ease-in-out infinite" : "none",
-                  }}>{timeUp ? "⏹ Waktu Habis — Akhiri Babak Sekarang" : "⏹ Akhiri Babak Sekarang"}</button>
-                ) : (
-                  <button onClick={babakIdx < babaks.length - 1 ? nextBabak : endGame} style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "center", width: "100%", background: "#F4B740", border: "none", color: "#101B34", borderRadius: 10, padding: "12px 16px", cursor: "pointer", fontSize: 14, fontWeight: 700 }}>
-                    {babakIdx < babaks.length - 1 ? "Lanjut Babak Berikutnya ➡" : "Selesaikan Sesi"}
-                  </button>
-                )}
-              </React.Fragment>
-            )}
-          </div>
-
-          <div style={{ flex: "1 1 380px", maxWidth: 460, background: t.panel, borderRadius: 20, padding: 24, boxShadow: t.shadowSm, overflowY: "auto" }}>
-            <div className="sgt" style={{ fontSize: 17, fontWeight: 700, marginBottom: 16 }}>🏆 Papan Skor</div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {sortedGroups.filter((g) => (scores[g] || 0) > 0 || joinedGroups[g]).map((g, i) => (
-                <div key={g} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: t.panel2, borderRadius: 12, padding: "12px 16px" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <span style={{ width: 14, height: 14, borderRadius: 4, background: GROUP_COLORS[g - 1] }} />
-                    <span className="sgt" style={{ fontSize: 16, fontWeight: 700 }}>{(joinedGroups[g] && joinedGroups[g].name) || `Kelompok ${g}`}{i === 0 && (scores[g] || 0) > 0 ? " 👑" : ""}</span>
-                  </div>
-                  <span className="sgt" style={{ fontWeight: 800, fontSize: 20 }}>{scores[g] || 0}</span>
-                </div>
-              ))}
-              {sortedGroups.filter((g) => (scores[g] || 0) > 0 || joinedGroups[g]).length === 0 && (
-                <div style={{ fontSize: 13, color: t.faint, textAlign: "center", padding: "10px 0" }}>Belum ada kelompok yang join.</div>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="app-screen" style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: t.bg, color: t.text, minHeight: "100vh", padding: 28, boxSizing: "border-box" }}>
       <style>{fontImport}</style>
@@ -5503,7 +5328,6 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
             </div>
           )}
           <button onClick={() => setQrOpen(true)} style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}>🔗 QR Join</button>
-          <button onClick={() => setProjectorMode(true)} style={{ display: "flex", alignItems: "center", gap: 6, background: "#F4B740", border: "none", color: "#101B34", padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}>⤢ Mode Proyektor</button>
           <button onClick={endGame} style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: "1px solid #EF5B5B", color: "#EF5B5B", padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}>⏹ Akhiri Permainan</button>
           <ThemeToggleButton theme={theme} onToggle={() => setTheme(theme === "dark" ? "light" : "dark")} style={{ background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: 10, borderRadius: 10, cursor: "pointer" }} />
         </div>
@@ -5842,11 +5666,12 @@ function SettingsModal({ open, onClose, t, teacher }) {
           {tab === "panduan" && (
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
               {[
-                { t: "Pilih Tema & Susun Kosakata", d: "Buka \"Persiapan\", pilih salah satu dari 14 tema (Kelas XI/XII), atau tambah tema sendiri, lalu isi kosakata di Babak 1–3 (kata, petunjuk, dan audio opsional)." },
-                { t: "Mulai Permainan", d: "Klik \"Mulai Permainan\" — kode Room & QR untuk siswa join otomatis dibuat." },
-                { t: "Atur Mode Kelas", d: "Pilih mode angkat tangan (Digital/Manual) dan mode petunjuk (Audio/Nonaktif) sesuai kondisi kelas." },
-                { t: "Proyeksikan ke Layar", d: "Gunakan \"Mode Proyektor\" supaya siswa hanya melihat papan permainan, bukan panel guru." },
-                { t: "Simpan & Lanjutkan", d: "Progres bisa disimpan lewat \"Simpan & Jeda\", lalu dibuka lagi kapan saja lewat menu Riwayat Sesi." },
+                { t: "Pilih Game & Tema", d: "Pilih salah satu dari 3 game (Word Search, Mystery Box, atau Card Rush) di layar utama, lalu di halaman Persiapan pilih salah satu dari 14 tema (Kelas XI/XII), atau tambah tema sendiri." },
+                { t: "Susun Materi", d: "Isi kosakata + petunjuk per Babak untuk Word Search & Card Rush, atau daftar perintah untuk Mystery Box. Bisa juga pakai \"Tambah Banyak Sekaligus\" untuk mengisi banyak baris sekaligus dari teks yang ditempel." },
+                { t: "Mulai Permainan", d: "Klik \"Mulai Permainan\". Untuk Word Search & Card Rush, kode Room dan QR untuk siswa join per kelompok otomatis dibuat; Mystery Box dimainkan langsung di satu layar tanpa perlu siswa join room (individu, tanpa skor)." },
+                { t: "Atur Sesuai Jenis Game", d: "Word Search: pilih mode angkat tangan (Digital/Manual) dan mode petunjuk (Audio/Teks/Guru Bebas). Card Rush: atur batas waktu tiap babak sesaat sebelum menekan \"Mulai Babak Ini\" — progres tiap kelompok terlihat langsung selagi berjalan. Mystery Box: klik nomor kotak untuk membuka perintah di dalamnya — sebagian kotak bisa berisi kejutan acak." },
+                { t: "Proyeksikan ke Layar", d: "Untuk Word Search & Card Rush, gunakan \"Mode Proyektor\" supaya siswa hanya melihat papan permainan, bukan panel guru." },
+                { t: "Simpan & Lanjutkan", d: "Progres Word Search & Card Rush bisa disimpan lewat \"Simpan & Jeda\", lalu dibuka lagi kapan saja lewat menu Riwayat Sesi. Materi/kosakata di ketiga game otomatis tersimpan ke akun (Firestore) setiap ada perubahan, jadi tetap aman walau pindah device/browser." },
               ].map((step, i) => (
                 <div key={i} style={{ display: "flex", gap: 12 }}>
                   <div style={{ width: 24, height: 24, borderRadius: "50%", background: t.panel2, color: t.text, fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{i + 1}</div>
@@ -6011,7 +5836,7 @@ function App() {
           <div className="pilih-game-actions" style={{ display: "flex", gap: 8 }}>
             <button onClick={() => setSettingsOpen(true)} title="Panduan, pengembang & info teknis" style={{ background: pt.panel, border: `1px solid ${pt.border}`, color: pt.text, padding: 10, borderRadius: 10, cursor: "pointer", boxShadow: "0 2px 10px rgba(0,0,0,.06)" }}><span style={{ fontSize: 16, lineHeight: 1 }}>⚙️</span></button>
             <ThemeToggleButton theme={pickerTheme} onToggle={() => setPickerTheme((th) => th === "dark" ? "light" : "dark")} style={{ background: pt.panel, border: `1px solid ${pt.border}`, color: pt.text, padding: 10, borderRadius: 10, cursor: "pointer", boxShadow: "0 2px 10px rgba(0,0,0,.06)" }} />
-            <button onClick={() => signOutTeacher()} style={{ background: pt.panel, border: `1px solid ${pt.border}`, color: pt.dim, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, boxShadow: "0 2px 10px rgba(0,0,0,.06)" }}>Keluar</button>
+            <button onClick={() => { if (window.confirm("Keluar dari akun ini? Kamu perlu login lagi (mungkin dengan akun Google lain) untuk masuk kembali.")) signOutTeacher(); }} style={{ background: pt.panel, border: `1px solid ${pt.border}`, color: pt.dim, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, boxShadow: "0 2px 10px rgba(0,0,0,.06)" }}>Keluar</button>
           </div>
         </div>
         <div style={{ fontSize: 14, color: pt.dim, marginBottom: 26, maxWidth: 560 }}>Web interaktif siswa SMA berisi 3 game & 14 tema Bahasa Jepang kelas XI &amp; XII — pilih salah satu permainan di bawah ini untuk mulai sesi.</div>
