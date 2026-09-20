@@ -4371,7 +4371,6 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
     if (!window.confirm("Akhiri permainan ini? Progres kotak yang sudah dibuka akan dihapus.")) return;
     try { localStorage.removeItem(scopedKey("bk-progress", teacher.uid)); } catch (e) {}
     setOpened({}); setActiveBox(null); setStage("setup");
-    onBack();
   }
 
   const canStart = items.some((it) => it.text.trim());
@@ -5112,7 +5111,6 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
     // (gambar-gambar kartu babak terakhir) tidak ikut terhapus & jadi sampah permanen di Firestore.
     deleteRoomWithSubcollections(db.collection("rooms").doc(roomCode)).catch(() => {});
     setScores({}); setStage("setup"); setBabakIdx(0); setCardsRoundEndsAt(null); setCorrectingScore(false);
-    onBack();
   }
 
   /* ---- Cadangan pasangan kartu: ekspor ke file .json & impor kembali ---- */
