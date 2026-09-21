@@ -1891,9 +1891,18 @@ function CardsPlayArea({ roomCode, room, myGroup }) {
     // (uid akun anonim yang mengklaim), supaya Rules BISA menolak penulisan field kelompok lain
     // — draf lengkapnya (fungsi cardsProgressOk & cardsFinishersOk) ada di file firestore.rules
     // terpisah, sudah ditempel & dites lewat Rules Playground di Firebase Console.
-    db.collection("rooms").doc(roomCode).set({
+    // BUGFIX: sebelumnya pakai db...doc(roomCode).set({["cardsProgress." + myGroup]: matchedCount},
+    // {merge:true}) — key bertitik di .set() TIDAK dijamin resmi ditafsirkan sebagai "field nested
+    // di dalam map", beda dengan .update() yang notasi titiknya DIJAMIN dan didokumentasikan resmi
+    // oleh Firebase untuk menunjuk field bersarang. Kemungkinan besar penulisan lewat .set() itu
+    // malah membuat field BARU bernama harfiah "cardsProgress.6" (titik sungguhan di namanya),
+    // bukan mengisi cardsProgress.6 di dalam map cardsProgress yang dibaca guru — makanya
+    // penulisannya "berhasil" tanpa error sama sekali (field itu memang boleh ditulis), tapi guru
+    // tidak pernah melihat progresnya karena datanya nyasar ke field yang berbeda. Diganti pakai
+    // .update() yang tidak ambigu.
+    db.collection("rooms").doc(roomCode).update({
       [`cardsProgress.${myGroup}`]: matchedCount,
-    }, { merge: true }).catch(() => {});
+    }).catch((err) => console.error("Gagal kirim cardsProgress:", err));
   }, [matchedCount, roundId, roomCode, myGroup]);
 
   // Kirim sinyal "selesai" sekali saja begitu semua pasangan ketemu, lewat transaksi (sama
