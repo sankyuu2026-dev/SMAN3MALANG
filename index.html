@@ -2114,6 +2114,7 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyList, setHistoryList] = useState([]);
   const [historyLoaded, setHistoryLoaded] = useState(false);
+  const [guideOpen, setGuideOpen] = useState(false);
   const [saveNameOpen, setSaveNameOpen] = useState(false);
   const [saveNameInput, setSaveNameInput] = useState("");
   const [savingSession, setSavingSession] = useState(false);
@@ -3662,6 +3663,17 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
         <style>{fontImport}</style>
         <JapaneseBackdrop theme={theme} />
         {historyOpen && renderHistoryModal()}
+        <PageGuideModal open={guideOpen} onClose={() => setGuideOpen(false)} t={t}
+          title="Panduan — Word Search" subtitle="Cara menyusun materi & cara game ini dimainkan"
+          steps={[
+            { t: "Pilih Tema", d: "Pilih salah satu dari 14 tema (Kelas XI/XII), atau klik \"+ Tambah Tema\" untuk membuat tema sendiri." },
+            { t: "Isi Kosakata per Babak", d: "Ada 3 babak tetap. Tiap kata butuh: kata jawaban (romaji/hiragana/katakana), petunjuk Bahasa Indonesia, dan boleh tambah audio suara sendiri. Bisa juga pakai \"Tambah Banyak Sekaligus\" untuk mengisi banyak baris sekaligus dari teks yang ditempel." },
+            { t: "Kunci Jawaban & Acak Ulang", d: "Klik \"Tampilkan Kunci\" untuk lihat pratinjau posisi kata di papan sebelum main, atau \"Acak Ulang\" kalau susunannya kurang cocok." },
+            { t: "Mulai Permainan", d: "Setelah minimal 1 kata terisi di tiap babak, klik \"Mulai Permainan\" — kode Room dan QR untuk siswa join per kelompok (K1–K6) otomatis dibuat." },
+            { t: "Cara Bermain", d: "Kelompok scan QR lalu pilih nomor kelompoknya. Guru menampilkan petunjuk (audio/teks/dibacakan sendiri lewat mode \"Bebas\"), lalu kelompok yang tahu jawabannya angkat tangan (Digital lewat HP, atau Manual dicatat guru) — yang tercepat dapat giliran menjawab duluan dengan mengetuk huruf awal & akhir kata di papan." },
+            { t: "Mode Guru & Mode Proyektor", d: "\"Mode Guru\" membuat guru bisa langsung menunjuk kelompok mana yang menjawab & mengoreksi skor manual, mengabaikan urutan angkat tangan. \"Mode Proyektor\" menyembunyikan panel kontrol guru supaya yang diproyeksikan ke kelas cuma papan permainan & skor." },
+            { t: "Simpan & Lanjutkan", d: "Progres bisa dijeda kapan saja lewat \"Simpan & Jeda\", lalu dilanjutkan lagi nanti dari menu Riwayat Sesi (📜) — termasuk dari device/kelas lain." },
+          ]} />
 
         {/* FIX: dulu cuma header yang dibungkus position:relative+zIndex:1 — sisanya (panel Pilih
             materi, Kosakata per babak, dst) tidak, jadi backdrop (position:fixed, zIndex:0) yang
@@ -3680,6 +3692,9 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             {/* Ikon utilitas */}
             <div style={{ display: "flex", gap: 2, background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, borderRadius: 10, padding: 3 }}>
+              <button onClick={() => setGuideOpen(true)} title="Panduan Word Search" style={iconBtn}>
+                <span style={{ fontSize: 16, lineHeight: 1 }}>📖</span>
+              </button>
               <button onClick={() => setHistoryOpen(true)} title="Riwayat sesi tersimpan" style={iconBtn}>
                 <span style={{ fontSize: 16, lineHeight: 1 }}>📜</span>
                 {historyList.length > 0 && <span style={{ position: "absolute", top: 1, right: 1, background: "#EF5B5B", color: "#fff", borderRadius: "50%", width: 15, height: 15, fontSize: 9, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>{historyList.length}</span>}
@@ -4249,6 +4264,7 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
   const [loaded, setLoaded] = useState(false);
   const [storageWarning, setStorageWarning] = useState(null); // pesan kalau localStorage gagal menyimpan
   const [importMsg, setImportMsg] = useState(null); // { ok, text } hasil ekspor/impor cadangan
+  const [guideOpen, setGuideOpen] = useState(false);
   const [bulkAddOpen, setBulkAddOpen] = useState(false);
   // FITUR BARU: dulu "Daftar Perintah" selalu terbuka penuh — kalau kotaknya banyak (mis. 36),
   // guru harus scroll panjang tiap kali cuma mau lihat/edit bagian "Pilih Tema" atau "Kejutan
@@ -4482,6 +4498,9 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
             <div style={{ marginTop: 6 }}><CloudSaveBadge t={t} status={cloudSave.status} savedAt={cloudSave.savedAt} /></div>
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button onClick={() => setGuideOpen(true)} style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}>
+              <span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>📖</span> Panduan
+            </button>
             <BackupExportButton t={t} currentLabel={selectedMateri}
               onExportCurrent={() => exportBackup("current", materiSlug)} onExportAll={() => exportBackup("all", "semua-materi")} />
             <label title="Muat cadangan dari file .json" style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}>
@@ -4493,6 +4512,15 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
           </div>
         </div>
 
+        <PageGuideModal open={guideOpen} onClose={() => setGuideOpen(false)} t={t}
+          title="Panduan — Mystery Box" subtitle="Cara menyusun materi & cara game ini dimainkan"
+          steps={[
+            { t: "Pilih Tema", d: "Pilih salah satu dari 14 tema (Kelas XI/XII), atau klik \"+ Tambah Tema\" untuk membuat tema sendiri." },
+            { t: "Susun Daftar Perintah", d: "Isi teks perintah/pertanyaan untuk tiap nomor kotak. Bisa juga pakai \"Tambah Banyak Sekaligus\" untuk mengisi banyak baris sekaligus dari teks yang ditempel." },
+            { t: "Kejutan Kotak Spesial", d: "Sebagian kotak bisa diisi \"kejutan\" acak (bonus/tantangan singkat) alih-alih perintah biasa — atur di bagian \"Kejutan Kotak Spesial\" sebelum mulai." },
+            { t: "Mulai Permainan", d: "Setelah minimal 1 perintah terisi, klik \"Mulai Permainan\". Berbeda dari Word Search & Card Rush: game ini dimainkan langsung di SATU layar (biasanya diproyeksikan) — siswa tidak perlu scan QR atau join room sendiri." },
+            { t: "Cara Bermain", d: "Siswa/kelompok maju bergiliran memilih satu nomor kotak yang belum dibuka. Guru klik nomornya untuk membuka & membacakan perintah/pertanyaan di dalamnya — permainan ini individu per giliran, tanpa papan skor dan tanpa batas waktu." },
+          ]} />
         <StorageWarningBanner t={t} message={storageWarning} />
         <ImportMessageBanner t={t} msg={importMsg} onDismiss={() => setImportMsg(null)} />
 
@@ -4792,6 +4820,7 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
   const [uploadingImage, setUploadingImage] = useState({});
   const [imageUploadError, setImageUploadError] = useState({});
   const [qrOpen, setQrOpen] = useState(false);
+  const [guideOpen, setGuideOpen] = useState(false);
   const [bulkAddOpen, setBulkAddOpen] = useState(false);
   const [showCardPreview, setShowCardPreview] = useState(false);
   const [joinedGroups, setJoinedGroups] = useState({});
@@ -5150,6 +5179,9 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
             <div style={{ marginTop: 6 }}><CloudSaveBadge t={t} status={cloudSave.status} savedAt={cloudSave.savedAt} /></div>
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button onClick={() => setGuideOpen(true)} style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}>
+              <span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>📖</span> Panduan
+            </button>
             <BackupExportButton t={t} currentLabel={selectedMateri}
               onExportCurrent={() => exportBackup("current", materiSlug)} onExportAll={() => exportBackup("all", "semua-tema")} />
             <label title="Muat cadangan dari file .json" style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}>
@@ -5161,6 +5193,16 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
           </div>
         </div>
 
+        <PageGuideModal open={guideOpen} onClose={() => setGuideOpen(false)} t={t}
+          title="Panduan — Card Rush" subtitle="Cara menyusun materi & cara game ini dimainkan"
+          steps={[
+            { t: "Pilih Tema", d: "Pilih salah satu dari 14 tema (Kelas XI/XII), atau klik \"+ Tambah Tema\" untuk membuat tema sendiri." },
+            { t: "Susun Babak & Pasangan Kartu", d: "Babak bisa ditambah/dihapus bebas, minimal 5 pasangan kartu per babak. Tiap pasangan berisi: kata (romaji/hiragana) + gambar yang diunggah. Bisa pakai \"Tambah Banyak Sekaligus\" untuk mengisi banyak kata teksnya sekaligus (gambar tetap perlu diunggah satu-satu)." },
+            { t: "Atur Batas Waktu Babak", d: "Tiap babak punya batas waktu sendiri (default 3 menit) — atur di layar Main sesaat sebelum menekan \"Mulai Babak Ini\"." },
+            { t: "Mulai Permainan", d: "Setelah tiap babak minimal punya 5 pasangan lengkap, klik \"Mulai Permainan\" — kode Room dan QR untuk siswa join per kelompok otomatis dibuat." },
+            { t: "Cara Bermain", d: "Kelompok scan QR lalu pilih nomor kelompoknya, lalu menunggu guru menekan \"Mulai Babak Ini\". Begitu dimulai, tiap kelompok balapan mencocokkan kartu gambar dengan kata yang tepat di papannya sendiri-sendiri (susunan acak beda tiap HP, isi pasangan sama). Progres tiap kelompok terlihat langsung di layar guru selagi berjalan." },
+            { t: "Penilaian", d: "Kelompok yang selesai lebih dulu dapat poin lebih banyak (urutan selesai menentukan poin) — otomatis dihitung begitu semua kelompok selesai, atau saat waktu babak habis." },
+          ]} />
         <StorageWarningBanner t={t} message={storageWarning} />
         <ImportMessageBanner t={t} msg={importMsg} onDismiss={() => setImportMsg(null)} />
 
@@ -5658,6 +5700,40 @@ function AccountsTab({ t, teacher }) {
     </div>
   );
 }
+// FITUR BARU: panduan cara menyusun materi & cara bermain tiap game (dulu ikut campur jadi
+// satu di tab "Panduan" milik halaman Pilih Game — lihat SettingsModal). Sekarang tiap game
+// (Word Search/Mystery Box/Card Rush) punya tombol "📖 Panduan" sendiri di halaman Persiapan-nya
+// masing-masing, isinya KHUSUS untuk game itu: apa saja yang ada di halaman Persiapan-nya, DAN
+// bagaimana game itu sendiri dimainkan begitu "Mulai Permainan" ditekan. Komponen ini dipakai
+// ulang oleh ketiganya, cuma beda daftar langkahnya (steps) & judulnya saja.
+function PageGuideModal({ open, onClose, t, title, subtitle, steps }) {
+  if (!open) return null;
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 70, padding: 16, boxSizing: "border-box" }} onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()} className="modal-pop" style={{ width: "min(560px, 94vw)", maxHeight: "84vh", display: "flex", flexDirection: "column", background: t.modalBg, borderRadius: 20, boxShadow: "0 20px 60px rgba(0,0,0,.4)", overflow: "hidden" }}>
+        <div style={{ padding: "22px 24px 16px" }}>
+          <div className="sgt" style={{ fontSize: 18, fontWeight: 700, color: t.text, marginBottom: 2 }}>{title}</div>
+          <div style={{ fontSize: 12.5, color: t.faint }}>{subtitle}</div>
+        </div>
+        <div style={{ padding: "0 24px 4px", overflowY: "auto", flex: 1, display: "flex", flexDirection: "column", gap: 14 }}>
+          {steps.map((step, i) => (
+            <div key={i} style={{ display: "flex", gap: 12 }}>
+              <div style={{ width: 24, height: 24, borderRadius: "50%", background: t.panel2, color: t.text, fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{i + 1}</div>
+              <div>
+                <div style={{ fontSize: 13.5, fontWeight: 700, color: t.text, marginBottom: 2 }}>{step.t}</div>
+                <div style={{ fontSize: 12.5, color: t.dim, lineHeight: 1.5 }}>{step.d}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div style={{ padding: "16px 24px 22px", textAlign: "right" }}>
+          <button onClick={onClose} style={{ background: t.panel2, border: "none", color: t.text, padding: "9px 18px", borderRadius: 8, cursor: "pointer", fontSize: 13, fontWeight: 600 }}>Tutup</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SettingsModal({ open, onClose, t, teacher }) {
   const [tab, setTab] = useState("panduan");
   if (!open) return null;
@@ -5680,13 +5756,18 @@ function SettingsModal({ open, onClose, t, teacher }) {
         <div style={{ padding: "18px 24px 4px", overflowY: "auto", flex: 1 }}>
           {tab === "panduan" && (
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              {/* FIX: dulu tab ini berisi SELURUH alur main ketiga game jadi satu (Pilih Game →
+                  Susun Materi → Mulai Permainan → dst) — jadinya campur aduk antara "apa yang
+                  ada di halaman ini" dengan "cara main game"-nya sendiri, padahal keduanya beda
+                  konteks & beda halaman. Sekarang tab ini KHUSUS menjelaskan halaman "Pilih Game"
+                  itu sendiri (tombol apa saja yang ada di sini) — panduan cara menyusun materi
+                  & bermain tiap game sudah dipindah ke tombol "📖 Panduan" masing-masing di
+                  halaman Persiapan tiap game (isinya beda-beda sesuai game itu). */}
               {[
-                { t: "Pilih Game & Tema", d: "Pilih salah satu dari 3 game (Word Search, Mystery Box, atau Card Rush) di layar utama, lalu di halaman Persiapan pilih salah satu dari 14 tema (Kelas XI/XII), atau tambah tema sendiri." },
-                { t: "Susun Materi", d: "Isi kosakata + petunjuk per Babak untuk Word Search & Card Rush, atau daftar perintah untuk Mystery Box. Bisa juga pakai \"Tambah Banyak Sekaligus\" untuk mengisi banyak baris sekaligus dari teks yang ditempel." },
-                { t: "Mulai Permainan", d: "Klik \"Mulai Permainan\". Untuk Word Search & Card Rush, kode Room dan QR untuk siswa join per kelompok otomatis dibuat; Mystery Box dimainkan langsung di satu layar tanpa perlu siswa join room (individu, tanpa skor)." },
-                { t: "Atur Sesuai Jenis Game", d: "Word Search: pilih mode angkat tangan (Digital/Manual) dan mode petunjuk (Audio/Teks/Guru Bebas). Card Rush: atur batas waktu tiap babak sesaat sebelum menekan \"Mulai Babak Ini\" — progres tiap kelompok terlihat langsung selagi berjalan. Mystery Box: klik nomor kotak untuk membuka perintah di dalamnya — sebagian kotak bisa berisi kejutan acak." },
-                { t: "Proyeksikan ke Layar", d: "Untuk Word Search & Card Rush, gunakan \"Mode Proyektor\" supaya siswa hanya melihat papan permainan, bukan panel guru." },
-                { t: "Simpan & Lanjutkan", d: "Progres Word Search & Card Rush bisa disimpan lewat \"Simpan & Jeda\", lalu dibuka lagi kapan saja lewat menu Riwayat Sesi. Materi/kosakata di ketiga game otomatis tersimpan ke akun (Firestore) setiap ada perubahan, jadi tetap aman walau pindah device/browser." },
+                { t: "Kartu Game", d: "Klik salah satu dari 3 kartu (Word Search, Mystery Box, atau Card Rush) untuk masuk ke halaman Persiapan game itu. Tiap kartu punya tombol \"📖 Panduan\" sendiri di halaman Persiapannya — jelasin cara menyusun materi dan cara game itu dimainkan." },
+                { t: "Ganti Tampilan Gelap/Terang", d: "Tombol bulan/matahari di kanan atas mengganti tema tampilan halaman ini. Tiap game juga punya saklar temanya sendiri-sendiri di halaman Persiapan/Main." },
+                { t: "Tombol ⚙️ (jendela ini)", d: "Tempat kamu sedang buka sekarang — berisi tab Akun (menambahkan guru lain yang boleh ikut login pakai akun Google-nya sendiri), Pengembang (info pembuat aplikasi), dan Teknis (versi, teknologi yang dipakai, dsb)." },
+                { t: "Keluar", d: "Logout dari akun Google yang sedang login, kembali ke layar login guru. Data yang sudah tersimpan (materi, riwayat sesi) tidak ikut terhapus — tinggal login lagi pakai akun yang sama untuk melihatnya kembali." },
               ].map((step, i) => (
                 <div key={i} style={{ display: "flex", gap: 12 }}>
                   <div style={{ width: 24, height: 24, borderRadius: "50%", background: t.panel2, color: t.text, fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{i + 1}</div>
