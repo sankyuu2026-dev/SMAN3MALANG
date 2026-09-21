@@ -1533,7 +1533,15 @@ function StudentJoinScreen({ roomCode }) {
       const data = snap.data() || {};
       const groups = data.groups || {};
       if (groups[g]) throw new Error("kelompok-sudah-dipakai");
-      tx.set(ref, { groups: { [g]: { name: `Kelompok ${g}`, joinedAt: firebase.firestore.FieldValue.serverTimestamp() } } }, { merge: true });
+      // FITUR BARU (keamanan): dulu klaim kelompok cuma mencatat nama & waktu join, TIDAK PERNAH
+      // mencatat SIAPA (secara teknis, uid akun anonim Firebase Auth siswa) yang mengklaimnya.
+      // Akibatnya Firestore Security Rules tidak punya cara membedakan "siswa yang benar-benar
+      // Kelompok 3" dari "siapa saja yang menulis atas nama Kelompok 3" (mis. lewat console
+      // browser) — rules tidak bisa menolak/menerima berdasarkan sesuatu yang tidak pernah
+      // dicatat. Sekarang uid akun (anonim) siswa ikut dicatat saat klaim kelompok, supaya Rules
+      // bisa mensyaratkan "field progres kelompok X cuma boleh ditulis oleh uid yang sama dengan
+      // yang tercatat di groups.X.uid" — lihat draf Rules yang saya sertakan terpisah.
+      tx.set(ref, { groups: { [g]: { name: `Kelompok ${g}`, joinedAt: firebase.firestore.FieldValue.serverTimestamp(), uid: (auth.currentUser && auth.currentUser.uid) || null } } }, { merge: true });
     }))
       .then(() => {
         setMyGroup(g);
@@ -1874,6 +1882,39 @@ function CardsPlayArea({ roomCode, room, myGroup }) {
     // mengirim update — kelompok lain kelihatan seolah 0/belum mulai padahal sedang mengerjakan.
     // Diperbaiki pakai "dot path" (`cardsProgress.${myGroup}`) sebagai NAMA FIELD-nya sendiri —
     // ini caranya Firestore menyatu ke SATU key di dalam map bersarang tanpa menyentuh key lain.
+    //
+    // CATATAN KEAMANAN: dari sisi kode ini sudah benar (tiap siswa cuma pernah menulis field
+    // miliknya sendiri, myGroup). TAPI itu cuma karena aplikasi ini yang "berbaik hati" menulis
+    // begitu — siapa pun yang buka console browser & panggil Firestore SDK langsung bisa saja
+    // menulis field kelompok LAIN kalau Security Rules di Firebase Console tidak menolaknya.
+    // Sekarang setiap klaim kelompok (lihat joinGroup di StudentJoinScreen) ikut mencatat
+    // `groups.{g}.uid` (uid akun anonim yang mengklaim), supaya Rules BISA menolak penulisan
+    // field kelompok lain. Contoh Rules yang perlu ditempel di Firebase Console (belum saya uji
+    // di Rules Playground — WAJIB dicoba dulu di sana sebelum di-publish):
+    //
+    //   match /rooms/{roomCode} {
+    //     allow read: if true;
+    //     allow create: if request.auth != null;
+    //     allow update: if request.auth != null && (
+    //       // Guru (device yang membuat/mengelola room) tetap bebas — dibedakan dari siswa lewat
+    //       // TIDAK adanya percobaan mengubah field cardsProgress/cardsFinishers/groups sekaligus
+    //       // banyak, ATAU cukup batasi lewat App Check/role guru kalau proyek ini pakai itu.
+    //       // Baris di bawah HANYA menjaga field cardsProgress supaya per-siswa tidak saling timpa:
+    //       !("cardsProgress" in request.resource.data.diff(resource.data).affectedKeys()) ||
+    //       (
+    //         (!("1" in request.resource.data.cardsProgress.diff(resource.data.get("cardsProgress", {})).affectedKeys()) || resource.data.groups["1"].uid == request.auth.uid) &&
+    //         (!("2" in request.resource.data.cardsProgress.diff(resource.data.get("cardsProgress", {})).affectedKeys()) || resource.data.groups["2"].uid == request.auth.uid) &&
+    //         (!("3" in request.resource.data.cardsProgress.diff(resource.data.get("cardsProgress", {})).affectedKeys()) || resource.data.groups["3"].uid == request.auth.uid) &&
+    //         (!("4" in request.resource.data.cardsProgress.diff(resource.data.get("cardsProgress", {})).affectedKeys()) || resource.data.groups["4"].uid == request.auth.uid) &&
+    //         (!("5" in request.resource.data.cardsProgress.diff(resource.data.get("cardsProgress", {})).affectedKeys()) || resource.data.groups["5"].uid == request.auth.uid) &&
+    //         (!("6" in request.resource.data.cardsProgress.diff(resource.data.get("cardsProgress", {})).affectedKeys()) || resource.data.groups["6"].uid == request.auth.uid)
+    //       )
+    //     );
+    //   }
+    //
+    // Intinya: kalau ada percobaan mengubah progres kelompok X, tolak KECUALI uid yang menulis
+    // sama dengan uid yang tercatat sebagai pengklaim kelompok X. Kelompok yang TIDAK ikut
+    // berubah di request itu selalu diloloskan (baris "!(... in affectedKeys())").
     db.collection("rooms").doc(roomCode).set({
       [`cardsProgress.${myGroup}`]: matchedCount,
     }, { merge: true }).catch(() => {});
