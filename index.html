@@ -1887,34 +1887,10 @@ function CardsPlayArea({ roomCode, room, myGroup }) {
     // miliknya sendiri, myGroup). TAPI itu cuma karena aplikasi ini yang "berbaik hati" menulis
     // begitu — siapa pun yang buka console browser & panggil Firestore SDK langsung bisa saja
     // menulis field kelompok LAIN kalau Security Rules di Firebase Console tidak menolaknya.
-    // Sekarang setiap klaim kelompok (lihat joinGroup di StudentJoinScreen) ikut mencatat
-    // `groups.{g}.uid` (uid akun anonim yang mengklaim), supaya Rules BISA menolak penulisan
-    // field kelompok lain. Contoh Rules yang perlu ditempel di Firebase Console (belum saya uji
-    // di Rules Playground — WAJIB dicoba dulu di sana sebelum di-publish):
-    //
-    //   match /rooms/{roomCode} {
-    //     allow read: if true;
-    //     allow create: if request.auth != null;
-    //     allow update: if request.auth != null && (
-    //       // Guru (device yang membuat/mengelola room) tetap bebas — dibedakan dari siswa lewat
-    //       // TIDAK adanya percobaan mengubah field cardsProgress/cardsFinishers/groups sekaligus
-    //       // banyak, ATAU cukup batasi lewat App Check/role guru kalau proyek ini pakai itu.
-    //       // Baris di bawah HANYA menjaga field cardsProgress supaya per-siswa tidak saling timpa:
-    //       !("cardsProgress" in request.resource.data.diff(resource.data).affectedKeys()) ||
-    //       (
-    //         (!("1" in request.resource.data.cardsProgress.diff(resource.data.get("cardsProgress", {})).affectedKeys()) || resource.data.groups["1"].uid == request.auth.uid) &&
-    //         (!("2" in request.resource.data.cardsProgress.diff(resource.data.get("cardsProgress", {})).affectedKeys()) || resource.data.groups["2"].uid == request.auth.uid) &&
-    //         (!("3" in request.resource.data.cardsProgress.diff(resource.data.get("cardsProgress", {})).affectedKeys()) || resource.data.groups["3"].uid == request.auth.uid) &&
-    //         (!("4" in request.resource.data.cardsProgress.diff(resource.data.get("cardsProgress", {})).affectedKeys()) || resource.data.groups["4"].uid == request.auth.uid) &&
-    //         (!("5" in request.resource.data.cardsProgress.diff(resource.data.get("cardsProgress", {})).affectedKeys()) || resource.data.groups["5"].uid == request.auth.uid) &&
-    //         (!("6" in request.resource.data.cardsProgress.diff(resource.data.get("cardsProgress", {})).affectedKeys()) || resource.data.groups["6"].uid == request.auth.uid)
-    //       )
-    //     );
-    //   }
-    //
-    // Intinya: kalau ada percobaan mengubah progres kelompok X, tolak KECUALI uid yang menulis
-    // sama dengan uid yang tercatat sebagai pengklaim kelompok X. Kelompok yang TIDAK ikut
-    // berubah di request itu selalu diloloskan (baris "!(... in affectedKeys())").
+    // Setiap klaim kelompok (lihat joinGroup di StudentJoinScreen) ikut mencatat `groups.{g}.uid`
+    // (uid akun anonim yang mengklaim), supaya Rules BISA menolak penulisan field kelompok lain
+    // — draf lengkapnya (fungsi cardsProgressOk & cardsFinishersOk) ada di file firestore.rules
+    // terpisah, sudah ditempel & dites lewat Rules Playground di Firebase Console.
     db.collection("rooms").doc(roomCode).set({
       [`cardsProgress.${myGroup}`]: matchedCount,
     }, { merge: true }).catch(() => {});
@@ -1934,6 +1910,10 @@ function CardsPlayArea({ roomCode, room, myGroup }) {
       const order = Array.isArray(data.cardsFinishers) ? data.cardsFinishers : [];
       if (order.some((o) => o.group === myGroup)) return;
       const name = (data.groups && data.groups[myGroup] && data.groups[myGroup].name) || `Kelompok ${myGroup}`;
+      // CATATAN KEAMANAN: penulisan ini sekarang juga dijaga Rules (lihat cardsFinishersOk di
+      // draf Firestore Rules) — cuma boleh MENAMBAH satu entri di akhir daftar (bukan mengubah
+      // yang sudah ada), dan entri barunya harus "group"-nya cocok dengan uid yang menulis
+      // (dicek lewat groups.{g}.uid, sama seperti proteksi cardsProgress).
       tx.set(ref, { cardsFinishers: [...order, { group: myGroup, name, elapsedMs }] }, { merge: true });
     })).catch(() => {});
   }, [allMatched, finishedSent, roundId, roomCode, myGroup]);
