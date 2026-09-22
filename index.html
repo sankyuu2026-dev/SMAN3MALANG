@@ -3014,21 +3014,47 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
 
   function releaseTurn() { activeGroupRef.current = null; setActiveGroup(null); setSelStart(null); }
 
-  // FITUR BARU: klik lagi tombol kelompok yang SEDANG aktif menjawab (tombolnya sedang menyala)
-  // akan MEMBATALKAN penunjukan itu — dikeluarkan dari antrean & gilirannya dilepas sepenuhnya,
-  // bukan cuma dikunci diam. Berguna kalau guru salah pencet kelompok, atau ternyata kelompok
-  // yang diklik tadi bukan yang mengangkat tangan duluan (di mode Manual, guru sendiri yang
-  // menentukan urutan lewat klik — jadi wajar kalau perlu dibatalkan/diulang). Berlaku di kedua
-  // mode (Digital & Manual) karena keduanya berbagi tombol K1–K6 & fungsi antrean (`buzz`) yang
-  // sama. Begitu dibatalkan, `activeGroup` ikut disiarkan ulang ke Firestore (lihat efek penulis
-  // activeTurnGroup) sehingga status "Giliranmu sekarang!" di HP kelompok itu juga ikut hilang.
+  // FITUR BARU: klik lagi tombol kelompok yang SEDANG antre (aktif MAUPUN masih menunggu giliran)
+  // akan MEMBATALKAN penunjukan itu — dikeluarkan dari antrean. Berguna kalau guru salah pencet
+  // kelompok, atau ternyata urutannya perlu diubah (di mode Manual, guru sendiri yang menentukan
+  // urutan lewat klik — jadi wajar kalau perlu dibatalkan/diulang kapan saja, bukan cuma untuk
+  // kelompok yang kebetulan sedang aktif). Berlaku di kedua mode (Digital & Manual) karena
+  // keduanya berbagi tombol K1–K6 & fungsi antrean (`buzz`) yang sama.
   function cancelActiveGroup(group) {
     const newOrder = buzzOrderRef.current.filter((o) => o.group !== group);
     buzzOrderRef.current = newOrder;
     setBuzzOrder(newOrder);
-    activeGroupRef.current = null;
-    setActiveGroup(null);
-    setSelStart(null);
+    // BUGFIX: dulu activeGroup SELALU dikosongkan di sini tanpa syarat, walau grup yang dibatalkan
+    // BUKAN grup yang sedang aktif menjawab (mis. guru membatalkan kelompok KEDUA yang masih
+    // menunggu giliran) — akibatnya giliran kelompok PERTAMA yang justru sedang aktif ikut
+    // terbatalkan tanpa sengaja. Ini juga penyebab tombol kelompok ke-2/ke-3 dst di antrean
+    // sebelumnya terlihat abu-abu/tidak bisa diklik sama sekali (lihat kondisi `locked` di
+    // render tombol) — sekarang activeGroup cuma dikosongkan kalau grup yang dibatalkan memang
+    // grup yang sedang aktif; kelompok lain di antrean bisa dibatalkan sendiri-sendiri tanpa
+    // mengganggu giliran yang sedang berjalan.
+    if (activeGroupRef.current === group) {
+      activeGroupRef.current = null;
+      setActiveGroup(null);
+      setSelStart(null);
+    }
+    // BUGFIX: dulu pembatalan ini cuma mengubah state LOKAL di layar guru — dokumen room di
+    // Firestore (yang dibaca langsung oleh HP kelompok itu sendiri lewat listener room.buzzOrder,
+    // lihat pressBuzz di StudentJoinScreen) TIDAK ikut diperbarui. Akibatnya kelompok yang baru
+    // dibatalkan tetap melihat badge posisi antre ("#1"/"#2" dst) & tombolnya tetap terkunci di
+    // HP mereka SENDIRI, padahal panel guru sudah menganggap mereka tidak antre sama sekali —
+    // desync yang bikin kelompok itu terjebak menunggu tanpa pernah dipanggil. Sekarang entri
+    // kelompok ini juga dihapus dari buzzOrder di Firestore (pakai transaction, konsisten dengan
+    // pola yang sama dipakai pressBuzz, supaya tidak tabrakan kalau kebetulan kelompok itu sedang
+    // menekan buzzer di saat yang sama persis).
+    if (roomCode) {
+      const ref = db.collection("rooms").doc(roomCode);
+      db.runTransaction((tx) => tx.get(ref).then((snap) => {
+        const data = snap.data();
+        if (!data || !Array.isArray(data.buzzOrder)) return;
+        const cleaned = data.buzzOrder.filter((o) => o.group !== group);
+        if (cleaned.length !== data.buzzOrder.length) tx.set(ref, { buzzOrder: cleaned }, { merge: true });
+      })).catch(() => {});
+    }
   }
 
   // FITUR BARU: koreksi skor manual — dulu skor cuma bisa naik lewat jawaban benar yang dieksekusi
@@ -3689,19 +3715,19 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
             const eligible = isEligible(g);
             const buzzPos = buzzOrder.findIndex((o) => o.group === g);
             const alreadyBuzzed = buzzPos >= 0;
-            // BUGFIX: alreadyBuzzed dulu mengunci tombol ini SELAMANYA untuk soal ini, walau grup
-            // sudah pernah salah & retry sedang diizinkan (openToAll). Sekarang kunci "sudah pernah
-            // angkat tangan" cuma berlaku kalau grup itu memang belum boleh mencoba lagi.
-            const canRetryNow = triedSet.has(g) && openToAll;
-            // Mode Guru: SEMUA aturan kunci di atas diabaikan — kelompok mana pun selalu bisa
-            // langsung dipilih, kapan saja selama ada soal aktif.
-            // FITUR BARU: kelompok yang SEDANG AKTIF (isActive) selalu boleh diklik lagi walau
-            // secara aturan antrean biasa ia "terkunci" (alreadyBuzzed && !canRetryNow) — supaya
-            // klik kedua pada tombol yang sama bisa membatalkan penunjukan tadi (lihat
-            // cancelActiveGroup), bukan sekadar tidak bereaksi.
-            const locked = guruModeOn ? !currentWord : (!currentWord || !clueRevealed || (!isActive && (!eligible || (alreadyBuzzed && !canRetryNow))));
+            // FITUR BARU: kelompok mana pun yang SUDAH ADA DI ANTREAN (aktif ATAU masih
+            // menunggu giliran) selalu boleh diklik lagi — supaya klik kedua pada tombol manapun
+            // yang sudah antre bisa membatalkan posisinya (lihat cancelActiveGroup), bukan cuma
+            // tombol yang kebetulan sedang aktif.
+            // BUGFIX: dulu pengecualian "boleh diklik lagi" ini cuma berlaku untuk `isActive`
+            // (kelompok pertama di antrean) — kelompok ke-2/ke-3 dst yang masih menunggu giliran
+            // TETAP terkunci (disabled, terlihat abu-abu di layar) walau tombol "batalkan" untuk
+            // mereka seharusnya juga tersedia. Sekarang syaratnya `alreadyBuzzed` (siapa pun yang
+            // sudah masuk antrean, bukan cuma yang sedang aktif) — dan onClick di bawah juga
+            // disesuaikan jadi `alreadyBuzzed ? cancelActiveGroup(g) : buzz(g)`.
+            const locked = guruModeOn ? !currentWord : (!currentWord || !clueRevealed || (!alreadyBuzzed && !eligible));
             return (
-              <button key={g} className="grp-btn" onClick={() => guruModeOn ? forceSetActiveGroup(g) : (isActive ? cancelActiveGroup(g) : buzz(g))} disabled={locked}
+              <button key={g} className="grp-btn" onClick={() => guruModeOn ? forceSetActiveGroup(g) : (alreadyBuzzed ? cancelActiveGroup(g) : buzz(g))} disabled={locked}
                 style={{ position: "relative", padding: "12px 0", borderRadius: 10, border: guruModeOn ? `1.5px solid ${GURU_COLOR}` : "none", cursor: locked ? "default" : "pointer", background: isActive ? GROUP_COLORS[g - 1] : t.panel2, color: isActive ? "#0D1730" : t.text, fontWeight: 700, fontSize: 14, opacity: locked && !isActive ? 0.4 : 1, boxShadow: isActive ? `0 0 0 2px ${GROUP_COLORS[g - 1]}` : "none" }}>
                 K{g}
                 {joinedGroups[g] && <span title="Sudah join lewat QR" style={{ position: "absolute", top: 4, right: 4, width: 7, height: 7, borderRadius: "50%", background: "#3FBFAD" }} />}
