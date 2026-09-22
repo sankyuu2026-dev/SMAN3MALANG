@@ -1378,11 +1378,11 @@ function cleanupStaleRooms() {
 
 // Badge bulat bernomor + judul, dipakai di layar Persiapan ketiga game supaya urutan
 // langkah ("1. Pilih materi", "2. Kosakata", dst) selalu tampil konsisten.
-function SectionLabel({ n, children, hint, faint }) {
+function SectionLabel({ n, children, hint, faint, badgeSize = 22, titleSize = 14 }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
-      <span style={{ width: 22, height: 22, borderRadius: "50%", background: "#F4B740", color: "#101B34", fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{n}</span>
-      <span style={{ fontSize: 14, fontWeight: 700 }}>{children}</span>
+      <span style={{ width: badgeSize, height: badgeSize, borderRadius: "50%", background: "#F4B740", color: "#101B34", fontSize: Math.round(badgeSize * 0.545), fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{n}</span>
+      <span style={{ fontSize: titleSize, fontWeight: 700 }}>{children}</span>
       {hint && <span style={{ fontSize: 12, color: faint }}>{hint}</span>}
     </div>
   );
@@ -4773,7 +4773,7 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
           <button onClick={() => setPerintahListOpen((o) => !o)} className="babak-acc-header"
             style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "16px 20px", background: "transparent", border: "none", cursor: "pointer", textAlign: "left" }}>
             <div style={{ minWidth: 0 }}>
-              <SectionLabel n={2} hint={`— ${items.length} kotak`} faint={t.faint}>Daftar perintah</SectionLabel>
+              <SectionLabel n={2} hint={`— ${items.length} kotak`} faint={t.faint} badgeSize={28} titleSize={17}>Daftar perintah</SectionLabel>
             </div>
             <span style={{ width: 26, height: 26, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, color: perintahListOpen ? "#101B34" : t.dim, background: perintahListOpen ? "#F4B740" : "transparent", flexShrink: 0, transform: perintahListOpen ? "rotate(180deg)" : "none", transition: "transform .15s ease, background .15s ease" }}>▾</span>
           </button>
@@ -4785,7 +4785,7 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 {items.map((it, i) => (
                   <div key={it.id} className="list-row" style={{ display: "flex", gap: 8, alignItems: "flex-start", background: t.panel2, borderRadius: 10, padding: 10 }}>
-                    <span style={{ width: 26, height: 26, borderRadius: 7, background: BOX_COLORS[i % BOX_COLORS.length], color: "#101B34", fontWeight: 700, fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{i + 1}</span>
+                    <span style={{ width: 32, height: 32, borderRadius: 8, background: BOX_COLORS[i % BOX_COLORS.length], color: "#101B34", fontWeight: 700, fontSize: 14.5, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{i + 1}</span>
                     <textarea value={it.text} onChange={(e) => updateItem(it.id, e.target.value)} rows={2} placeholder="Tulis perintah/instruksi…"
                       style={{ flex: 1, padding: "9px 11px", borderRadius: 7, border: `1px solid ${t.border}`, background: t.panel, color: t.text, fontSize: 15, lineHeight: 1.4, resize: "vertical", fontFamily: "inherit" }} />
                     <button onClick={() => removeItem(it.id)} className="row-del" title="Hapus perintah ini" style={{ background: "transparent", border: "none", color: t.faint, cursor: "pointer", padding: 8, borderRadius: 8 }}><span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>🗑</span></button>
