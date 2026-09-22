@@ -1,4 +1,4 @@
-\<!doctype html>
+<!doctype html>
 <html lang="id">
 <head>
 <meta charset="UTF-8" />
@@ -363,70 +363,70 @@ function downloadJson(filename, dataObj) {
 // (.json) tiap game lewat tombol "Cadangkan" masing-masing. Fungsi ini dipakai tombol "Simpan
 // Semua Data" di layar "Pilih Game" — membaca data TERSIMPAN (localStorage, format & lokasinya
 // PERSIS sama seperti yang dibaca tiap game lewat migrateLegacyKey) untuk KETIGA game sekaligus,
-// lalu mengunduh 3 file cadangan .json dalam satu klik. Format tiap file dibuat identik dengan
-// yang dihasilkan tombol "Cadangkan → Semua tema" di masing-masing game, jadi tetap bisa dimuat
-// balik lewat "Muat Cadangan" di game manapun tanpa perubahan.
+// digabung jadi SATU file .json (bukan 3 file terpisah seperti versi sebelumnya — lebih gampang
+// disimpan/dikirim, dan waktu dimuat lagi cuma perlu unggah satu file, bukan pilih tiga-tiganya).
 const ALL_GAMES_BACKUP_META = [
-  { storageKey: "tck-setup-data", appId: "tebak-cari-kata", fileSlug: "word-search" },
-  { storageKey: "bk-setup-data", appId: "buka-kotak", fileSlug: "mystery-box" },
-  { storageKey: "cck-setup-data", appId: "card-rush", fileSlug: "card-rush" },
+  { storageKey: "tck-setup-data", appId: "tebak-cari-kata" },
+  { storageKey: "bk-setup-data", appId: "buka-kotak" },
+  { storageKey: "cck-setup-data", appId: "card-rush" },
 ];
 function exportAllGamesBackup(uid) {
-  let saved = 0, skipped = 0, failed = 0;
-  ALL_GAMES_BACKUP_META.forEach(({ storageKey, appId, fileSlug }) => {
+  const games = {};
+  let skipped = 0;
+  ALL_GAMES_BACKUP_META.forEach(({ storageKey, appId }) => {
     try {
       const raw = localStorage.getItem(migrateLegacyKey(storageKey, uid));
-      if (!raw) { skipped++; return; } // guru belum pernah isi materi apa pun di game ini — lewati, jangan bikin file kosong
+      if (!raw) { skipped++; return; } // guru belum pernah isi materi apa pun di game ini — lewati
       const parsed = JSON.parse(raw);
       if (!parsed.dataByMateri) { skipped++; return; }
-      const payload = appId === "card-rush"
+      games[appId] = appId === "card-rush"
         ? { dataByMateri: parsed.dataByMateri }
         : { selectedMateri: parsed.selectedMateri, dataByMateri: parsed.dataByMateri };
-      const ok = downloadJson(`cadangan-${appId}-${fileSlug}-${todayStamp()}.json`, {
-        app: appId, version: 1, exportedAt: new Date().toISOString(), ...payload,
-      });
-      ok ? saved++ : failed++;
-    } catch (e) { console.error("Gagal ekspor cadangan gabungan:", appId, e); failed++; }
+    } catch (e) { console.error("Gagal ekspor cadangan gabungan:", appId, e); }
   });
-  return { saved, skipped, failed };
+  const gameCount = Object.keys(games).length;
+  if (gameCount === 0) return { saved: false, skipped };
+  const ok = downloadJson(`cadangan-sankyuu-semua-game-${todayStamp()}.json`, {
+    app: "sankyuu-semua-game", version: 1, exportedAt: new Date().toISOString(), games,
+  });
+  return { saved: ok, gameCount, skipped };
 }
-// FITUR BARU: pasangan dari exportAllGamesBackup — dulu guru cuma bisa MENGUNDUH cadangan
-// ketiga game sekaligus dari layar "Pilih Game", tapi kalau mau MEMUAT baliknya tetap wajib
-// buka satu-satu (Word Search → Muat Cadangan, lalu Mystery Box → Muat Cadangan, dst). Fungsi
-// ini dipakai tombol "Muat Semua Data" — terima beberapa file .json sekaligus (1-3 file, boleh
-// dipilih semuanya dalam satu dialog), lalu cocokkan tiap file ke game-nya lewat field `app` di
-// dalam filenya sendiri (ditulis exportAllGamesBackup/BackupExportButton, jadi tidak bergantung
-// nama file). Ditulis LANGSUNG ke localStorage (bukan lewat state React game masing-masing,
+// FITUR BARU: pasangan dari exportAllGamesBackup — terima SATU file .json gabungan (format baru,
+// field `games` berisi data ketiga game sekaligus), lalu terapkan masing-masing ke localStorage
+// game terkait. Ditulis LANGSUNG ke localStorage (bukan lewat state React game masing-masing,
 // karena game-nya belum tentu sedang dibuka) — begitu guru membuka game itu nanti, data yang
-// baru dimuat otomatis kebaca seperti biasa. Sama seperti "Muat Cadangan" di tiap game: materi
-// dengan nama sama DITIMPA, materi lain & field lain (puzzleByBabak, surprises, dst.) yang sudah
-// ada di localStorage TETAP aman karena di-merge, bukan ditimpa seluruhnya.
-function importAllGamesBackup(uid, files) {
-  return Promise.all(files.map((file) =>
-    readJsonFile(file)
-      .then((data) => {
-        const meta = ALL_GAMES_BACKUP_META.find((m) => m.appId === data.app);
-        if (!meta || !data.dataByMateri) return { status: "skipped" };
-        try {
-          const raw = localStorage.getItem(migrateLegacyKey(meta.storageKey, uid));
-          let existing = {};
-          try { existing = raw ? JSON.parse(raw) : {}; } catch (e) { existing = {}; }
-          const merged = {
-            ...existing,
-            dataByMateri: { ...(existing.dataByMateri || {}), ...data.dataByMateri },
-            selectedMateri: data.selectedMateri || existing.selectedMateri,
-            savedAt: Date.now(),
-          };
-          const res = safeSetItem(scopedKey(meta.storageKey, uid), JSON.stringify(merged));
-          return res.ok ? { status: "updated" } : { status: "failed" };
-        } catch (e) { console.error("Gagal muat cadangan gabungan:", meta.appId, e); return { status: "failed" }; }
-      })
-      .catch((e) => { console.error("Gagal baca file cadangan gabungan:", e); return { status: "failed" }; })
-  )).then((results) => ({
-    updated: results.filter((r) => r.status === "updated").length,
-    skipped: results.filter((r) => r.status === "skipped").length,
-    failed: results.filter((r) => r.status === "failed").length,
-  }));
+// baru dimuat otomatis kebaca seperti biasa. Materi dengan nama sama DITIMPA, materi lain & field
+// lain (puzzleByBabak, surprises, dst.) yang sudah ada di localStorage TETAP aman karena
+// di-merge, bukan ditimpa seluruhnya. File cadangan LAMA (dari versi sebelum fitur ini digabung
+// jadi satu file, satu file per game dengan field `app` di root, bukan `games`) tetap dikenali
+// juga, supaya cadangan lama masih bisa dipakai.
+function importAllGamesBackup(uid, file) {
+  return readJsonFile(file).then((data) => {
+    // Format baru: satu file, field `games` berisi data ketiga game.
+    // Format lama (sebelum digabung): satu file per game, field `app` di root langsung.
+    const gamesData = data.games || (data.app ? { [data.app]: data } : null);
+    if (!gamesData) return { updated: 0, skipped: 1, failed: 0 };
+    let updated = 0, skipped = 0, failed = 0;
+    ALL_GAMES_BACKUP_META.forEach(({ storageKey, appId }) => {
+      const gameData = gamesData[appId];
+      if (!gameData || !gameData.dataByMateri) { if (gamesData[appId] !== undefined) failed++; return; }
+      try {
+        const raw = localStorage.getItem(migrateLegacyKey(storageKey, uid));
+        let existing = {};
+        try { existing = raw ? JSON.parse(raw) : {}; } catch (e) { existing = {}; }
+        const merged = {
+          ...existing,
+          dataByMateri: { ...(existing.dataByMateri || {}), ...gameData.dataByMateri },
+          selectedMateri: gameData.selectedMateri || existing.selectedMateri,
+          savedAt: Date.now(),
+        };
+        const res = safeSetItem(scopedKey(storageKey, uid), JSON.stringify(merged));
+        res.ok ? updated++ : failed++;
+      } catch (e) { console.error("Gagal muat cadangan gabungan:", appId, e); failed++; }
+    });
+    if (updated === 0 && failed === 0) skipped = 1;
+    return { updated, skipped, failed };
+  }).catch((e) => { console.error("Gagal baca file cadangan gabungan:", e); return { updated: 0, skipped: 0, failed: 1 }; });
 }
 function readJsonFile(file) {
   return new Promise((resolve, reject) => {
@@ -6075,26 +6075,23 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [backupMsg, setBackupMsg] = useState(null);
   function handleExportAllGames() {
-    const { saved, skipped, failed } = exportAllGamesBackup(authUser.uid);
-    if (saved === 0 && failed === 0) {
-      setBackupMsg({ ok: false, text: "Belum ada data tersimpan di game manapun untuk dicadangkan." });
-    } else if (failed > 0) {
-      setBackupMsg({ ok: false, text: `${saved} file cadangan berhasil diunduh, ${failed} gagal — coba lagi.` });
+    const result = exportAllGamesBackup(authUser.uid);
+    if (!result.saved) {
+      setBackupMsg({ ok: false, text: result.skipped >= 3 ? "Belum ada data tersimpan di game manapun untuk dicadangkan." : "Gagal mengunduh cadangan — coba lagi." });
     } else {
-      setBackupMsg({ ok: true, text: `${saved} file cadangan berhasil diunduh${skipped > 0 ? ` (${skipped} game dilewati, belum ada data)` : ""}. Cek folder Downloads.` });
+      setBackupMsg({ ok: true, text: `1 file cadangan (berisi ${result.gameCount} game) berhasil diunduh${result.skipped > 0 ? ` (${result.skipped} game dilewati, belum ada data)` : ""}. Cek folder Downloads.` });
     }
     setTimeout(() => setBackupMsg(null), 6000);
   }
-  function handleImportAllGames(fileList) {
-    const files = Array.from(fileList || []);
-    if (files.length === 0) return;
-    if (!window.confirm(`Muat ${files.length} file cadangan? Materi/tema dengan nama sama di tiap game akan MENIMPA yang ada sekarang — materi/tema lain tetap aman.`)) return;
-    importAllGamesBackup(authUser.uid, files).then(({ updated, skipped, failed }) => {
+  function handleImportAllGames(file) {
+    if (!file) return;
+    if (!window.confirm("Muat cadangan ini? Materi/tema dengan nama sama di tiap game akan MENIMPA yang ada sekarang — materi/tema lain tetap aman.")) return;
+    importAllGamesBackup(authUser.uid, file).then(({ updated, skipped, failed }) => {
       setBackupMsg({
         ok: updated > 0 && failed === 0,
         text: updated === 0
-          ? `Tidak ada file yang dikenali sebagai cadangan game ini (${skipped + failed} file dilewati/gagal).`
-          : `${updated} file cadangan berhasil dimuat${skipped > 0 ? `, ${skipped} dilewati (bukan cadangan game ini)` : ""}${failed > 0 ? `, ${failed} gagal` : ""}. Buka game terkait untuk lihat perubahannya.`,
+          ? "File ini tidak dikenali sebagai cadangan aplikasi ini."
+          : `${updated} game berhasil dimuat dari cadangan${failed > 0 ? `, ${failed} gagal` : ""}. Buka game terkait untuk lihat perubahannya.`,
       });
       setTimeout(() => setBackupMsg(null), 6000);
     });
@@ -6197,10 +6194,10 @@ function App() {
                 pindah ke atribut title (muncul saat kursor menyentuh ikon). "Muat Semua Data"
                 ditambahkan di sebelahnya sebagai pasangannya (dulu cuma bisa muat balik dengan
                 buka game satu-satu) — juga ikon saja dari awal, tidak pernah pakai label teks. */}
-            <button onClick={handleExportAllGames} title="Simpan Semua Data — unduh cadangan .json dari ketiga game sekaligus (Word Search, Mystery Box, Card Rush), tidak perlu buka satu-satu" style={{ background: pt.panel, border: `1px solid ${pt.border}`, color: pt.text, padding: 10, borderRadius: 10, cursor: "pointer", boxShadow: "0 2px 10px rgba(0,0,0,.06)" }}><span style={{ fontSize: 16, lineHeight: 1 }}>💾</span></button>
-            <label title="Muat Semua Data — pulihkan cadangan .json ke ketiga game sekaligus (boleh pilih 1-3 file sekaligus), tidak perlu buka satu-satu" style={{ display: "flex", alignItems: "center", justifyContent: "center", background: pt.panel, border: `1px solid ${pt.border}`, color: pt.text, padding: 10, borderRadius: 10, cursor: "pointer", boxShadow: "0 2px 10px rgba(0,0,0,.06)" }}>
+            <button onClick={handleExportAllGames} title="Simpan Semua Data — unduh SATU file cadangan .json berisi ketiga game sekaligus (Word Search, Mystery Box, Card Rush), tidak perlu buka satu-satu" style={{ background: pt.panel, border: `1px solid ${pt.border}`, color: pt.text, padding: 10, borderRadius: 10, cursor: "pointer", boxShadow: "0 2px 10px rgba(0,0,0,.06)" }}><span style={{ fontSize: 16, lineHeight: 1 }}>💾</span></button>
+            <label title="Muat Semua Data — pulihkan dari SATU file cadangan .json ke ketiga game sekaligus, tidak perlu buka satu-satu" style={{ display: "flex", alignItems: "center", justifyContent: "center", background: pt.panel, border: `1px solid ${pt.border}`, color: pt.text, padding: 10, borderRadius: 10, cursor: "pointer", boxShadow: "0 2px 10px rgba(0,0,0,.06)" }}>
               <span style={{ fontSize: 16, lineHeight: 1 }}>📂</span>
-              <input type="file" accept="application/json,.json" multiple onChange={(e) => { handleImportAllGames(e.target.files); e.target.value = ""; }} style={{ display: "none" }} />
+              <input type="file" accept="application/json,.json" onChange={(e) => { handleImportAllGames(e.target.files[0]); e.target.value = ""; }} style={{ display: "none" }} />
             </label>
             <button onClick={() => setSettingsOpen(true)} title="Panduan, pengembang & info teknis" style={{ background: pt.panel, border: `1px solid ${pt.border}`, color: pt.text, padding: 10, borderRadius: 10, cursor: "pointer", boxShadow: "0 2px 10px rgba(0,0,0,.06)" }}><span style={{ fontSize: 16, lineHeight: 1 }}>⚙️</span></button>
             <ThemeToggleButton theme={pickerTheme} onToggle={() => setPickerTheme((th) => th === "dark" ? "light" : "dark")} style={{ background: pt.panel, border: `1px solid ${pt.border}`, color: pt.text, padding: 10, borderRadius: 10, cursor: "pointer", boxShadow: "0 2px 10px rgba(0,0,0,.06)" }} />
