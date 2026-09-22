@@ -3014,6 +3014,20 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
 
   function releaseTurn() { activeGroupRef.current = null; setActiveGroup(null); setSelStart(null); }
 
+  // Dipakai bareng oleh cancelActiveGroup() & skipGroupFromQueue() — keduanya sama-sama perlu
+  // menghapus SATU kelompok dari buzzOrder di Firestore setelah mengubah state lokal, supaya HP
+  // kelompok itu ikut tersinkron (lihat catatan BUGFIX di kedua fungsi tersebut).
+  function removeGroupFromFirestoreQueue(group) {
+    if (!roomCode) return;
+    const ref = db.collection("rooms").doc(roomCode);
+    db.runTransaction((tx) => tx.get(ref).then((snap) => {
+      const data = snap.data();
+      if (!data || !Array.isArray(data.buzzOrder)) return;
+      const cleaned = data.buzzOrder.filter((o) => o.group !== group);
+      if (cleaned.length !== data.buzzOrder.length) tx.set(ref, { buzzOrder: cleaned }, { merge: true });
+    })).catch(() => {});
+  }
+
   // FITUR BARU: klik lagi tombol kelompok yang SEDANG antre (aktif MAUPUN masih menunggu giliran)
   // akan MEMBATALKAN penunjukan itu — dikeluarkan dari antrean. Berguna kalau guru salah pencet
   // kelompok, atau ternyata urutannya perlu diubah (di mode Manual, guru sendiri yang menentukan
@@ -3043,18 +3057,8 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
     // dibatalkan tetap melihat badge posisi antre ("#1"/"#2" dst) & tombolnya tetap terkunci di
     // HP mereka SENDIRI, padahal panel guru sudah menganggap mereka tidak antre sama sekali —
     // desync yang bikin kelompok itu terjebak menunggu tanpa pernah dipanggil. Sekarang entri
-    // kelompok ini juga dihapus dari buzzOrder di Firestore (pakai transaction, konsisten dengan
-    // pola yang sama dipakai pressBuzz, supaya tidak tabrakan kalau kebetulan kelompok itu sedang
-    // menekan buzzer di saat yang sama persis).
-    if (roomCode) {
-      const ref = db.collection("rooms").doc(roomCode);
-      db.runTransaction((tx) => tx.get(ref).then((snap) => {
-        const data = snap.data();
-        if (!data || !Array.isArray(data.buzzOrder)) return;
-        const cleaned = data.buzzOrder.filter((o) => o.group !== group);
-        if (cleaned.length !== data.buzzOrder.length) tx.set(ref, { buzzOrder: cleaned }, { merge: true });
-      })).catch(() => {});
-    }
+    // kelompok ini juga dihapus dari buzzOrder di Firestore lewat removeGroupFromFirestoreQueue().
+    removeGroupFromFirestoreQueue(group);
   }
 
   // FITUR BARU: koreksi skor manual — dulu skor cuma bisa naik lewat jawaban benar yang dieksekusi
@@ -3196,6 +3200,12 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
         scheduleRetry();
       }
     }
+    // BUGFIX (bug kembar dari cancelActiveGroup — sama-sama cuma ubah state lokal, lupa hapus
+    // dari Firestore): kelompok yang "dilewati" lewat tombol ini juga tetap tercatat antre di
+    // dokumen room Firestore, jadi HP mereka sendiri tetap menampilkan badge posisi & tombol
+    // terkunci selamanya sampai soal berganti — padahal panel guru sudah menganggap mereka tidak
+    // antre lagi. Perbaikan sama seperti cancelActiveGroup: pakai removeGroupFromFirestoreQueue().
+    removeGroupFromFirestoreQueue(group);
   }
 
   // Dipakai mode Guru Bebas (cek seluruh kata tersisa, bukan cuma currentWord) DAN oleh Guru
