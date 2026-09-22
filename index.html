@@ -1,4 +1,4 @@
-<!doctype html>
+\<!doctype html>
 <html lang="id">
 <head>
 <meta charset="UTF-8" />
@@ -389,6 +389,44 @@ function exportAllGamesBackup(uid) {
     } catch (e) { console.error("Gagal ekspor cadangan gabungan:", appId, e); failed++; }
   });
   return { saved, skipped, failed };
+}
+// FITUR BARU: pasangan dari exportAllGamesBackup — dulu guru cuma bisa MENGUNDUH cadangan
+// ketiga game sekaligus dari layar "Pilih Game", tapi kalau mau MEMUAT baliknya tetap wajib
+// buka satu-satu (Word Search → Muat Cadangan, lalu Mystery Box → Muat Cadangan, dst). Fungsi
+// ini dipakai tombol "Muat Semua Data" — terima beberapa file .json sekaligus (1-3 file, boleh
+// dipilih semuanya dalam satu dialog), lalu cocokkan tiap file ke game-nya lewat field `app` di
+// dalam filenya sendiri (ditulis exportAllGamesBackup/BackupExportButton, jadi tidak bergantung
+// nama file). Ditulis LANGSUNG ke localStorage (bukan lewat state React game masing-masing,
+// karena game-nya belum tentu sedang dibuka) — begitu guru membuka game itu nanti, data yang
+// baru dimuat otomatis kebaca seperti biasa. Sama seperti "Muat Cadangan" di tiap game: materi
+// dengan nama sama DITIMPA, materi lain & field lain (puzzleByBabak, surprises, dst.) yang sudah
+// ada di localStorage TETAP aman karena di-merge, bukan ditimpa seluruhnya.
+function importAllGamesBackup(uid, files) {
+  return Promise.all(files.map((file) =>
+    readJsonFile(file)
+      .then((data) => {
+        const meta = ALL_GAMES_BACKUP_META.find((m) => m.appId === data.app);
+        if (!meta || !data.dataByMateri) return { status: "skipped" };
+        try {
+          const raw = localStorage.getItem(migrateLegacyKey(meta.storageKey, uid));
+          let existing = {};
+          try { existing = raw ? JSON.parse(raw) : {}; } catch (e) { existing = {}; }
+          const merged = {
+            ...existing,
+            dataByMateri: { ...(existing.dataByMateri || {}), ...data.dataByMateri },
+            selectedMateri: data.selectedMateri || existing.selectedMateri,
+            savedAt: Date.now(),
+          };
+          const res = safeSetItem(scopedKey(meta.storageKey, uid), JSON.stringify(merged));
+          return res.ok ? { status: "updated" } : { status: "failed" };
+        } catch (e) { console.error("Gagal muat cadangan gabungan:", meta.appId, e); return { status: "failed" }; }
+      })
+      .catch((e) => { console.error("Gagal baca file cadangan gabungan:", e); return { status: "failed" }; })
+  )).then((results) => ({
+    updated: results.filter((r) => r.status === "updated").length,
+    skipped: results.filter((r) => r.status === "skipped").length,
+    failed: results.filter((r) => r.status === "failed").length,
+  }));
 }
 function readJsonFile(file) {
   return new Promise((resolve, reject) => {
@@ -1671,9 +1709,18 @@ function StudentJoinScreen({ roomCode }) {
       const canRetry = triedGroups.includes(myGroup) && !!data.openToAll;
       if (alreadyQueued && !canRetry) return; // masih menunggu giliran / belum boleh coba lagi
       const name = (data.groups && data.groups[myGroup] && data.groups[myGroup].name) || `Kelompok ${myGroup}`;
+      // BUGFIX (retry dari HP asli tidak pernah diproses ulang oleh panel guru): tiap entri diberi
+      // `bid` (buzz id) unik SETIAP KALI tombol ini ditekan — termasuk saat retry (alreadyQueued
+      // && canRetry di atas). Ini supaya listener di panel guru (lihat appliedGroupsRef pada
+      // TebakCariKataGame) bisa membedakan "percobaan pertama" dari "percobaan retry" milik
+      // kelompok yang SAMA di soal yang SAMA. Sebelumnya entri cuma berisi {group, name} — begitu
+      // grup ini pernah tercatat "sudah diproses" sekali di soal ini, entri retry berikutnya
+      // (masih dengan `group` yang sama persis) tidak pernah dianggap baru, jadi giliran mereka
+      // tidak pernah otomatis aktif lagi di panel guru walau tulisan ke Firestore ini sendiri
+      // berhasil.
       const newOrder = alreadyQueued
-        ? [...order.filter((o) => o.group !== myGroup), { group: myGroup, name }]
-        : [...order, { group: myGroup, name }];
+        ? [...order.filter((o) => o.group !== myGroup), { group: myGroup, name, bid: uid() }]
+        : [...order, { group: myGroup, name, bid: uid() }];
       tx.set(ref, { buzzOrder: newOrder }, { merge: true });
     })).catch(() => { /* biarkan diam — status ditentukan lewat snapshot room.buzzOrder */ }).finally(() => setBusy(false));
   }
@@ -2807,7 +2854,21 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
         appliedGroupsRef.current = new Set();
       }
       data.buzzOrder.forEach((entry) => {
-        if (appliedGroupsRef.current.has(entry.group)) return;
+        // BUGFIX (retry dari HP asli tidak pernah diproses ulang): dulu ditandai "sudah diterapkan"
+        // berdasarkan entry.group SAJA — begitu satu kelompok pernah tercatat di sini untuk soal
+        // ini, entri retry mereka berikutnya (masih dengan group yang sama, ditulis ulang oleh
+        // pressBuzz() di HP setelah guru membuka openToAll) tidak pernah dianggap "baru" karena
+        // roundId belum berubah (jawaban salah tidak memicu soal baru) — appliedGroupsRef cuma
+        // direset saat roundId berganti. Akibatnya giliran kelompok yang retry lewat HP asli tidak
+        // pernah otomatis aktif lagi di panel guru, walau tulisan ke Firestore-nya sendiri berhasil
+        // (guru harus tahu "trik" mengklik manual tombol kelompoknya di panel supaya tersinkron).
+        // Diperbaiki dengan menandai "sudah diterapkan" berdasarkan `bid` (buzz id unik per
+        // PERCOBAAN, dibuat baru oleh pressBuzz() setiap kali tombol ditekan — lihat StudentJoinScreen)
+        // alih-alih `group` — supaya percobaan pertama & percobaan retry kelompok yang sama dianggap
+        // dua hal berbeda dan sama-sama diproses. `|| entry.group` dipertahankan sebagai fallback
+        // untuk entri lama (mis. sesi yang dipulihkan dari histori sebelum field `bid` ada).
+        const appliedKey = entry.bid || entry.group;
+        if (appliedGroupsRef.current.has(appliedKey)) return;
         // BUGFIX: sebelumnya baris "sudah diterapkan" (appliedGroupsRef.add) dieksekusi DULUAN,
         // baru panggil buzz() — padahal buzz() sendiri langsung berhenti diam-diam kalau Mode Guru
         // lagi aktif (lihat guruModeOnRef di dalam buzz()). Akibatnya: kalau ada HP siswa yang
@@ -2818,7 +2879,7 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
         // ini SENGAJA belum ditandai selesai — ditunda dulu, baru diproses begitu Mode Guru
         // dimatikan lagi (lihat efek "guruModeOn baru saja dimatikan" di bawah).
         if (guruModeOnRef.current) return;
-        appliedGroupsRef.current.add(entry.group);
+        appliedGroupsRef.current.add(appliedKey);
         buzz(entry.group);
       });
     });
@@ -2841,8 +2902,12 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
       const roundId = currentWord ? `${currentWord.id}:${queue.length}` : null;
       if (!roundId || data.roundId !== roundId || !Array.isArray(data.buzzOrder)) return;
       data.buzzOrder.forEach((entry) => {
-        if (appliedGroupsRef.current.has(entry.group)) return;
-        appliedGroupsRef.current.add(entry.group);
+        // Sama seperti listener utama di atas: kunci dedup pakai `bid` (per percobaan), bukan
+        // `group`, supaya retry yang masuk justru selagi Mode Guru aktif tetap diproses begitu
+        // Mode Guru dimatikan lagi.
+        const appliedKey = entry.bid || entry.group;
+        if (appliedGroupsRef.current.has(appliedKey)) return;
+        appliedGroupsRef.current.add(appliedKey);
         buzz(entry.group);
       });
     }).catch(() => {});
@@ -2948,6 +3013,23 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
   }
 
   function releaseTurn() { activeGroupRef.current = null; setActiveGroup(null); setSelStart(null); }
+
+  // FITUR BARU: klik lagi tombol kelompok yang SEDANG aktif menjawab (tombolnya sedang menyala)
+  // akan MEMBATALKAN penunjukan itu — dikeluarkan dari antrean & gilirannya dilepas sepenuhnya,
+  // bukan cuma dikunci diam. Berguna kalau guru salah pencet kelompok, atau ternyata kelompok
+  // yang diklik tadi bukan yang mengangkat tangan duluan (di mode Manual, guru sendiri yang
+  // menentukan urutan lewat klik — jadi wajar kalau perlu dibatalkan/diulang). Berlaku di kedua
+  // mode (Digital & Manual) karena keduanya berbagi tombol K1–K6 & fungsi antrean (`buzz`) yang
+  // sama. Begitu dibatalkan, `activeGroup` ikut disiarkan ulang ke Firestore (lihat efek penulis
+  // activeTurnGroup) sehingga status "Giliranmu sekarang!" di HP kelompok itu juga ikut hilang.
+  function cancelActiveGroup(group) {
+    const newOrder = buzzOrderRef.current.filter((o) => o.group !== group);
+    buzzOrderRef.current = newOrder;
+    setBuzzOrder(newOrder);
+    activeGroupRef.current = null;
+    setActiveGroup(null);
+    setSelStart(null);
+  }
 
   // FITUR BARU: koreksi skor manual — dulu skor cuma bisa naik lewat jawaban benar yang dieksekusi
   // sistem (handleCellClick). Kalau guru salah menilai (mis. jawaban kelompok sebenarnya benar tapi
@@ -3613,9 +3695,13 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
             const canRetryNow = triedSet.has(g) && openToAll;
             // Mode Guru: SEMUA aturan kunci di atas diabaikan — kelompok mana pun selalu bisa
             // langsung dipilih, kapan saja selama ada soal aktif.
-            const locked = guruModeOn ? !currentWord : (!currentWord || !clueRevealed || !eligible || (alreadyBuzzed && !canRetryNow));
+            // FITUR BARU: kelompok yang SEDANG AKTIF (isActive) selalu boleh diklik lagi walau
+            // secara aturan antrean biasa ia "terkunci" (alreadyBuzzed && !canRetryNow) — supaya
+            // klik kedua pada tombol yang sama bisa membatalkan penunjukan tadi (lihat
+            // cancelActiveGroup), bukan sekadar tidak bereaksi.
+            const locked = guruModeOn ? !currentWord : (!currentWord || !clueRevealed || (!isActive && (!eligible || (alreadyBuzzed && !canRetryNow))));
             return (
-              <button key={g} className="grp-btn" onClick={() => guruModeOn ? forceSetActiveGroup(g) : buzz(g)} disabled={locked}
+              <button key={g} className="grp-btn" onClick={() => guruModeOn ? forceSetActiveGroup(g) : (isActive ? cancelActiveGroup(g) : buzz(g))} disabled={locked}
                 style={{ position: "relative", padding: "12px 0", borderRadius: 10, border: guruModeOn ? `1.5px solid ${GURU_COLOR}` : "none", cursor: locked ? "default" : "pointer", background: isActive ? GROUP_COLORS[g - 1] : t.panel2, color: isActive ? "#0D1730" : t.text, fontWeight: 700, fontSize: 14, opacity: locked && !isActive ? 0.4 : 1, boxShadow: isActive ? `0 0 0 2px ${GROUP_COLORS[g - 1]}` : "none" }}>
                 K{g}
                 {joinedGroups[g] && <span title="Sudah join lewat QR" style={{ position: "absolute", top: 4, right: 4, width: 7, height: 7, borderRadius: "50%", background: "#3FBFAD" }} />}
@@ -4401,6 +4487,13 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
   const [perintahListOpen, setPerintahListOpen] = useState(true);
   const [opened, setOpened] = useState({}); // id -> true
   const [activeBox, setActiveBox] = useState(null); // instruction object or null
+  // BUGFIX: dulu tombol "← Persiapan" langsung pindah stage tanpa peringatan apa pun selagi
+  // permainan berjalan — beda dengan Word Search (BackConfirmModal) & Card Rush ("Akhiri
+  // Permainan" pakai window.confirm). Risikonya: progres OTOMATIS tersimpan (lihat efek
+  // "bk-progress" di bawah), TAPI kalau guru balik ke Persiapan lalu klik "Mulai Permainan"
+  // lagi, papan diacak ulang & semua kotak yang sudah dibuka ikut ter-reset (lihat startGame()).
+  // showBackConfirm dipakai untuk menampilkan peringatan itu dulu sebelum benar-benar pindah.
+  const [showBackConfirm, setShowBackConfirm] = useState(false);
   // FITUR BARU (elemen "Mystery"): sekitar 15% kotak ditandai "spesial" secara ACAK setiap kali
   // "Mulai Permainan" diklik (bukan ditetapkan tetap dari setup) — disimpan sebagai Set berisi id
   // kotak. Ditaruh terpisah dari `opened`/`activeBox` supaya urutan buka kotak siswa TIDAK
@@ -4474,6 +4567,21 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
         const p = JSON.parse(rawP);
         if (p.stage) setStage(p.stage);
         if (p.opened) setOpened(p.opened);
+        // BUGFIX (refresh di tengah permainan mengacak ulang tampilan & menghapus kotak spesial):
+        // dulu cuma {stage, opened} yang disimpan/dipulihkan — playOrder (urutan kotak yang sudah
+        // diacak lewat shuffleForPlay() saat "Mulai Permainan") dan mysteryBoxIds (~15% kotak yang
+        // ditandai "kejutan" lewat pickMysteryBoxes()) TIDAK ikut tersimpan sama sekali. Progres
+        // "kotak mana yang sudah dibuka" memang tetap aman, tapi begitu halaman di-refresh di
+        // tengah sesi (mis. laptop guru ke-refresh tidak sengaja saat kelas berlangsung),
+        // playOrder & mysteryBoxIds balik ke kosong: urutan kotak yang belum dibuka mendadak
+        // berubah total di layar (jatuh ke urutan asli Persiapan, lihat fallback di render papan),
+        // DAN kotak yang sudah/akan jadi kejutan diam-diam kehilangan status spesialnya tanpa
+        // pesan apa pun. Sekarang keduanya ikut disimpan (lihat efek penyimpan progres di bawah)
+        // & dipulihkan di sini — playOrder disimpan sebagai array ITEM UTUH (bukan cuma id) sama
+        // seperti pola saveCardsProgress() di Card Rush, supaya tidak perlu mencocokkan ulang ke
+        // `items`/dataByMateri yang state-nya baru terisi belakangan (di luar urutan effect ini).
+        if (Array.isArray(p.playOrder) && p.playOrder.length > 0) setPlayOrder(p.playOrder);
+        if (Array.isArray(p.mysteryBoxIds)) setMysteryBoxIds(new Set(p.mysteryBoxIds));
       }
     } catch (e) { /* belum ada progres tersimpan, atau data korup */ }
     setLoaded(true);
@@ -4503,11 +4611,11 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
   useEffect(() => {
     if (!loaded) return;
     const tm = setTimeout(() => {
-      const res = safeSetItem(scopedKey("bk-progress", teacher.uid), JSON.stringify({ stage, opened }));
+      const res = safeSetItem(scopedKey("bk-progress", teacher.uid), JSON.stringify({ stage, opened, playOrder, mysteryBoxIds: Array.from(mysteryBoxIds) }));
       setStorageWarning(res.ok ? null : res.message);
     }, 500);
     return () => clearTimeout(tm);
-  }, [stage, opened, loaded]);
+  }, [stage, opened, playOrder, mysteryBoxIds, loaded]);
 
   function endGame() {
     if (!window.confirm("Akhiri permainan ini? Progres kotak yang sudah dibuka akan dihapus.")) return;
@@ -4782,13 +4890,43 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
       )}
       <CelebrationOverlay particles={confetti} />
 
+      {/* BUGFIX: peringatan sebelum kembali ke Persiapan selagi permainan berjalan — lihat
+          catatan di deklarasi showBackConfirm di atas. Sengaja ditulis sebagai kondisi inline
+          (bukan komponen terpisah) supaya konsisten dengan pola renderBackConfirmModal di
+          Word Search (dipanggil langsung, bukan dipasang sebagai tag JSX baru tiap render). */}
+      {showBackConfirm && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+          <div style={{ background: t.panel, borderRadius: 18, padding: "28px 24px", maxWidth: 380, width: "100%", boxShadow: "0 8px 40px rgba(0,0,0,0.25)" }}>
+            <div style={{ fontSize: 32, marginBottom: 12, textAlign: "center" }}>⚠️</div>
+            <div className="sgt" style={{ fontSize: 18, fontWeight: 800, color: t.text, marginBottom: 8, textAlign: "center" }}>Kembali ke Persiapan?</div>
+            <div style={{ fontSize: 13.5, color: t.dim, lineHeight: 1.7, marginBottom: 22, textAlign: "center" }}>
+              Permainan sedang berlangsung. Kotak yang sudah dibuka tetap tersimpan otomatis, tapi kalau nanti kamu klik "Mulai Permainan" lagi, papan akan diacak ulang &amp; semua kotak kembali tertutup.
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <button onClick={() => { setShowBackConfirm(false); setStage("setup"); }}
+                style={{ display: "flex", alignItems: "center", gap: 10, background: "#F4B740", color: "#101B34", border: "none", borderRadius: 12, padding: "13px 18px", fontWeight: 700, fontSize: 14, cursor: "pointer", width: "100%" }}>
+                <span style={{ fontSize: 18 }}>➡️</span>
+                <div style={{ textAlign: "left" }}>
+                  <div>Ke Persiapan</div>
+                  <div style={{ fontSize: 11.5, fontWeight: 400, opacity: 0.75 }}>Progres kotak tetap tersimpan seperti sekarang</div>
+                </div>
+              </button>
+              <button onClick={() => setShowBackConfirm(false)}
+                style={{ background: "transparent", color: t.dim, border: `1px solid ${t.border}`, borderRadius: 12, padding: "11px 18px", fontWeight: 600, fontSize: 13.5, cursor: "pointer", width: "100%" }}>
+                Lanjutkan Permainan
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 16, marginBottom: 22 }}>
         <div>
           <div className="sgt page-title" style={{ fontSize: 30, fontWeight: 700, letterSpacing: -0.5 }}>Mystery Box</div>
           <div style={{ fontSize: 14, color: t.dim, marginTop: 2 }}>{selectedMateri} · {openedCount}/{items.length} kotak sudah dibuka · individu, tanpa skor</div>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <button onClick={() => setStage("setup")} style={{ background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}>← Persiapan</button>
+          <button onClick={() => (openedCount > 0 ? setShowBackConfirm(true) : setStage("setup"))} style={{ background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}>← Persiapan</button>
           <button onClick={resetBoard} style={{ display: "flex", alignItems: "center", gap: 6, background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: "10px 12px", borderRadius: 10, cursor: "pointer", fontSize: 13 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>🔄</span> Reset papan</button>
           <button onClick={endGame} style={{ display: "flex", alignItems: "center", gap: 6, background: "transparent", border: "1px solid #EF5B5B", color: "#EF5B5B", padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, fontWeight: 700 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>⏹</span> Akhiri Permainan</button>
           <ThemeToggleButton theme={theme} onToggle={() => setTheme(theme === "dark" ? "light" : "dark")} style={{ background: t.panel, border: `1px solid ${t.border}`, boxShadow: t.shadowSm, color: t.text, padding: 10, borderRadius: 10, cursor: "pointer" }} />
@@ -4832,7 +4970,14 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
               const baseColor = BOX_COLORS[i % BOX_COLORS.length];
               return (
                 <button key={it.id} onClick={() => openBox(it)} className={`sgt${!isOpen ? " mbox-tile" : ""}`} style={{
-                  flex: "1 1 84px", maxWidth: 110, aspectRatio: "1 / 1", borderRadius: 16, cursor: isOpen ? "default" : "pointer", border: "none",
+                  // BUGFIX (ukuran kotak beda-beda): dulu flex: "1 1 84px" (flex-grow: 1) — tiap
+                  // kotak meregang mengisi SISA ruang kosong di barisnya SENDIRI. Baris yang penuh
+                  // (mis. 8 kotak) jadi lebih kecil, sedangkan baris terakhir yang tidak penuh
+                  // (mis. cuma 4 kotak) meregang jauh lebih besar sampai mentok maxWidth. Diganti
+                  // flex-grow: 0 (ukuran tetap, tidak meregang) — justifyContent:"center" di
+                  // container tetap merapikan baris terakhir yang tidak penuh ke tengah, tapi
+                  // ukuran tiap kotak sekarang konsisten di semua baris.
+                  flex: "0 0 90px", width: 90, maxWidth: 90, aspectRatio: "1 / 1", borderRadius: 16, cursor: isOpen ? "default" : "pointer", border: "none",
                   // FITUR BARU: dulu warna kotak flat satu lapis — sekarang gradien miring dari
                   // warna aslinya ke versi sedikit lebih gelap (shadeColor), dipadukan dengan
                   // bayangan dua lapis (garis gelap solid di bawah untuk kesan "chunky button" +
@@ -5940,6 +6085,20 @@ function App() {
     }
     setTimeout(() => setBackupMsg(null), 6000);
   }
+  function handleImportAllGames(fileList) {
+    const files = Array.from(fileList || []);
+    if (files.length === 0) return;
+    if (!window.confirm(`Muat ${files.length} file cadangan? Materi/tema dengan nama sama di tiap game akan MENIMPA yang ada sekarang — materi/tema lain tetap aman.`)) return;
+    importAllGamesBackup(authUser.uid, files).then(({ updated, skipped, failed }) => {
+      setBackupMsg({
+        ok: updated > 0 && failed === 0,
+        text: updated === 0
+          ? `Tidak ada file yang dikenali sebagai cadangan game ini (${skipped + failed} file dilewati/gagal).`
+          : `${updated} file cadangan berhasil dimuat${skipped > 0 ? `, ${skipped} dilewati (bukan cadangan game ini)` : ""}${failed > 0 ? `, ${failed} gagal` : ""}. Buka game terkait untuk lihat perubahannya.`,
+      });
+      setTimeout(() => setBackupMsg(null), 6000);
+    });
+  }
   useEffect(() => {
     try { localStorage.setItem("app-theme", pickerTheme); } catch (e) {}
   }, [pickerTheme]);
@@ -6033,7 +6192,16 @@ function App() {
             </div>
           </div>
           <div className="pilih-game-actions" style={{ display: "flex", gap: 8 }}>
-            <button onClick={handleExportAllGames} title="Unduh cadangan .json dari ketiga game sekaligus (Word Search, Mystery Box, Card Rush) — tidak perlu buka satu-satu" style={{ display: "flex", alignItems: "center", gap: 6, background: pt.panel, border: `1px solid ${pt.border}`, color: pt.text, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, boxShadow: "0 2px 10px rgba(0,0,0,.06)" }}><span style={{ fontSize: 15, lineHeight: 1, color: "inherit" }}>💾</span> Simpan Semua Data</button>
+            {/* FITUR BARU (ringkas): dulu "Simpan Semua Data" tombol lebar berlabel teks —
+                sekarang ikon saja (konsisten dengan tombol ⚙️/🌙 di sebelahnya), keterangannya
+                pindah ke atribut title (muncul saat kursor menyentuh ikon). "Muat Semua Data"
+                ditambahkan di sebelahnya sebagai pasangannya (dulu cuma bisa muat balik dengan
+                buka game satu-satu) — juga ikon saja dari awal, tidak pernah pakai label teks. */}
+            <button onClick={handleExportAllGames} title="Simpan Semua Data — unduh cadangan .json dari ketiga game sekaligus (Word Search, Mystery Box, Card Rush), tidak perlu buka satu-satu" style={{ background: pt.panel, border: `1px solid ${pt.border}`, color: pt.text, padding: 10, borderRadius: 10, cursor: "pointer", boxShadow: "0 2px 10px rgba(0,0,0,.06)" }}><span style={{ fontSize: 16, lineHeight: 1 }}>💾</span></button>
+            <label title="Muat Semua Data — pulihkan cadangan .json ke ketiga game sekaligus (boleh pilih 1-3 file sekaligus), tidak perlu buka satu-satu" style={{ display: "flex", alignItems: "center", justifyContent: "center", background: pt.panel, border: `1px solid ${pt.border}`, color: pt.text, padding: 10, borderRadius: 10, cursor: "pointer", boxShadow: "0 2px 10px rgba(0,0,0,.06)" }}>
+              <span style={{ fontSize: 16, lineHeight: 1 }}>📂</span>
+              <input type="file" accept="application/json,.json" multiple onChange={(e) => { handleImportAllGames(e.target.files); e.target.value = ""; }} style={{ display: "none" }} />
+            </label>
             <button onClick={() => setSettingsOpen(true)} title="Panduan, pengembang & info teknis" style={{ background: pt.panel, border: `1px solid ${pt.border}`, color: pt.text, padding: 10, borderRadius: 10, cursor: "pointer", boxShadow: "0 2px 10px rgba(0,0,0,.06)" }}><span style={{ fontSize: 16, lineHeight: 1 }}>⚙️</span></button>
             <ThemeToggleButton theme={pickerTheme} onToggle={() => setPickerTheme((th) => th === "dark" ? "light" : "dark")} style={{ background: pt.panel, border: `1px solid ${pt.border}`, color: pt.text, padding: 10, borderRadius: 10, cursor: "pointer", boxShadow: "0 2px 10px rgba(0,0,0,.06)" }} />
             <button onClick={() => { if (window.confirm("Keluar dari akun ini? Kamu perlu login lagi (mungkin dengan akun Google lain) untuk masuk kembali.")) signOutTeacher(); }} style={{ background: pt.panel, border: `1px solid ${pt.border}`, color: pt.dim, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, boxShadow: "0 2px 10px rgba(0,0,0,.06)" }}>Keluar</button>
