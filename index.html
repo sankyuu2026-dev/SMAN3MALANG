@@ -406,6 +406,71 @@ function saveSetupToCloud(uid, docName, payload) {
     .catch((err) => { console.error("saveSetupToCloud gagal:", docName, err); throw err; }); // best-effort ke UI (kegagalan di sini tidak boleh mengganggu penyimpanan lokal), tapi tetap dicatat & dilempar lagi supaya status di layar bisa diperbarui
 }
 
+// BUGFIX (Card Rush — dokumen backup melebihi batas 1MB Firestore): saveSetupToCloud generik di
+// atas menjejalkan SELURUH dataByMateri (termasuk gambar base64 tiap pasangan kartu, dari SEMUA
+// tema & babak sekaligus) ke SATU dokumen Firestore. Firestore membatasi ukuran 1 dokumen maks
+// 1.048.576 byte (1 MiB) — begitu total gambarnya melewati itu (gampang terjadi kalau guru sudah
+// punya banyak tema/babak berisi gambar), penyimpanan cloud gagal TOTAL & diam-diam (localStorage
+// tetap jalan normal, makanya guru baru sadar lewat pesan "Gagal simpan ke cloud" di layar).
+// Perbaikannya: gambar dipisah dari dokumen utama, disimpan satu-satu di subcollection
+// "pairImages" (dokumen kecil per pasangan kartu) — sama persis pola yang sudah terbukti aman
+// dipakai saat main (lihat subcollection "cardPairs" di rooms/{roomCode}).
+function splitCardRushImages(dataByMateri) {
+  const images = {}; // pairId -> base64 image
+  const skeleton = {};
+  Object.keys(dataByMateri || {}).forEach((materiName) => {
+    skeleton[materiName] = (dataByMateri[materiName] || []).map((babak) => ({
+      ...babak,
+      pairs: (babak.pairs || []).map((p) => {
+        if (p.image) images[p.id] = p.image;
+        const { image, ...rest } = p;
+        return rest;
+      }),
+    }));
+  });
+  return { skeleton, images };
+}
+function mergeCardRushImages(dataByMateri, images) {
+  const merged = {};
+  Object.keys(dataByMateri || {}).forEach((materiName) => {
+    merged[materiName] = (dataByMateri[materiName] || []).map((babak) => ({
+      ...babak,
+      pairs: (babak.pairs || []).map((p) => (images[p.id] ? { ...p, image: images[p.id] } : p)),
+    }));
+  });
+  return merged;
+}
+async function saveCardRushSetupToCloud(uid, payload) {
+  if (!uid) throw new Error("belum login");
+  const { skeleton, images } = splitCardRushImages(payload.dataByMateri);
+  const docRef = db.collection("users").doc(uid).collection("setupData").doc("cardRush");
+  await docRef.set({ dataByMateri: skeleton, selectedMateri: payload.selectedMateri, savedAt: Date.now() });
+  // Ganti seluruh isi subcollection gambar dengan yang terbaru (hapus semua dulu, baru tulis ulang)
+  // — supaya pasangan kartu yang sudah dihapus/diganti gambarnya tidak menyisakan dokumen basi
+  // (jumlah pasangan kartu realistis cuma puluhan, jadi hapus-tulis-ulang setiap simpan masih murah).
+  const imagesCol = docRef.collection("pairImages");
+  const existing = await imagesCol.get();
+  const batch = db.batch();
+  existing.docs.forEach((d) => batch.delete(d.ref));
+  Object.keys(images).forEach((pairId) => batch.set(imagesCol.doc(pairId), { image: images[pairId] }));
+  await batch.commit();
+}
+async function loadCardRushSetupFromCloud(uid) {
+  if (!uid) return null;
+  const docRef = db.collection("users").doc(uid).collection("setupData").doc("cardRush");
+  const snap = await docRef.get().catch((err) => { console.error("loadCardRushSetupFromCloud gagal:", err); return null; });
+  if (!snap || !snap.exists) return null;
+  const data = snap.data();
+  const imagesSnap = await imagesColSafe(docRef);
+  const images = {};
+  imagesSnap.forEach((d) => { images[d.id] = d.data().image; });
+  if (data.dataByMateri) data.dataByMateri = mergeCardRushImages(data.dataByMateri, images);
+  return data;
+}
+function imagesColSafe(docRef) {
+  return docRef.collection("pairImages").get().then((s) => s.docs).catch((err) => { console.error("Gagal muat gambar cadangan Card Rush:", err); return []; });
+}
+
 // Hook kecil buat menampilkan status "Tersimpan di cloud" di layar Persiapan — dipakai bareng
 // oleh Word Search, Mystery Box, dan Card Rush (Langkah konsistensi visual: satu penanda yang
 // sama persis di ketiga game, bukan masing-masing bikin sendiri).
@@ -4906,7 +4971,7 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
     if (migrated) setImportMsg({ ok: true, text: "Kartu dari sebelum fitur Tema ditambahkan sudah dipindah otomatis ke tema \"Gakkou no Seikatsu\" — pindahkan manual kalau perlu." });
     // FITUR BARU: sama seperti Word Search — pulihkan dari cadangan cloud kalau lebih baru
     // daripada localStorage (atau localStorage-nya kosong sama sekali).
-    loadSetupFromCloud(teacher.uid, "cardRush").then((cloud) => {
+    loadCardRushSetupFromCloud(teacher.uid).then((cloud) => {
       if (!cloud) return;
       if ((cloud.savedAt || 0) > localSavedAt) {
         if (cloud.dataByMateri) {
@@ -4928,7 +4993,7 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
       const payload = { dataByMateri, selectedMateri };
       const res = safeSetItem(scopedKey("cck-setup-data", teacher.uid), JSON.stringify({ ...payload, savedAt: Date.now() }));
       setStorageWarning(res.ok ? null : res.message);
-      cloudSave.track(saveSetupToCloud(teacher.uid, "cardRush", payload));
+      cloudSave.track(saveCardRushSetupToCloud(teacher.uid, payload));
     }, 500);
     return () => clearTimeout(tm);
   }, [dataByMateri, selectedMateri, loaded]);
