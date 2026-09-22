@@ -4725,6 +4725,11 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
     return (
       <div className="app-screen" style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: t.bg, color: t.text, minHeight: "100vh", padding: 28, boxSizing: "border-box" }}>
         <style>{fontImport}</style>
+        <JapaneseBackdrop theme={theme} />
+        {/* Konten dibungkus 1 wrapper ber-zIndex:1 di sini — persis pola yang sudah benar di
+            Word Search & layar "Pilih Game" — supaya backdrop (position:fixed, zIndex:0) tidak
+            malah menutupi panel-panel di bawahnya lewat urutan stacking CSS baku. */}
+        <div style={{ position: "relative", zIndex: 1 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 22, flexWrap: "wrap", gap: 12 }}>
           <div>
             <div className="sgt page-title" style={{ fontSize: 28, fontWeight: 700 }}>Persiapan — Mystery Box</div>
@@ -4782,7 +4787,7 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
                   <div key={it.id} className="list-row" style={{ display: "flex", gap: 8, alignItems: "flex-start", background: t.panel2, borderRadius: 10, padding: 10 }}>
                     <span style={{ width: 26, height: 26, borderRadius: 7, background: BOX_COLORS[i % BOX_COLORS.length], color: "#101B34", fontWeight: 700, fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{i + 1}</span>
                     <textarea value={it.text} onChange={(e) => updateItem(it.id, e.target.value)} rows={2} placeholder="Tulis perintah/instruksi…"
-                      style={{ flex: 1, padding: "8px 10px", borderRadius: 7, border: `1px solid ${t.border}`, background: t.panel, color: t.text, fontSize: 13, resize: "vertical", fontFamily: "inherit" }} />
+                      style={{ flex: 1, padding: "9px 11px", borderRadius: 7, border: `1px solid ${t.border}`, background: t.panel, color: t.text, fontSize: 15, lineHeight: 1.4, resize: "vertical", fontFamily: "inherit" }} />
                     <button onClick={() => removeItem(it.id)} className="row-del" title="Hapus perintah ini" style={{ background: "transparent", border: "none", color: t.faint, cursor: "pointer", padding: 8, borderRadius: 8 }}><span style={{ fontSize: 16, lineHeight: 1, color: 'inherit' }}>🗑</span></button>
                   </div>
                 ))}
@@ -4858,6 +4863,7 @@ function BukaKotakGame({ onBack, theme, setTheme, teacher }) {
 
         <button onClick={startGame} disabled={!canStart} style={{ display: "flex", alignItems: "center", gap: 8, background: canStart ? "#F4B740" : t.panel2, color: canStart ? "#101B34" : t.faint, border: "none", borderRadius: 12, padding: "14px 22px", fontWeight: 700, fontSize: 15, cursor: canStart ? "pointer" : "default" }}>Mulai Permainan <span style={{ fontSize: 17, lineHeight: 1, color: 'inherit' }}>➡</span></button>
         {!canStart && <div style={{ marginTop: 8, fontSize: 12.5, color: t.faint }}>Isi minimal satu perintah untuk mulai.</div>}
+        </div>
       </div>
     );
   }
@@ -5424,6 +5430,11 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
     return (
       <div className="app-screen" style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: t.bg, color: t.text, minHeight: "100vh", padding: 28, boxSizing: "border-box" }}>
         <style>{fontImport}</style>
+        <JapaneseBackdrop theme={theme} />
+        {/* Konten dibungkus 1 wrapper ber-zIndex:1 di sini — persis pola yang sudah benar di
+            Word Search & layar "Pilih Game" — supaya backdrop (position:fixed, zIndex:0) tidak
+            malah menutupi panel-panel di bawahnya lewat urutan stacking CSS baku. */}
+        <div style={{ position: "relative", zIndex: 1 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 26, flexWrap: "wrap", gap: 12 }}>
           <div>
             <div className="sgt page-title" style={{ fontSize: 28, fontWeight: 700 }}>Persiapan — Card Rush</div>
@@ -5570,6 +5581,7 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
             : (<>Mulai Permainan ➡</>)}
         </button>
         {!canStart && !isMobile && <div style={{ marginTop: 8, fontSize: 12.5, color: t.faint }}>Setiap babak butuh minimal 5 pasangan lengkap (kata + gambar) sebelum bisa dimulai.</div>}
+        </div>
       </div>
     );
   }
@@ -6171,21 +6183,21 @@ function App() {
     <div className="pilih-game-screen" style={{ fontFamily: "'Work Sans', system-ui, sans-serif", background: pt.bg, color: pt.text, minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 28, boxSizing: "border-box", position: "relative", overflow: "hidden" }}>
       <style>{fontImport}</style>
       <JapaneseBackdrop theme={pickerTheme} />
-      <div style={{ width: "100%", maxWidth: 820, position: "relative", zIndex: 1 }}>
-        <div className="pilih-game-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12, marginBottom: 4 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-            <div className="sgt pilih-game-avatar" style={{ width: 46, height: 46, borderRadius: "50%", background: "linear-gradient(135deg,#F4B740,#D98A2B)", color: "#101B34", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, fontWeight: 700, boxShadow: "0 3px 10px rgba(217,138,43,.35)", flexShrink: 0 }}>{initial}</div>
+      <div style={{ width: "100%", maxWidth: 1080, position: "relative", zIndex: 1 }}>
+        <div className="pilih-game-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12, marginBottom: 6 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+            <div className="sgt pilih-game-avatar" style={{ width: 56, height: 56, borderRadius: "50%", background: "linear-gradient(135deg,#F4B740,#D98A2B)", color: "#101B34", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, fontWeight: 700, boxShadow: "0 3px 10px rgba(217,138,43,.35)", flexShrink: 0 }}>{initial}</div>
             <div>
               {/* Nama produk "SanKyuu" (san = 3, kyuu = 9) = 3 game yang bisa dimainkan &
                   9 materi kelas XI yang dipelajari — dijadikan judul utama, "Pilih Game" turun
                   jadi overline kecil di atasnya, dan artinya dijelaskan lewat chip singkat +
                   kalimat deskripsi di bawah supaya guru yang baru pertama buka langsung paham. */}
-              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1.2, textTransform: "uppercase", color: pt.faint }}>Pilih Game</div>
-              <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
-                <div className="sgt pilih-game-title" style={{ fontSize: 30, fontWeight: 700, letterSpacing: -0.4 }}>SanKyuu</div>
-                <span style={{ fontSize: 11.5, fontWeight: 700, color: "#D98A2B", background: "rgba(244,183,64,.16)", padding: "3px 10px", borderRadius: 999, letterSpacing: 0.2 }}>3 Game · 14 Tema</span>
+              <div style={{ fontSize: 12.5, fontWeight: 700, letterSpacing: 1.2, textTransform: "uppercase", color: pt.faint }}>Pilih Game</div>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
+                <div className="sgt pilih-game-title" style={{ fontSize: 38, fontWeight: 700, letterSpacing: -0.4 }}>SanKyuu</div>
+                <span style={{ fontSize: 13, fontWeight: 700, color: "#D98A2B", background: "rgba(244,183,64,.16)", padding: "4px 12px", borderRadius: 999, letterSpacing: 0.2 }}>3 Game · 14 Tema</span>
               </div>
-              <div style={{ fontSize: 13, color: pt.dim, marginTop: 2 }}>{greetingByHour()}, {firstName} 👋</div>
+              <div style={{ fontSize: 15, color: pt.dim, marginTop: 3 }}>{greetingByHour()}, {firstName} 👋</div>
             </div>
           </div>
           <div className="pilih-game-actions" style={{ display: "flex", gap: 8 }}>
@@ -6194,24 +6206,24 @@ function App() {
                 pindah ke atribut title (muncul saat kursor menyentuh ikon). "Muat Semua Data"
                 ditambahkan di sebelahnya sebagai pasangannya (dulu cuma bisa muat balik dengan
                 buka game satu-satu) — juga ikon saja dari awal, tidak pernah pakai label teks. */}
-            <button onClick={handleExportAllGames} title="Simpan Semua Data — unduh SATU file cadangan .json berisi ketiga game sekaligus (Word Search, Mystery Box, Card Rush), tidak perlu buka satu-satu" style={{ background: pt.panel, border: `1px solid ${pt.border}`, color: pt.text, padding: 10, borderRadius: 10, cursor: "pointer", boxShadow: "0 2px 10px rgba(0,0,0,.06)" }}><span style={{ fontSize: 16, lineHeight: 1 }}>💾</span></button>
-            <label title="Muat Semua Data — pulihkan dari SATU file cadangan .json ke ketiga game sekaligus, tidak perlu buka satu-satu" style={{ display: "flex", alignItems: "center", justifyContent: "center", background: pt.panel, border: `1px solid ${pt.border}`, color: pt.text, padding: 10, borderRadius: 10, cursor: "pointer", boxShadow: "0 2px 10px rgba(0,0,0,.06)" }}>
-              <span style={{ fontSize: 16, lineHeight: 1 }}>📂</span>
+            <button onClick={handleExportAllGames} title="Simpan Semua Data — unduh SATU file cadangan .json berisi ketiga game sekaligus (Word Search, Mystery Box, Card Rush), tidak perlu buka satu-satu" style={{ background: pt.panel, border: `1px solid ${pt.border}`, color: pt.text, padding: 12, borderRadius: 10, cursor: "pointer", boxShadow: "0 2px 10px rgba(0,0,0,.06)" }}><span style={{ fontSize: 18, lineHeight: 1 }}>💾</span></button>
+            <label title="Muat Semua Data — pulihkan dari SATU file cadangan .json ke ketiga game sekaligus, tidak perlu buka satu-satu" style={{ display: "flex", alignItems: "center", justifyContent: "center", background: pt.panel, border: `1px solid ${pt.border}`, color: pt.text, padding: 12, borderRadius: 10, cursor: "pointer", boxShadow: "0 2px 10px rgba(0,0,0,.06)" }}>
+              <span style={{ fontSize: 18, lineHeight: 1 }}>📂</span>
               <input type="file" accept="application/json,.json" onChange={(e) => { handleImportAllGames(e.target.files[0]); e.target.value = ""; }} style={{ display: "none" }} />
             </label>
-            <button onClick={() => setSettingsOpen(true)} title="Panduan, pengembang & info teknis" style={{ background: pt.panel, border: `1px solid ${pt.border}`, color: pt.text, padding: 10, borderRadius: 10, cursor: "pointer", boxShadow: "0 2px 10px rgba(0,0,0,.06)" }}><span style={{ fontSize: 16, lineHeight: 1 }}>⚙️</span></button>
-            <ThemeToggleButton theme={pickerTheme} onToggle={() => setPickerTheme((th) => th === "dark" ? "light" : "dark")} style={{ background: pt.panel, border: `1px solid ${pt.border}`, color: pt.text, padding: 10, borderRadius: 10, cursor: "pointer", boxShadow: "0 2px 10px rgba(0,0,0,.06)" }} />
-            <button onClick={() => { if (window.confirm("Keluar dari akun ini? Kamu perlu login lagi (mungkin dengan akun Google lain) untuk masuk kembali.")) signOutTeacher(); }} style={{ background: pt.panel, border: `1px solid ${pt.border}`, color: pt.dim, padding: "10px 14px", borderRadius: 10, cursor: "pointer", fontSize: 13, boxShadow: "0 2px 10px rgba(0,0,0,.06)" }}>Keluar</button>
+            <button onClick={() => setSettingsOpen(true)} title="Panduan, pengembang & info teknis" style={{ background: pt.panel, border: `1px solid ${pt.border}`, color: pt.text, padding: 12, borderRadius: 10, cursor: "pointer", boxShadow: "0 2px 10px rgba(0,0,0,.06)" }}><span style={{ fontSize: 18, lineHeight: 1 }}>⚙️</span></button>
+            <ThemeToggleButton theme={pickerTheme} onToggle={() => setPickerTheme((th) => th === "dark" ? "light" : "dark")} style={{ background: pt.panel, border: `1px solid ${pt.border}`, color: pt.text, padding: 12, borderRadius: 10, cursor: "pointer", boxShadow: "0 2px 10px rgba(0,0,0,.06)" }} />
+            <button onClick={() => { if (window.confirm("Keluar dari akun ini? Kamu perlu login lagi (mungkin dengan akun Google lain) untuk masuk kembali.")) signOutTeacher(); }} style={{ background: pt.panel, border: `1px solid ${pt.border}`, color: pt.dim, padding: "12px 16px", borderRadius: 10, cursor: "pointer", fontSize: 14.5, boxShadow: "0 2px 10px rgba(0,0,0,.06)" }}>Keluar</button>
           </div>
         </div>
-        <div style={{ fontSize: 14, color: pt.dim, marginBottom: 14, maxWidth: 560 }}>Web interaktif siswa SMA berisi 3 game & 14 tema Bahasa Jepang kelas XI &amp; XII — pilih salah satu permainan di bawah ini untuk mulai sesi.</div>
+        <div style={{ fontSize: 15.5, color: pt.dim, marginBottom: 20, maxWidth: 680 }}>Web interaktif siswa SMA berisi 3 game & 14 tema Bahasa Jepang kelas XI &amp; XII — pilih salah satu permainan di bawah ini untuk mulai sesi.</div>
         {backupMsg && (
-          <div style={{ marginBottom: 20, maxWidth: 560, background: backupMsg.ok ? "rgba(63,191,173,.12)" : "rgba(239,91,91,.12)", border: `1px solid ${backupMsg.ok ? "#3FBFAD" : "#EF5B5B"}`, color: backupMsg.ok ? "#1B7A6E" : "#B33F3F", borderRadius: 10, padding: "10px 14px", fontSize: 13, fontWeight: 600 }}>
+          <div style={{ marginBottom: 24, maxWidth: 680, background: backupMsg.ok ? "rgba(63,191,173,.12)" : "rgba(239,91,91,.12)", border: `1px solid ${backupMsg.ok ? "#3FBFAD" : "#EF5B5B"}`, color: backupMsg.ok ? "#1B7A6E" : "#B33F3F", borderRadius: 10, padding: "12px 16px", fontSize: 14.5, fontWeight: 600 }}>
             {backupMsg.ok ? "✅" : "⚠️"} {backupMsg.text}
           </div>
         )}
         <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} t={pt} teacher={authUser} />
-        <div className="game-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 230px))", gap: 20, justifyContent: "center", perspective: 1200 }}>
+        <div className="game-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 300px))", gap: 28, justifyContent: "center", perspective: 1200 }}>
           {GAMES.map((g, i) => (
             <button
               key={g.id}
@@ -6220,18 +6232,18 @@ function App() {
               disabled={!g.available}
               style={{
                 display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center",
-                background: pt.panel, border: `1px solid ${pt.border}`, borderRadius: 20, padding: "26px 20px 22px", color: pt.text,
+                background: pt.panel, border: `1px solid ${pt.border}`, borderRadius: 24, padding: "34px 26px 28px", color: pt.text,
                 cursor: g.available ? "pointer" : "default", opacity: g.available ? 1 : 0.45,
                 boxShadow: pickerTheme === "dark" ? "0 2px 10px rgba(0,0,0,.3)" : "0 2px 10px rgba(28,32,51,.06)",
                 animationDelay: `${i * 110}ms`, "--shimmer-delay": `${450 + i * 110}ms`,
                 "--accent": g.accent, "--accent-soft": g.accentSoft, "--accent-shadow": g.accent + "40",
               }}
             >
-              <div className="icon-badge" style={{ width: 54, height: 54, borderRadius: 15, background: g.accentSoft, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 25, marginBottom: 14, flexShrink: 0 }}>{g.icon}</div>
-              <div className="sgt" style={{ fontSize: 16.5, fontWeight: 700, marginBottom: 6 }}>{g.name}</div>
-              <div style={{ display: "inline-block", fontSize: 10.5, fontWeight: 600, color: g.accent, background: g.accentSoft, padding: "3px 10px", borderRadius: 999, marginBottom: 12, letterSpacing: 0.2 }}>{g.tag}</div>
-              <div style={{ fontSize: 12.5, color: pt.dim, lineHeight: 1.5, marginBottom: 20 }}>{g.desc}{!g.available ? " · segera" : ""}</div>
-              <div className="arrow-chip sgt" style={{ fontSize: 12, fontWeight: 700, color: g.accent, background: g.accentSoft, padding: "8px 18px", borderRadius: 999, marginTop: "auto" }}>Mulai →</div>
+              <div className="icon-badge" style={{ width: 68, height: 68, borderRadius: 18, background: g.accentSoft, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 32, marginBottom: 18, flexShrink: 0 }}>{g.icon}</div>
+              <div className="sgt" style={{ fontSize: 20, fontWeight: 700, marginBottom: 8 }}>{g.name}</div>
+              <div style={{ display: "inline-block", fontSize: 12, fontWeight: 600, color: g.accent, background: g.accentSoft, padding: "4px 12px", borderRadius: 999, marginBottom: 15, letterSpacing: 0.2 }}>{g.tag}</div>
+              <div style={{ fontSize: 14, color: pt.dim, lineHeight: 1.55, marginBottom: 24 }}>{g.desc}{!g.available ? " · segera" : ""}</div>
+              <div className="arrow-chip sgt" style={{ fontSize: 13, fontWeight: 700, color: g.accent, background: g.accentSoft, padding: "9px 20px", borderRadius: 999, marginTop: "auto" }}>Mulai →</div>
             </button>
           ))}
         </div>
