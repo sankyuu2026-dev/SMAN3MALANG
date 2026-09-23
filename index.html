@@ -380,7 +380,7 @@ function exportAllGamesBackup(uid) {
       const parsed = JSON.parse(raw);
       if (!parsed.dataByMateri) { skipped++; return; }
       games[appId] = appId === "card-rush"
-        ? { dataByMateri: parsed.dataByMateri }
+        ? { dataByMateri: parsed.dataByMateri, groupCount: parsed.groupCount }
         : { selectedMateri: parsed.selectedMateri, dataByMateri: parsed.dataByMateri };
     } catch (e) { console.error("Gagal ekspor cadangan gabungan:", appId, e); }
   });
@@ -418,6 +418,7 @@ function importAllGamesBackup(uid, file) {
           ...existing,
           dataByMateri: { ...(existing.dataByMateri || {}), ...gameData.dataByMateri },
           selectedMateri: gameData.selectedMateri || existing.selectedMateri,
+          groupCount: gameData.groupCount > 0 ? gameData.groupCount : existing.groupCount,
           savedAt: Date.now(),
         };
         const res = safeSetItem(scopedKey(storageKey, uid), JSON.stringify(merged));
@@ -1128,7 +1129,29 @@ const REVEALED_COLOR = "#9AA3B2";
 // manapun) atau mengoreksi kesalahan eksekusi. Sengaja beda dari GROUP_COLORS supaya tidak
 // tertukar visual dengan kelompok asli mana pun.
 const GURU_COLOR = "#8B7FD6";
-function groupColor(g) { return g === "guru" ? GURU_COLOR : GROUP_COLORS[g - 1]; }
+// Dipakai groupColor() untuk kelompok ke-7 dst — dikonversi ke HEX (bukan dibiarkan dalam
+// bentuk string "hsl(...)") supaya tetap kompatibel dengan pola lama di banyak tempat di
+// kode ini yang menambahkan alpha channel dengan cara menempel 2 digit hex di belakang warna
+// (mis. `${warna}55`) — trik itu cuma valid untuk warna HEX 6-digit, bukan untuk hsl(...).
+function hslToHex(h, s, l) {
+  s /= 100; l /= 100;
+  const k = (n) => (n + h / 30) % 12;
+  const a = s * Math.min(l, 1 - l);
+  const f = (n) => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+  const toHex = (n) => Math.round(255 * f(n)).toString(16).padStart(2, "0");
+  return `#${toHex(0)}${toHex(8)}${toHex(4)}`;
+}
+function groupColor(g) {
+  if (g === "guru") return GURU_COLOR;
+  if (g >= 1 && g <= GROUP_COLORS.length) return GROUP_COLORS[g - 1];
+  // FITUR BARU: kelompok ke-7 dst (khusus Game 3/Card Rush, satu-satunya game yang boleh
+  // punya kelompok lebih dari 6 — lihat groupCount di CocokkanKartuGame) tidak lagi mengulang
+  // 6 warna GROUP_COLORS dari awal (dulu bisa 2 kelompok kebagian warna sama persis kalau
+  // dibiarkan modulo). Warnanya dibangkitkan otomatis lewat rotasi hue "golden angle"
+  // (137.508°) supaya tiap kelompok baru selalu jelas beda dari kelompok sebelumnya.
+  const hue = (137.508 * (g - 1)) % 360;
+  return hslToHex(hue, 62, 58);
+}
 function groupLabel(g) { return g === "guru" ? "Guru" : `Kelompok ${g}`; }
 const GROUP_NAMES = [1, 2, 3, 4, 5, 6];
 // Palet khusus untuk kunci jawaban di layar Persiapan — perlu lebih banyak warna dari GROUP_COLORS
@@ -1737,6 +1760,12 @@ function StudentJoinScreen({ roomCode }) {
 
   if (!myGroup) {
     const taken = room.groups || {};
+    // FITUR BARU: khusus Game 3 (Card Rush, room.mode === "cards"), guru sekarang bisa
+    // mengatur jumlah kelompok lebih dari 6 (lihat groupCount di CocokkanKartuGame, ditulis
+    // ke field room.groupCount). Game 1 & 2 tidak pernah menulis field ini, jadi tetap terkunci
+    // di 6 kelompok seperti semula (GROUP_NAMES.length dipakai sebagai fallback).
+    const groupTotal = room.mode === "cards" && room.groupCount > 0 ? room.groupCount : GROUP_NAMES.length;
+    const groupList = Array.from({ length: groupTotal }, (_, i) => i + 1);
     return (
       <div style={wrap}>
         <style>{fontImport}</style>
@@ -1750,14 +1779,14 @@ function StudentJoinScreen({ roomCode }) {
           <div className="sgt" style={{ fontSize: 27, fontWeight: 700, marginBottom: 6, lineHeight: 1.2 }}>Pilih kelompokmu</div>
           <div style={{ fontSize: 14, color: t.dim, marginBottom: 28 }}>Ketuk salah satu nomor untuk bergabung</div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14 }}>
-            {GROUP_NAMES.map((g) => {
+            {groupList.map((g) => {
               const isTaken = !!taken[g];
               return (
                 <button key={g} className="grp-btn" disabled={isTaken || busy} onClick={() => joinGroup(g)} style={{
                   position: "relative", aspectRatio: "1 / 1", borderRadius: 20, border: "none", cursor: isTaken ? "default" : "pointer",
-                  background: isTaken ? t.panel2 : GROUP_COLORS[g - 1], color: isTaken ? t.faint : "#101B34",
+                  background: isTaken ? t.panel2 : groupColor(g), color: isTaken ? t.faint : "#101B34",
                   display: "flex", alignItems: "center", justifyContent: "center",
-                  boxShadow: isTaken ? "none" : `0 10px 24px ${GROUP_COLORS[g - 1]}55`,
+                  boxShadow: isTaken ? "none" : `0 10px 24px ${groupColor(g)}55`,
                   opacity: isTaken ? 0.5 : 1,
                 }}>
                   <span className="sgt" style={{ fontSize: 24, fontWeight: 700 }}>K{g}</span>
@@ -2053,7 +2082,7 @@ function CardsPlayArea({ roomCode, room, myGroup }) {
   useEffect(() => {
     if (!allMatched || finishedSent || !roundId) return;
     setFinishedSent(true);
-    setConfetti(makeConfettiBurst(GROUP_COLORS[myGroup - 1]));
+    setConfetti(makeConfettiBurst(groupColor(myGroup)));
     const elapsedMs = Date.now() - (startAtRef.current || Date.now());
     const ref = db.collection("rooms").doc(roomCode);
     db.runTransaction((tx) => tx.get(ref).then((snap) => {
@@ -2080,7 +2109,7 @@ function CardsPlayArea({ roomCode, room, myGroup }) {
     // spotlight (senada dengan layar pilih kelompok), badge kelompok berwarna sesuai warna
     // kelompoknya sendiri, dan pratinjau 6 kartu skeleton yang beranimasi masuk lalu berkilau
     // bergantian — sekadar isyarat visual "sesuatu akan muncul di sini", bukan data sungguhan.
-    const myColor = GROUP_COLORS[myGroup - 1];
+    const myColor = groupColor(myGroup);
     return (
       <div style={{ ...centerWrap, position: "relative", overflow: "hidden" }}>
         <style>{fontImport}</style>
@@ -5161,6 +5190,13 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
   function adjustScore(g, delta) {
     setScores((prev) => ({ ...prev, [g]: Math.max(0, (prev[g] || 0) + delta) }));
   }
+  // FITUR BARU: khusus Card Rush, guru sekarang bisa menambah kelompok LEBIH dari 6 (dulu
+  // semua game terkunci di GROUP_NAMES = [1..6] tanpa cara mengubahnya). Defaultnya tetap 6
+  // seperti semula — guru cuma perlu klik "+ Tambah Kelompok" kalau kelasnya memang punya
+  // lebih dari 6 kelompok. Tidak ada batas atas; batas bawah dijaga minimal 2 (dua.js — dua
+  // kelompok minimal supaya "balapan"-nya tetap masuk akal) lewat setGroupCount di bawah.
+  const [groupCount, setGroupCount] = useState(6);
+  const groupList = useMemo(() => Array.from({ length: groupCount }, (_, i) => i + 1), [groupCount]);
 
   useEffect(() => {
     let localSavedAt = 0;
@@ -5172,6 +5208,7 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
         if (parsed.dataByMateri) {
           setDataByMateri((prev) => ({ ...prev, ...parsed.dataByMateri }));
           if (parsed.selectedMateri) setSelectedMateri(parsed.selectedMateri);
+          if (parsed.groupCount > 0) setGroupCount(parsed.groupCount);
         } else if (Array.isArray(parsed.babaks) && parsed.babaks.length > 0) {
           // MIGRASI: format lama (sebelum ada konsep Tema) cuma simpan satu daftar babak datar.
           // Supaya kartu yang sudah dibuat guru sebelumnya tidak hilang, dipindah jadi isi tema
@@ -5184,6 +5221,27 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
         localSavedAt = parsed.savedAt || 0;
       }
     } catch (e) { /* belum ada data tersimpan, atau data korup — mulai dari kosong */ }
+    try {
+      // BUGFIX (refresh di tengah permainan malah kembali ke halaman Persiapan): tidak seperti
+      // Word Search (tck-progress) & Buka Kotak (bk-progress), Card Rush dulu SAMA SEKALI tidak
+      // menyimpan progres sesi (stage/roomCode/babakIdx/scores) ke localStorage — cuma data
+      // Persiapan (cck-setup-data) yang tersimpan. Akibatnya `stage` selalu balik ke default
+      // "setup" begitu halaman di-refresh (mis. laptop guru ke-refresh tidak sengaja saat kelas
+      // sedang main), padahal sesi & room-nya di Firestore masih hidup — kelompok yang sudah join
+      // pun jadi seperti "terputus" dari layar guru. Sekarang stage/roomCode/babakIdx/scores ikut
+      // disimpan & dipulihkan di sini (lihat efek penyimpan di bawah); begitu stage="play"
+      // dipulihkan, efek onSnapshot yang sudah ada otomatis menyambung ulang ke room yang sama
+      // lewat roomCode dan menarik cardsRoundId/finishers/cardsProgress/cardsRoundEndsAt terbaru
+      // dari Firestore, jadi tidak perlu disimpan manual di sini.
+      const rawP = localStorage.getItem(migrateLegacyKey("cck-progress", teacher.uid));
+      if (rawP) {
+        const p = JSON.parse(rawP);
+        if (p.stage) setStage(p.stage);
+        if (p.roomCode) setRoomCode(p.roomCode);
+        if (typeof p.babakIdx === "number") setBabakIdx(p.babakIdx);
+        if (p.scores) setScores(p.scores);
+      }
+    } catch (e) { /* belum ada progres tersimpan, atau data korup */ }
     setLoaded(true);
     cleanupStaleRooms();
     if (migrated) setImportMsg({ ok: true, text: "Kartu dari sebelum fitur Tema ditambahkan sudah dipindah otomatis ke tema \"Gakkou no Seikatsu\" — pindahkan manual kalau perlu." });
@@ -5195,6 +5253,7 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
         if (cloud.dataByMateri) {
           setDataByMateri((prev) => ({ ...prev, ...cloud.dataByMateri }));
           if (cloud.selectedMateri) setSelectedMateri(cloud.selectedMateri);
+          if (cloud.groupCount > 0) setGroupCount(cloud.groupCount);
           setImportMsg({ ok: true, text: "Kartu dipulihkan dari cadangan cloud (localStorage browser ini kosong/lebih basi)." });
         } else if (Array.isArray(cloud.babaks) && cloud.babaks.length > 0) {
           setDataByMateri((prev) => ({ ...prev, "Gakkou no Seikatsu": cloud.babaks }));
@@ -5208,13 +5267,22 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
   useEffect(() => {
     if (!loaded) return;
     const tm = setTimeout(() => {
-      const payload = { dataByMateri, selectedMateri };
+      const payload = { dataByMateri, selectedMateri, groupCount };
       const res = safeSetItem(scopedKey("cck-setup-data", teacher.uid), JSON.stringify({ ...payload, savedAt: Date.now() }));
       setStorageWarning(res.ok ? null : res.message);
       cloudSave.track(saveCardRushSetupToCloud(teacher.uid, payload));
     }, 500);
     return () => clearTimeout(tm);
-  }, [dataByMateri, selectedMateri, loaded]);
+  }, [dataByMateri, selectedMateri, groupCount, loaded]);
+
+  useEffect(() => {
+    if (!loaded) return;
+    const tm = setTimeout(() => {
+      const res = safeSetItem(scopedKey("cck-progress", teacher.uid), JSON.stringify({ stage, roomCode, babakIdx, scores }));
+      setStorageWarning(res.ok ? null : res.message);
+    }, 500);
+    return () => clearTimeout(tm);
+  }, [stage, roomCode, babakIdx, scores, loaded]);
 
   const babak = babaks[babakIdx] || babaks[0];
 
@@ -5303,10 +5371,24 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
 
   useEffect(() => {
     if (stage !== "play") return;
+    // FITUR BARU: groupCount disiarkan ke dokumen room supaya layar "Pilih kelompokmu" di HP
+    // siswa (StudentJoinScreen, dipakai bersama oleh ketiga game) tahu berapa tombol kelompok
+    // yang perlu ditampilkan — lihat groupTotal di StudentJoinScreen. Game 1 & 2 tidak pernah
+    // menulis field ini sama sekali, jadi tetap default 6 seperti semula.
     db.collection("rooms").doc(roomCode).set({
-      mode: "cards", babakIdx, updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+      mode: "cards", babakIdx, groupCount, updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
     }, { merge: true }).catch(() => {});
-  }, [stage, roomCode, babakIdx]);
+  }, [stage, roomCode, babakIdx, groupCount]);
+
+  // BUGFIX: skor Card Rush dulu cuma tersimpan lokal di state React guru (persis bug lama yang
+  // sudah pernah diperbaiki di Word Search — lihat komentar di effect serupa pada
+  // TebakCariKataGame) — HP siswa asli (CardsPlayArea) membaca papan skor dari room.scores lewat
+  // Firestore, jadi tanpa effect ini skornya akan selalu terlihat 0 di HP siswa walau sudah benar
+  // di layar guru. Disiarkan di sini dengan pola identik supaya kedua game konsisten.
+  useEffect(() => {
+    if (stage !== "play") return;
+    db.collection("rooms").doc(roomCode).set({ scores }, { merge: true }).catch(() => {});
+  }, [stage, roomCode, scores]);
 
   useEffect(() => {
     if (stage !== "play") return;
@@ -5422,12 +5504,25 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
     applyScores(finishers);
   }
 
-  function nextBabak() {
-    if (babakIdx >= babaks.length - 1) return;
-    const nextIdx = babakIdx + 1;
-    setBabakIdx(nextIdx);
-    db.collection("rooms").doc(roomCode).set({ babakIdx: nextIdx, cardsRoundId: null, cardsFinishers: [], cardsProgress: {}, cardsRoundEndsAt: null }, { merge: true }).catch(() => {});
+  // FITUR BARU: dulu guru cuma bisa maju SATU-SATU lewat "Lanjut Babak Berikutnya" — tidak bisa
+  // balik ke babak sebelumnya atau melompat langsung ke babak tertentu (mis. mulai dari babak 3
+  // karena babak 1-2 sudah dikerjakan sesi sebelumnya, atau mengulang babak 2 buat kelas lain).
+  // goToBabak() sekarang jadi satu-satunya fungsi pindah babak — dipakai baik oleh tombol
+  // "Lanjut Babak Berikutnya" (nextBabak, sekadar goToBabak(babakIdx + 1)) MAUPUN oleh pil nomor
+  // babak yang bisa diklik bebas di header (lihat render di bawah). Kalau ada babak yang masih
+  // berjalan (round aktif & belum dinilai), guru diminta konfirmasi dulu — pindah babak akan
+  // menghentikan round itu tanpa menilai skor kelompok yang belum sempat selesai.
+  function goToBabak(idx) {
+    if (idx === babakIdx || idx < 0 || idx >= babaks.length) return;
+    if (cardsRoundId && !scored) {
+      if (!window.confirm("Babak ini masih berjalan. Pindah babak sekarang akan menghentikannya tanpa menilai skor kelompok yang belum selesai. Lanjutkan?")) return;
+    }
+    setBabakIdx(idx);
+    db.collection("rooms").doc(roomCode).set({ babakIdx: idx, cardsRoundId: null, cardsFinishers: [], cardsProgress: {}, cardsRoundEndsAt: null }, { merge: true }).catch(() => {});
     setFinishers([]); setCardsRoundId(null); setCardsRoundEndsAt(null); setScored(false);
+  }
+  function nextBabak() {
+    goToBabak(babakIdx + 1);
   }
 
   function endGame() {
@@ -5435,13 +5530,16 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
     // BUGFIX: dulu cuma db.collection("rooms").doc(roomCode).delete() — subcollection "cardPairs"
     // (gambar-gambar kartu babak terakhir) tidak ikut terhapus & jadi sampah permanen di Firestore.
     deleteRoomWithSubcollections(db.collection("rooms").doc(roomCode)).catch(() => {});
+    try { localStorage.removeItem(scopedKey("cck-progress", teacher.uid)); } catch (e) {}
     setScores({}); setStage("setup"); setBabakIdx(0); setCardsRoundEndsAt(null); setCorrectingScore(false);
   }
 
   /* ---- Cadangan pasangan kartu: ekspor ke file .json & impor kembali ---- */
   const { exportBackup, importBackup } = makeBackupHandlers({
     appId: "card-rush", appLabel: "Card Rush",
-    buildPayload: (scope) => scope === "all" ? { dataByMateri } : { dataByMateri: { [selectedMateri]: babaks }, selectedMateri },
+    // groupCount disertakan di kedua scope ("current" & "all") — bukan per-tema, jadi tidak
+    // ada alasan cuma ikut kalau scope-nya "semua tema".
+    buildPayload: (scope) => scope === "all" ? { dataByMateri, groupCount } : { dataByMateri: { [selectedMateri]: babaks }, selectedMateri, groupCount },
     applyPayload: (data) => {
       // Terima juga file cadangan format lama (sebelum ada Tema): { babaks: [...] } tanpa dataByMateri.
       const incoming = data.dataByMateri
@@ -5452,6 +5550,7 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
       if (!window.confirm(`Muat cadangan ini? ${materiCount} tema di cadangan akan MENIMPA tema dengan nama sama yang ada sekarang. Tema lain tetap aman.`)) return;
       setDataByMateri((prev) => ({ ...prev, ...incoming }));
       if (data.selectedMateri) setSelectedMateri(data.selectedMateri);
+      if (data.groupCount > 0) setGroupCount(data.groupCount);
       setBabakIdx(0);
       setImportMsg({ ok: true, text: `Cadangan dimuat — ${materiCount} tema diperbarui.` });
     },
@@ -5459,7 +5558,7 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
   });
   const materiSlug = (selectedMateri || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
 
-  const sortedGroups = [...GROUP_NAMES].sort((a, b) => (scores[b] || 0) - (scores[a] || 0));
+  const sortedGroups = [...groupList].sort((a, b) => (scores[b] || 0) - (scores[a] || 0));
 
   if (stage === "setup") {
     const fieldLabelStyle = { fontSize: 14, color: t.faint, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.4 };
@@ -5607,6 +5706,30 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
           />
         </div>
 
+        {/* FITUR BARU: jumlah kelompok dulu terkunci permanen di 6 (sama seperti Word Search &
+            Mystery Box) — sekarang khusus Card Rush guru bisa menambah kelompok lebih dari 6
+            kalau kelasnya memang butuh (mis. 8-9 kelompok kecil). Defaultnya tetap 6, tidak ada
+            batas atas, batas bawah dijaga 2 supaya tetap masuk akal sebagai "balapan" antar
+            kelompok. Perubahan di sini otomatis ikut tersimpan (cck-setup-data) & disiarkan ke
+            room begitu "Mulai Permainan" ditekan — lihat effect groupCount di atas.
+            */}
+        <div style={{ background: t.panel, borderRadius: 18, padding: "22px 24px", marginBottom: 20, boxShadow: t.shadowSm }}>
+          <SectionLabel n={3} faint={t.faint} hint="— berlaku untuk sesi ini, defaultnya 6 kelompok">Jumlah Kelompok</SectionLabel>
+          <div style={{ display: "flex", alignItems: "center", gap: 14, marginTop: 10, flexWrap: "wrap" }}>
+            <button onClick={() => setGroupCount((n) => Math.max(2, n - 1))} disabled={groupCount <= 2} style={{
+              width: 40, height: 40, borderRadius: 10, border: `1px solid ${t.border}`, background: t.panel2, color: groupCount <= 2 ? t.faint : t.text,
+              fontSize: 20, fontWeight: 700, cursor: groupCount <= 2 ? "default" : "pointer", opacity: groupCount <= 2 ? 0.5 : 1,
+            }}>−</button>
+            <div className="sgt" style={{ fontSize: 22, fontWeight: 700, minWidth: 90, textAlign: "center" }}>{groupCount} Kelompok</div>
+            <button onClick={() => setGroupCount((n) => n + 1)} title="Tambah kelompok" style={{
+              width: 40, height: 40, borderRadius: 10, border: "none", background: "#F4B740", color: "#101B34", fontSize: 20, fontWeight: 700, cursor: "pointer",
+            }}>+</button>
+            {groupCount !== 6 && (
+              <button onClick={() => setGroupCount(6)} style={{ background: "transparent", border: "none", color: t.dim, textDecoration: "underline", cursor: "pointer", fontSize: 14 }}>Kembalikan ke default (6)</button>
+            )}
+          </div>
+        </div>
+
         <button onClick={startSession} disabled={!canStart || startingGame} style={{
           display: "flex", alignItems: "center", gap: 8, background: canStart ? "#F4B740" : t.panel2, color: canStart ? "#101B34" : t.faint,
           border: "none", borderRadius: 12, padding: "14px 22px", fontWeight: 700, fontSize: 15, cursor: canStart && !startingGame ? "pointer" : "default",
@@ -5634,6 +5757,21 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
         <div>
           <div className="sgt page-title" style={{ fontSize: 26, fontWeight: 700 }}>Card Rush — {babak.label}</div>
           <div style={{ fontSize: 14, color: t.dim, marginTop: 2 }}>Kode Room: <b>{roomCode}</b> · {totalGroups} kelompok sudah join</div>
+          {/* FITUR BARU: pil nomor babak — guru bisa lompat langsung ke babak mana pun (tidak
+              harus selalu urut dari babak 1), termasuk balik ke babak sebelumnya. Babak yang
+              sedang aktif ditandai warna kuning; lihat goToBabak() untuk logika pindahnya
+              (termasuk konfirmasi kalau ada round yang masih berjalan). */}
+          {babaks.length > 1 && (
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
+              {babaks.map((b, i) => (
+                <button key={b.id || i} onClick={() => goToBabak(i)} title={`Pindah ke ${b.label || `Babak ${i + 1}`}`} style={{
+                  background: i === babakIdx ? "#F4B740" : t.panel, color: i === babakIdx ? "#101B34" : t.dim,
+                  border: i === babakIdx ? "none" : `1px solid ${t.border}`, borderRadius: 999, padding: "5px 13px",
+                  fontSize: 13, fontWeight: 700, cursor: i === babakIdx ? "default" : "pointer",
+                }}>{b.label || `Babak ${i + 1}`}</button>
+              ))}
+            </div>
+          )}
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
           {/* FITUR BARU: hitung mundur babak berjalan — timestamp akhirnya (cardsRoundEndsAt)
@@ -5663,10 +5801,10 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
         <div style={{ flex: "1 1 380px", background: t.panel, borderRadius: 16, padding: 20, boxSizing: "border-box", boxShadow: t.shadowSm }}>
           <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 10 }}>Kelompok yang sudah join</div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 18 }}>
-            {GROUP_NAMES.map((g) => {
+            {groupList.map((g) => {
               const joined = !!joinedGroups[g];
               return (
-                <div key={g} style={{ padding: "8px 14px", borderRadius: 10, background: joined ? GROUP_COLORS[g - 1] : t.panel2, color: joined ? "#101B34" : t.faint, fontWeight: 700, fontSize: 14, opacity: joined ? 1 : 0.5 }}>
+                <div key={g} style={{ padding: "8px 14px", borderRadius: 10, background: joined ? groupColor(g) : t.panel2, color: joined ? "#101B34" : t.faint, fontWeight: 700, fontSize: 14, opacity: joined ? 1 : 0.5 }}>
                   {(joinedGroups[g] && joinedGroups[g].name) || `Kelompok ${g}`}{joined ? " ✓" : ""}
                 </div>
               );
@@ -5701,23 +5839,23 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
                   sendiri-sendiri lewat cardsProgress (lihat CardsPlayArea & onSnapshot di atas).
                   Disembunyikan otomatis kalau semua yang join sudah selesai (list-nya kosong),
                   supaya tidak ada judul seksi kosong tanpa isi. */}
-              {GROUP_NAMES.some((g) => joinedGroups[g] && !finishers.some((f) => f.group === g)) && (
+              {groupList.some((g) => joinedGroups[g] && !finishers.some((f) => f.group === g)) && (
                 <div style={{ marginBottom: 16 }}>
                   <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 10 }}>Progres kelompok</div>
                   <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                    {GROUP_NAMES.filter((g) => joinedGroups[g] && !finishers.some((f) => f.group === g)).map((g) => {
+                    {groupList.filter((g) => joinedGroups[g] && !finishers.some((f) => f.group === g)).map((g) => {
                       const done = Math.min(cardsProgress[g] || 0, totalPairsThisRound);
                       const pct = totalPairsThisRound > 0 ? Math.round((done / totalPairsThisRound) * 100) : 0;
                       return (
                         <div key={g} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                          <span style={{ width: 20, height: 20, borderRadius: "50%", background: GROUP_COLORS[g - 1], flexShrink: 0 }} />
+                          <span style={{ width: 20, height: 20, borderRadius: "50%", background: groupColor(g), flexShrink: 0 }} />
                           <div style={{ flex: 1, minWidth: 0 }}>
                             <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, marginBottom: 3 }}>
                               <span style={{ fontWeight: 600 }}>{(joinedGroups[g] && joinedGroups[g].name) || `Kelompok ${g}`}</span>
                               <span style={{ color: t.dim }}>{done}/{totalPairsThisRound} pasangan ketemu</span>
                             </div>
                             <div style={{ height: 6, borderRadius: 999, background: t.panel2, overflow: "hidden" }}>
-                              <div style={{ height: "100%", width: `${pct}%`, background: GROUP_COLORS[g - 1], borderRadius: 999, transition: "width .35s ease" }} />
+                              <div style={{ height: "100%", width: `${pct}%`, background: groupColor(g), borderRadius: 999, transition: "width .35s ease" }} />
                             </div>
                           </div>
                         </div>
@@ -5734,7 +5872,7 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
                 <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
                   {finishers.map((f, i) => (
                     <div key={f.group} style={{ display: "flex", alignItems: "center", gap: 10, background: t.panel2, borderRadius: 10, padding: "8px 14px" }}>
-                      <span style={{ width: 26, height: 26, borderRadius: "50%", background: GROUP_COLORS[f.group - 1], color: "#101B34", fontSize: 14, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>{i + 1}</span>
+                      <span style={{ width: 26, height: 26, borderRadius: "50%", background: groupColor(f.group), color: "#101B34", fontSize: 14, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center" }}>{i + 1}</span>
                       <span className="sgt" style={{ fontWeight: 700, fontSize: 14 }}>{f.name || `Kelompok ${f.group}`}</span>
                     </div>
                   ))}
@@ -5769,7 +5907,7 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
             {sortedGroups.filter((g) => (scores[g] || 0) > 0 || joinedGroups[g] || correctingScore).map((g, i) => (
               <div key={g} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: t.panel2, borderRadius: 10, padding: "8px 12px" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <span style={{ width: 10, height: 10, borderRadius: 3, background: GROUP_COLORS[g - 1] }} />
+                  <span style={{ width: 10, height: 10, borderRadius: 3, background: groupColor(g) }} />
                   <span style={{ fontSize: 14, fontWeight: 600 }}>{(joinedGroups[g] && joinedGroups[g].name) || `Kelompok ${g}`}{!correctingScore && i === 0 && (scores[g] || 0) > 0 ? " 👑" : ""}</span>
                 </div>
                 {correctingScore ? (
