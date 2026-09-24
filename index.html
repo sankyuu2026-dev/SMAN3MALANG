@@ -2095,7 +2095,12 @@ function CardsPlayArea({ roomCode, room, myGroup }) {
       // draf Firestore Rules) — cuma boleh MENAMBAH satu entri di akhir daftar (bukan mengubah
       // yang sudah ada), dan entri barunya harus "group"-nya cocok dengan uid yang menulis
       // (dicek lewat groups.{g}.uid, sama seperti proteksi cardsProgress).
-      tx.set(ref, { cardsFinishers: [...order, { group: myGroup, name, elapsedMs }] }, { merge: true });
+      // BUGFIX: karena Rules cuma izinkan MENAMBAH (bukan MENGOSONGKAN) array ini, guru TIDAK
+      // BISA membersihkan cardsFinishers begitu pindah/mulai babak baru — entri babak lama akan
+      // selalu nyangkut di array ini selamanya. roundId disertakan di sini supaya sisi guru bisa
+      // MENYARING entri yang beneran milik babak yang sedang aktif (lihat filter di onSnapshot
+      // CocokkanKartuGame), tanpa pernah perlu mengosongkan array-nya sama sekali.
+      tx.set(ref, { cardsFinishers: [...order, { group: myGroup, name, elapsedMs, roundId }] }, { merge: true });
     })).catch(() => {});
   }, [allMatched, finishedSent, roundId, roomCode, myGroup]);
 
@@ -5197,6 +5202,12 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
   // kelompok minimal supaya "balapan"-nya tetap masuk akal) lewat setGroupCount di bawah.
   const [groupCount, setGroupCount] = useState(6);
   const groupList = useMemo(() => Array.from({ length: groupCount }, (_, i) => i + 1), [groupCount]);
+  // Dipakai goToBabak() di bawah — lihat BUGFIX di sana untuk kenapa perpindahan babak sekarang
+  // perlu status "sedang berpindah" sendiri (menonaktifkan tombol pindah babak selagi menunggu
+  // tulisan ke Firestore, supaya guru tidak dobel-klik dan memicu dua perpindahan bersamaan).
+  const [switchingBabak, setSwitchingBabak] = useState(false);
+  // Dipakai efek penilaian-otomatis di bawah — lihat BUGFIX "skor kedobel" di sana.
+  const scoredRoundRef = useRef(null);
 
   useEffect(() => {
     let localSavedAt = 0;
@@ -5300,7 +5311,23 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
     // [Babak 1, Babak 2]). Sekarang label seluruh babak yang tersisa dinomori ulang berurutan
     // sesuai posisi barunya.
     setBabaks((prev) => prev.filter((_, i) => i !== idx).map((b, i) => ({ ...b, label: `Babak ${i + 1}` })));
-    setBabakIdx((i) => Math.max(0, Math.min(i, babaks.length - 2)));
+    // BUGFIX: ikon 🗑 ada di SETIAP baris babak (bukan cuma yang lagi dibuka), jadi guru bisa
+    // menghapus babak MANA PUN — termasuk yang letaknya SEBELUM babak yang sedang dibuka
+    // panelnya. Dulu babakIdx cuma di-clamp mentah ke `Math.min(babakIdx, babaks.length - 2)`
+    // tanpa peduli babak mana yang sebenarnya dihapus — kalau yang dihapus itu ada SEBELUM
+    // panel yang sedang terbuka, semua babak sesudahnya ikut geser mundur satu posisi, tapi
+    // babakIdx-nya TIDAK ikut digeser, jadi panel yang kebuka setelahnya jadi babak yang SALAH
+    // (mis. guru sedang lihat Babak 3, hapus Babak 1, panel yang kebuka malah jadi Babak 4 yang
+    // sudah pindah ke slot index Babak 3, bukan Babak 3 yang aslinya sedang dilihat guru).
+    // Sekarang babakIdx ikut digeser -1 kalau babak yang dihapus PERSIS SEBELUM posisi yang
+    // sedang dibuka; kalau yang dihapus itu SENDIRI yang sedang dibuka, posisinya dipertahankan
+    // (otomatis "geser" ke babak yang menempati slot itu setelah yang dihapus hilang) lalu
+    // di-clamp ke indeks terakhir yang valid.
+    setBabakIdx((i) => {
+      const newLength = babaks.length - 1;
+      const next = idx < i ? i - 1 : i;
+      return Math.max(0, Math.min(next, newLength - 1));
+    });
   }
   // FITUR BARU: batas waktu babak ini (detik) — dipakai startRound() untuk menghitung
   // cardsRoundEndsAt. Dibatasi 30 detik–20 menit supaya tidak sengaja ter-set jadi 0/negatif
@@ -5397,8 +5424,25 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
       const data = snap.data();
       if (!data) return;
       setJoinedGroups(data.groups || {});
-      setCardsRoundId(data.cardsRoundId || null);
-      setFinishers(Array.isArray(data.cardsFinishers) ? data.cardsFinishers : []);
+      const rid = data.cardsRoundId || null;
+      setCardsRoundId(rid);
+      // BUGFIX (skor kedobel & babak berikutnya tidak bisa dimulai — "terhalang" papan urutan
+      // kelompok selesai, bahkan setelah refresh): Security Rules cuma mengizinkan MENAMBAH
+      // entri ke cardsFinishers (lihat cardsFinishersOk & komentar di CardsPlayArea), TIDAK
+      // pernah mengizinkan mengosongkannya. Kode di sini dulu percaya begitu saja isi
+      // cardsFinishers dari server — begitu guru pindah ke babak baru, entri babak LAMA (yang
+      // gagal terhapus karena ditolak Rules) tetap kebaca sebagai "kelompok yang sudah selesai"
+      // untuk babak BARU. Akibatnya: efek penilaian-otomatis langsung mengira semua kelompok
+      // sudah selesai (padahal itu sisa data babak lama) dan menambahkan skor SEKALI LAGI
+      // (dobel), sementara `!cardsRoundId` juga tidak pernah bernilai true sehingga tombol
+      // "▶ Mulai Babak Ini" tidak pernah muncul — hanya papan "Urutan kelompok selesai" babak
+      // lama yang terus tertampil. Karena sumber datanya memang tidak pernah berubah di server,
+      // masalah ini tetap muncul lagi walau halaman di-refresh.
+      // Diperbaiki: setiap entri finisher sekarang membawa roundId sendiri (lihat CardsPlayArea),
+      // jadi di sini entri yang BUKAN milik babak yang sedang aktif disaring habis SEBELUM masuk
+      // ke state — tidak perlu lagi bergantung pada array itu berhasil dikosongkan di server.
+      const rawFinishers = Array.isArray(data.cardsFinishers) ? data.cardsFinishers : [];
+      setFinishers(rid ? rawFinishers.filter((f) => f.roundId === rid) : []);
       setCardsProgress(data.cardsProgress || {});
       setCardsRoundEndsAt(data.cardsRoundEndsAt || null);
     });
@@ -5442,10 +5486,22 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
   }
 
   // Penilaian otomatis begitu SEMUA kelompok yang join sudah menyelesaikan babak ini.
+  // BUGFIX (skor kedobel): efek ini bisa terpicu ulang beberapa kali sangat berdekatan (mis. dua
+  // notifikasi Firestore datang hampir bersamaan untuk kelompok terakhir yang selesai) SEBELUM
+  // React sempat benar-benar menerapkan `setScored(true)` dari pemanggilan pertama — akibatnya
+  // `scored` yang dibaca efek ini masih `false` untuk KEDUA kalinya, dan applyScores() terpanggil
+  // dua kali untuk babak yang sama, menambah skor dobel. `scoredRoundRef` menjaga ini secara
+  // SINKRON (langsung ke-update saat itu juga, tidak menunggu render berikutnya seperti state),
+  // jadi biarpun efeknya terpicu ulang berkali-kali dalam waktu sangat berdekatan, babak dengan
+  // cardsRoundId yang sama cuma akan pernah dinilai SATU kali.
   useEffect(() => {
     if (stage !== "play" || !cardsRoundId || scored) return;
+    if (scoredRoundRef.current === cardsRoundId) return;
     const totalGroups = Object.keys(joinedGroups).length;
-    if (totalGroups > 0 && finishers.length >= totalGroups) applyScores(finishers);
+    if (totalGroups > 0 && finishers.length >= totalGroups) {
+      scoredRoundRef.current = cardsRoundId;
+      applyScores(finishers);
+    }
   }, [finishers, joinedGroups, cardsRoundId, scored, stage]);
 
   async function startRound() {
@@ -5481,7 +5537,15 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
       // layar tiap siswa menghitung mundur ke titik akhir yang PERSIS SAMA, tidak peduli kapan
       // masing-masing perangkat memuat/membaca datanya.
       const roundEndsAt = Date.now() + (babak.timeLimitSec || 180) * 1000;
-      await db.collection("rooms").doc(roomCode).set({ cardsRoundId: newRoundId, cardsFinishers: [], cardsProgress: {}, cardsRoundEndsAt: roundEndsAt }, { merge: true });
+      // BUGFIX: sama seperti goToBabak() di atas — cardsFinishers TIDAK BOLEH dikosongkan oleh
+      // Security Rules (cuma boleh ditambah), jadi kalau ditulis dalam SATU .set() bersama
+      // cardsRoundId/cardsRoundEndsAt, Firestore menolak SELURUH tulisan itu (termasuk yang
+      // sebetulnya boleh) begitu array-nya tidak kosong. babak baru jadi tidak pernah benar-benar
+      // mulai (cardsRoundId lama tetap nyangkut) walau tombol "Mulai Babak Ini" sudah ditekan.
+      // Dipisah: field yang WAJIB berhasil ditunggu duluan; cardsFinishers/cardsProgress cuma
+      // usaha terbaik di tulisan terpisah — amannya ditanggung filter roundId di onSnapshot.
+      await db.collection("rooms").doc(roomCode).set({ cardsRoundId: newRoundId, cardsRoundEndsAt: roundEndsAt }, { merge: true });
+      db.collection("rooms").doc(roomCode).set({ cardsFinishers: [], cardsProgress: {} }, { merge: true }).catch(() => {});
       setScored(false);
     } catch (e) {
       alert("Gagal memulai babak, coba lagi.");
@@ -5491,7 +5555,7 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
   }
 
   function endRoundNow() {
-    if (scored) return;
+    if (scored || scoredRoundRef.current === cardsRoundId) return;
     // FITUR BARU: kalau waktu babak memang sudah habis, tidak perlu tanya konfirmasi lagi —
     // itulah justru fungsi tombol ini (paksa akhiri babak begitu waktu kelas habis).
     // BUGFIX: teks ini dulu bilang "tetap dapat 1 poin" — sisa dari sistem skor LAMA sebelum
@@ -5501,6 +5565,7 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
     if (!timeUp && finishers.length < Object.keys(joinedGroups).length) {
       if (!window.confirm("Masih ada kelompok yang belum selesai. Akhiri babak sekarang? Kelompok yang belum selesai dapat 0 poin.")) return;
     }
+    scoredRoundRef.current = cardsRoundId;
     applyScores(finishers);
   }
 
@@ -5512,14 +5577,56 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
   // babak yang bisa diklik bebas di header (lihat render di bawah). Kalau ada babak yang masih
   // berjalan (round aktif & belum dinilai), guru diminta konfirmasi dulu — pindah babak akan
   // menghentikan round itu tanpa menilai skor kelompok yang belum sempat selesai.
-  function goToBabak(idx) {
-    if (idx === babakIdx || idx < 0 || idx >= babaks.length) return;
+  //
+  // BUGFIX (layar guru "nyangkut" — babak berikutnya jadi tidak bisa dimulai): dulu fungsi ini
+  // LANGSUNG mengubah state lokal (setBabakIdx, setCardsRoundId(null), setScored(false), dst)
+  // TANPA menunggu tulisan ke Firestore selesai — tulisannya cuma "tembak lalu lupa"
+  // (`.set(...).catch(() => {})`, errornya dibungkam total). Kalau tulisan itu gagal (koneksi
+  // guru putus sebentar, atau ditolak Security Rules), dokumen room di server SEBENARNYA masih
+  // berisi data babak LAMA — dan listener onSnapshot yang terus aktif lambat laun membaca ulang
+  // dokumen itu, lalu MENIMPA cardsRoundId/cardsFinishers/cardsProgress lokal balik ke milik
+  // babak sebelumnya. Sementara itu `scored` (satu-satunya state di sini yang TIDAK disinkron
+  // dari Firestore, murni lokal) sudah kadung ke-reset jadi false duluan. Kombinasi "cardsRoundId
+  // nyangkut ke babak lama" + "scored sudah false" itu bikin bagian bawah layar guru balik
+  // menampilkan hasil babak SEBELUMNYA dengan tombol "⏹ Akhiri Babak Sekarang" lagi — padahal
+  // guru sudah menekan "Lanjut Babak Berikutnya" — persis seperti tampilan "tidak berubah" dan
+  // babak berikutnya tidak pernah bisa mulai (tombol "▶ Mulai Babak Ini" tidak pernah muncul,
+  // karena syaratnya !cardsRoundId yang tidak pernah benar-benar kosong).
+  // Diperbaiki: tulisan ke Firestore sekarang DITUNGGU (await) lebih dulu — state lokal (termasuk
+  // babakIdx) CUMA diubah kalau tulisan itu benar-benar berhasil, sama seperti pola startRound()
+  // di atas. Kalau gagal, guru diberi tahu lewat alert supaya bisa coba lagi, bukan diam-diam
+  // nyangkut di tampilan yang membingungkan. `switchingBabak` menonaktifkan tombolnya sejenak
+  // selagi menunggu, supaya tidak dobel-klik memicu dua perpindahan bersamaan.
+  async function goToBabak(idx) {
+    if (idx === babakIdx || idx < 0 || idx >= babaks.length || switchingBabak) return;
     if (cardsRoundId && !scored) {
       if (!window.confirm("Babak ini masih berjalan. Pindah babak sekarang akan menghentikannya tanpa menilai skor kelompok yang belum selesai. Lanjutkan?")) return;
     }
-    setBabakIdx(idx);
-    db.collection("rooms").doc(roomCode).set({ babakIdx: idx, cardsRoundId: null, cardsFinishers: [], cardsProgress: {}, cardsRoundEndsAt: null }, { merge: true }).catch(() => {});
-    setFinishers([]); setCardsRoundId(null); setCardsRoundEndsAt(null); setScored(false);
+    setSwitchingBabak(true);
+    try {
+      // BUGFIX: dulu babakIdx/cardsRoundId/cardsFinishers/cardsProgress ditulis dalam SATU
+      // `.set()` yang sama. cardsFinishers TIDAK BOLEH dikosongkan oleh Security Rules (cuma
+      // boleh ditambah — lihat cardsFinishersOk), jadi tulisan itu SELALU ditolak Firestore —
+      // dan karena Firestore menolak satu dokumen secara UTUH (bukan per-field), field lain di
+      // .set() yang sama (termasuk babakIdx & cardsRoundId, yang sebetulnya boleh-boleh saja
+      // ditulis guru) IKUT TERTOLAK juga. Guru jadi nyangkut selamanya di babak lama walau sudah
+      // menekan "Lanjut Babak Berikutnya". Sekarang dipisah: field yang WAJIB berhasil (babakIdx,
+      // cardsRoundId, cardsRoundEndsAt — tidak dibatasi Rules) ditulis lebih dulu dan DITUNGGU;
+      // cardsFinishers/cardsProgress cuma "usaha terbaik" di tulisan KEDUA yang terpisah dan
+      // boleh gagal diam-diam — amannya sekarang ditanggung oleh filter roundId di listener
+      // onSnapshot (lihat komentar di sana), bukan lagi bergantung pada array ini berhasil
+      // dikosongkan.
+      await db.collection("rooms").doc(roomCode).set({
+        babakIdx: idx, cardsRoundId: null, cardsRoundEndsAt: null,
+      }, { merge: true });
+      db.collection("rooms").doc(roomCode).set({ cardsFinishers: [], cardsProgress: {} }, { merge: true }).catch(() => {});
+      setBabakIdx(idx);
+      setFinishers([]); setCardsRoundId(null); setCardsRoundEndsAt(null); setScored(false);
+    } catch (e) {
+      alert("Gagal pindah babak, coba lagi.");
+    } finally {
+      setSwitchingBabak(false);
+    }
   }
   function nextBabak() {
     goToBabak(babakIdx + 1);
@@ -5764,10 +5871,11 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
           {babaks.length > 1 && (
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
               {babaks.map((b, i) => (
-                <button key={b.id || i} onClick={() => goToBabak(i)} title={`Pindah ke ${b.label || `Babak ${i + 1}`}`} style={{
+                <button key={b.id || i} onClick={() => goToBabak(i)} disabled={switchingBabak} title={`Pindah ke ${b.label || `Babak ${i + 1}`}`} style={{
                   background: i === babakIdx ? "#F4B740" : t.panel, color: i === babakIdx ? "#101B34" : t.dim,
                   border: i === babakIdx ? "none" : `1px solid ${t.border}`, borderRadius: 999, padding: "5px 13px",
-                  fontSize: 13, fontWeight: 700, cursor: i === babakIdx ? "default" : "pointer",
+                  fontSize: 13, fontWeight: 700, cursor: (i === babakIdx || switchingBabak) ? "default" : "pointer",
+                  opacity: switchingBabak && i !== babakIdx ? 0.6 : 1,
                 }}>{b.label || `Babak ${i + 1}`}</button>
               ))}
             </div>
@@ -5886,8 +5994,8 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
                   animation: timeUp ? "timerPulse 1s ease-in-out infinite" : "none",
                 }}>{timeUp ? "⏹ Waktu Habis — Akhiri Babak Sekarang" : "⏹ Akhiri Babak Sekarang"}</button>
               ) : (
-                <button onClick={babakIdx < babaks.length - 1 ? nextBabak : endGame} style={{ display: "flex", alignItems: "center", gap: 8, background: "#F4B740", border: "none", color: "#101B34", borderRadius: 10, padding: "10px 16px", cursor: "pointer", fontSize: 14, fontWeight: 700 }}>
-                  {babakIdx < babaks.length - 1 ? "Lanjut Babak Berikutnya ➡" : "Selesaikan Sesi"}
+                <button onClick={babakIdx < babaks.length - 1 ? nextBabak : endGame} disabled={babakIdx < babaks.length - 1 && switchingBabak} style={{ display: "flex", alignItems: "center", gap: 8, background: "#F4B740", border: "none", color: "#101B34", borderRadius: 10, padding: "10px 16px", cursor: (babakIdx < babaks.length - 1 && switchingBabak) ? "default" : "pointer", opacity: (babakIdx < babaks.length - 1 && switchingBabak) ? 0.7 : 1, fontSize: 14, fontWeight: 700 }}>
+                  {babakIdx < babaks.length - 1 ? (switchingBabak ? "Berpindah babak…" : "Lanjut Babak Berikutnya ➡") : "Selesaikan Sesi"}
                 </button>
               )}
             </React.Fragment>
