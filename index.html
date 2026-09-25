@@ -5355,7 +5355,15 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
     const finalValue = value.toUpperCase(); // konsisten dgn gaya kata Game 1; aman utk hiragana
     setBabaks((prev) => prev.map((b, i) => i === idx ? { ...b, pairs: b.pairs.map((p) => p.id === pairId ? { ...p, word: finalValue } : p) } : b));
   }
-  function uploadImage(idx, pairId, file) {
+  // BUGFIX: dulu fungsi ini menyasar babak lewat INDEKS (`idx`, posisi babak saat tombol upload
+  // diklik). Kompresi gambar itu ASINKRON (bisa makan waktu beberapa detik untuk foto besar) —
+  // kalau SELAGI menunggu itu guru sempat menghapus atau mengubah urutan babak LAIN, indeks
+  // babak yang dituju bisa ikut bergeser sebelum upload ini selesai, sehingga gambar yang sudah
+  // susah payah dikompres itu ditempelkan ke babak yang SALAH (atau, karena pairId unik, malah
+  // hilang begitu saja tanpa pesan error apa pun — tidak ada babak di indeks itu lagi yang punya
+  // pairId yang cocok). Karena tiap pasangan kartu sudah punya id unik (uid()), babak tujuannya
+  // sekarang dicari lewat pairId itu sendiri di SEMUA babak — bukan lewat indeks yang bisa basi.
+  function uploadImage(pairId, file) {
     if (!file) return;
     setImageUploadError((e) => { const n = { ...e }; delete n[pairId]; return n; });
     setUploadingImage((u) => ({ ...u, [pairId]: true }));
@@ -5370,7 +5378,7 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
           setImageUploadError((e) => ({ ...e, [pairId]: "Gambar masih terlalu besar walau sudah dikompres otomatis — coba foto lain." }));
           return;
         }
-        setBabaks((prev) => prev.map((b, i) => i === idx ? { ...b, pairs: b.pairs.map((p) => p.id === pairId ? { ...p, image: dataUrl } : p) } : b));
+        setBabaks((prev) => prev.map((b) => ({ ...b, pairs: b.pairs.map((p) => p.id === pairId ? { ...p, image: dataUrl } : p) })));
       })
       .catch(() => setImageUploadError((e) => ({ ...e, [pairId]: "Gagal memproses gambar, coba lagi." })))
       .finally(() => setUploadingImage((u) => { const n = { ...u }; delete n[pairId]; return n; }));
@@ -5781,7 +5789,7 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
                             <div style={{ width: 26, height: 26, borderRadius: "50%", background: t.panel2, color: t.faint, fontSize: 14, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{idx + 1}</div>
                             <label title={p.image ? "Klik untuk ganti gambar" : "Unggah gambar (otomatis dikompres, tidak perlu diperkecil dulu)"} style={{ width: 56, height: 56, borderRadius: 8, background: t.panel2, flexShrink: 0, cursor: "pointer", overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", position: "relative" }}>
                               {uploadingImage[p.id] ? "⏳" : p.image ? <img src={p.image} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <span style={{ fontSize: 15, color: t.dim }}>⬆</span>}
-                              <input type="file" accept="image/*" disabled={uploadingImage[p.id]} onChange={(e) => uploadImage(i, p.id, e.target.files[0])} style={{ display: "none" }} />
+                              <input type="file" accept="image/*" disabled={uploadingImage[p.id]} onChange={(e) => uploadImage(p.id, e.target.files[0])} style={{ display: "none" }} />
                             </label>
                             <div style={{ display: "flex", flexDirection: "column", gap: 5, flex: 1, minWidth: 160 }}>
                               {!isMobile && <label style={fieldLabelStyle}>Kata (romaji/hiragana)</label>}
