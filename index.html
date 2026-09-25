@@ -2089,7 +2089,14 @@ function CardsPlayArea({ roomCode, room, myGroup }) {
       const data = snap.data() || {};
       if (data.cardsRoundId !== roundId) return;
       const order = Array.isArray(data.cardsFinishers) ? data.cardsFinishers : [];
-      if (order.some((o) => o.group === myGroup)) return;
+      // BUGFIX (kelompok yang pernah selesai di babak manapun jadi tidak bisa tercatat selesai
+      // lagi SELAMANYA di babak-babak berikutnya): pengecekan ini dulu memeriksa SELURUH riwayat
+      // array — begitu satu kelompok punya SATU entri lama di babak manapun (dan entri lama itu
+      // memang tidak pernah benar-benar hilang, lihat BUGFIX Security Rules di bawah), transaksi
+      // ini SELALU berhenti di sini menyangka mereka "sudah pernah selesai", padahal itu sisa
+      // babak lama — finish mereka untuk babak yang SEDANG berjalan tidak pernah tercatat.
+      // Sekarang dicek per-babak (samakan juga roundId-nya), bukan cuma nomor kelompoknya saja.
+      if (order.some((o) => o.group === myGroup && o.roundId === roundId)) return;
       const name = (data.groups && data.groups[myGroup] && data.groups[myGroup].name) || `Kelompok ${myGroup}`;
       // CATATAN KEAMANAN: penulisan ini sekarang juga dijaga Rules (lihat cardsFinishersOk di
       // draf Firestore Rules) — cuma boleh MENAMBAH satu entri di akhir daftar (bukan mengubah
@@ -5208,6 +5215,9 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
   const [switchingBabak, setSwitchingBabak] = useState(false);
   // Dipakai efek penilaian-otomatis di bawah — lihat BUGFIX "skor kedobel" di sana.
   const scoredRoundRef = useRef(null);
+  // Dipakai listener onSnapshot di bawah — lihat BUGFIX papan "Progres kelompok" di sana.
+  const prevRoundIdRef = useRef(undefined);
+  const cardsProgressBaselineRef = useRef({});
 
   useEffect(() => {
     let localSavedAt = 0;
@@ -5451,7 +5461,39 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
       // ke state — tidak perlu lagi bergantung pada array itu berhasil dikosongkan di server.
       const rawFinishers = Array.isArray(data.cardsFinishers) ? data.cardsFinishers : [];
       setFinishers(rid ? rawFinishers.filter((f) => f.roundId === rid) : []);
-      setCardsProgress(data.cardsProgress || {});
+      // BUGFIX (papan "Progres kelompok" bisa langsung tampil hampir/persis 100% padahal babak
+      // BARU saja dimulai, belum ada kartu yang diketuk sama sekali): cardsProgress ditulis siswa
+      // pakai dot-path per kelompok (cardsProgress.{group}), dan sama seperti cardsFinishers di
+      // atas, tulisan TEACHER untuk MENGOSONGKAN seluruh map ini bisa saja ditolak Security Rules
+      // — jadi angka progres babak SEBELUMNYA (mis. kelompok itu sudah menemukan 8 dari 10
+      // pasangan) bisa nyangkut kebaca sebagai progres babak BARU (yang mungkin cuma 5 pasangan
+      // total), langsung ditampilkan sebagai "5/5 (100%)" walau kelompok itu belum menyentuh apa-
+      // apa di babak baru. cardsProgress TIDAK punya penanda roundId per kelompok (beda dari
+      // cardsFinishers yang berbentuk array-per-entri), jadi tidak bisa disaring langsung — di
+      // sini disiasati dengan menyimpan "baseline" (nilai apa adanya yang kebaca tepat saat
+      // cardsRoundId berganti, yang berarti KEMUNGKINAN BESAR itu sisa babak lama) lalu, selama
+      // babak ini berjalan, angka yang PERSIS SAMA dengan baseline-nya dianggap belum ada progres
+      // asli (ditampilkan 0) — begitu kelompok itu benar-benar mengetuk kartu di babak baru,
+      // angkanya pasti berubah dari baseline dan langsung tertampil apa adanya.
+      if (prevRoundIdRef.current === undefined) {
+        // Pemuatan pertama komponen ini (mount / refresh halaman) — percaya apa adanya, tidak
+        // ada dasar untuk menganggap datanya basi (ini progres BENERAN untuk babak yang sedang
+        // aktif saat ini, cuma kita belum sempat melihat momen babaknya dimulai).
+        prevRoundIdRef.current = rid;
+        setCardsProgress(data.cardsProgress || {});
+      } else if (prevRoundIdRef.current !== rid) {
+        // Betul-betul baru saja berpindah babak SELAGI halaman ini terbuka (goToBabak/startRound
+        // baru saja jalan) — inilah momen datanya MUNGKIN sisa babak lama yang gagal dikosongkan.
+        prevRoundIdRef.current = rid;
+        cardsProgressBaselineRef.current = data.cardsProgress || {};
+        setCardsProgress({});
+      } else {
+        const baseline = cardsProgressBaselineRef.current;
+        const raw = data.cardsProgress || {};
+        const filtered = {};
+        Object.keys(raw).forEach((g) => { if (raw[g] !== baseline[g]) filtered[g] = raw[g]; });
+        setCardsProgress(filtered);
+      }
       setCardsRoundEndsAt(data.cardsRoundEndsAt || null);
     });
     return () => unsub();
