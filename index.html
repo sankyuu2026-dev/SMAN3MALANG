@@ -380,7 +380,12 @@ function exportAllGamesBackup(uid) {
       const parsed = JSON.parse(raw);
       if (!parsed.dataByMateri) { skipped++; return; }
       games[appId] = appId === "card-rush"
-        ? { dataByMateri: parsed.dataByMateri, groupCount: parsed.groupCount }
+        // BUGFIX: cabang Card Rush di sini dulu tidak menyertakan selectedMateri sama sekali
+        // (beda dari Word Search & Mystery Box yang menyertakannya) — padahal Card Rush juga
+        // punya banyak tema seperti kedua game lain. Akibatnya, guru yang pindah perangkat lewat
+        // cadangan gabungan ini akan kehilangan "tema yang terakhir dipilih" khusus utuk Card
+        // Rush (materinya sendiri tetap aman, cuma tema aktifnya balik ke default).
+        ? { dataByMateri: parsed.dataByMateri, selectedMateri: parsed.selectedMateri, groupCount: parsed.groupCount }
         : { selectedMateri: parsed.selectedMateri, dataByMateri: parsed.dataByMateri };
     } catch (e) { console.error("Gagal ekspor cadangan gabungan:", appId, e); }
   });
@@ -514,7 +519,11 @@ async function saveCardRushSetupToCloud(uid, payload) {
   if (!uid) throw new Error("belum login");
   const { skeleton, images } = splitCardRushImages(payload.dataByMateri);
   const docRef = db.collection("users").doc(uid).collection("setupData").doc("cardRush");
-  await docRef.set({ dataByMateri: skeleton, selectedMateri: payload.selectedMateri, savedAt: Date.now() });
+  // BUGFIX: dulu payload.groupCount tidak ikut ditulis ke sini sama sekali — cuma tersimpan di
+  // localStorage browser itu sendiri. Guru yang mengganti perangkat/browser (mengandalkan cadangan
+  // cloud) atau localStorage-nya kebersihkan akan kehilangan pengaturan jumlah kelompoknya, balik
+  // ke default 6 lagi, walau tema & kartunya sendiri tetap tersimpan aman lewat cloud.
+  await docRef.set({ dataByMateri: skeleton, selectedMateri: payload.selectedMateri, groupCount: payload.groupCount, savedAt: Date.now() });
   // Ganti seluruh isi subcollection gambar dengan yang terbaru (hapus semua dulu, baru tulis ulang)
   // — supaya pasangan kartu yang sudah dihapus/diganti gambarnya tidak menyisakan dokumen basi
   // (jumlah pasangan kartu realistis cuma puluhan, jadi hapus-tulis-ulang setiap simpan masih murah).
@@ -2700,7 +2709,24 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
       const firstNonEmptyBabak = [1, 2, 3].find((id) => (dataByMateri[selectedMateri]?.[id] || []).some((w) => w.letters.trim())) || 1;
       setBabakId(firstNonEmptyBabak);
       resetRound(firstNonEmptyBabak);
+      // BUGFIX (kode room/QR "tidak ditemukan" padahal baru dibuat): dokumen room di Firestore
+      // dulu baru benar-benar ditulis lewat useEffect TERPISAH di bawah, yang baru React jadwalkan
+      // SETELAH re-render dengan stage="play" ini selesai — sedangkan kode room & tombol QR Join
+      // sudah langsung tampil & bisa diklik SAAT ITU JUGA begitu stage berubah, tanpa menunggu
+      // effect itu selesai menulis ke server. Siswa yang scan/ketik kode lebih cepat dari effect
+      // itu selesai (biasa terjadi di WiFi sekolah yang agak lambat) akan dapat "Room tidak
+      // ditemukan" walau baru saja dibuat guru. Sekarang dokumennya ditulis & DITUNGGU di sini
+      // dulu — pakai `uniqueCode` (bukan `roomCode` yang closure-nya masih nilai LAMA kalau tadi
+      // ternyata harus diganti karena tabrakan kode) — SEBELUM stage berpindah ke "play".
+      await db.collection("rooms").doc(uniqueCode).set({
+        mode: "tck", materi: selectedMateri, babakId: firstNonEmptyBabak, roundId: null,
+        buzzMode: "digital", buzzOrder: [], scores: {}, triedGroups: [], openToAll: false,
+        buzz: firebase.firestore.FieldValue.delete(),
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
       setStage("play");
+    } catch (e) {
+      alert("Gagal memulai sesi, coba lagi.");
     } finally {
       setStartingGame(false);
     }
@@ -2770,25 +2796,48 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
   }
 
   function resumeSession(item) {
+    if (startingGame) return;
+    setStartingGame(true);
     babakSnapshotsRef.current = {};
     setDataByMateri((prev) => ({ ...prev, [item.materi]: item.materiWordsSnapshot || { 1: [], 2: [], 3: [] } }));
     setSelectedMateri(item.materi);
-    setBabakId(item.babakId || 1);
-    setMode(item.mode || "digital");
+    const resumedBabakId = item.babakId || 1;
+    setBabakId(resumedBabakId);
+    const resumedMode = item.mode || "digital";
+    setMode(resumedMode);
     setAudioMode(item.audioMode || "guru");
     setTeksDurasiDetik(item.teksDurasiDetik || 3);
     if (item.pointByBabak) setPointByBabak((prev) => ({ ...prev, ...item.pointByBabak }));
-    setScores(item.scores || { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 });
-    setRoomCode(item.roomCode || makeRoomCode());
+    const resumedScores = item.scores || { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 };
+    setScores(resumedScores);
+    const resumedRoomCode = item.roomCode || makeRoomCode();
+    setRoomCode(resumedRoomCode);
     setQueue(item.queue || []);
     setFoundMap(unpackFoundMapFromSave(item.foundMap));
     setTriedSet(new Set(item.triedSet || []));
     setPuzzle(unpackPuzzleFromSave(item.puzzle));
     setClueRevealed(false); setActiveGroup(null); setSelStart(null); setBuzzOrder([]); setOpenToAll(false);
     activeGroupRef.current = null; buzzOrderRef.current = []; triedSetRef.current = new Set(); openToAllRef.current = false;
-    setHistoryOpen(false);
     setShowBackConfirm(false); // FIX: reset dialog konfirmasi jika sedang terbuka
-    setStage("play");
+    // BUGFIX (kode room/QR "tidak ditemukan" walau sesi baru saja dilanjutkan): sama seperti
+    // startGame() — dulu stage langsung berpindah ke "play" di sini, sementara dokumen room di
+    // Firestore baru benar-benar ditulis lewat useEffect terpisah setelahnya. Kode room & tombol
+    // QR Gabung sudah langsung tampil & bisa diklik begitu layar berubah, jadi ada jeda singkat di
+    // mana room-nya belum ada sama sekali di server — siswa yang scan di jeda itu dapat "Room
+    // tidak ditemukan" walau sesinya baru saja dilanjutkan guru. Sekarang dokumennya ditulis &
+    // ditunggu dulu di sini sebelum stage berpindah. Modal riwayat sengaja dibiarkan terbuka
+    // (bukan langsung ditutup) selama menunggu, supaya status "Menghubungkan…" di tombolnya
+    // benar-benar sempat terlihat guru, bukan langsung raib bareng modalnya.
+    db.collection("rooms").doc(resumedRoomCode).set({
+      mode: "tck", materi: item.materi, babakId: resumedBabakId, roundId: null, buzzMode: resumedMode,
+      buzzOrder: [], scores: resumedScores, triedGroups: [], openToAll: false,
+      buzz: firebase.firestore.FieldValue.delete(),
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true }).catch(() => { alert("Gagal terhubung ke room, tapi sesi tetap dilanjutkan — coba buka QR Gabung lagi sebentar lagi kalau siswa belum bisa join."); }).finally(() => {
+      setHistoryOpen(false);
+      setStage("play");
+      setStartingGame(false);
+    });
     // Sesi yang sudah dilanjutkan dianggap "dipakai" — dihapus dari daftar riwayat.
     // Kalau nanti dijeda lagi, akan tersimpan sebagai entri baru.
     historyCol.doc(item.id).delete().catch(() => {});
@@ -3872,7 +3921,7 @@ function TebakCariKataGame({ onBack, teacher, theme, setTheme }) {
                   <div style={{ fontWeight: 700, fontSize: 14, color: t.text }}>{it.className || "(tanpa nama)"}</div>
                   <div style={{ fontSize: 14, color: t.dim, marginTop: 2 }}>{it.materi} · Babak {it.babakId} · {formatSavedAt(it.savedAt)}</div>
                 </div>
-                <button onClick={() => resumeSession(it)} style={{ background: "#F4B740", border: "none", color: "#101B34", padding: "8px 12px", borderRadius: 8, cursor: "pointer", fontSize: 14, fontWeight: 700 }}>Lanjutkan</button>
+                <button onClick={() => resumeSession(it)} disabled={startingGame} style={{ background: "#F4B740", border: "none", color: "#101B34", padding: "8px 12px", borderRadius: 8, cursor: startingGame ? "default" : "pointer", opacity: startingGame ? 0.7 : 1, fontSize: 14, fontWeight: 700 }}>{startingGame ? "Menghubungkan…" : "Lanjutkan"}</button>
                 <button onClick={() => deleteHistoryItem(it.id)} title="Hapus sesi ini" className="row-del" style={{ background: "transparent", border: "none", color: t.faint, cursor: "pointer", padding: 8, borderRadius: 8 }}><span style={{ fontSize: 15, lineHeight: 1, color: 'inherit' }}>🗑</span></button>
               </div>
             ))}
@@ -5408,7 +5457,24 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
       // Sama seperti Word Search: pastikan roomCode belum dipakai kelas lain sebelum dipakai QR join.
       const uniqueCode = await ensureUniqueRoomCode(roomCode);
       if (uniqueCode !== roomCode) setRoomCode(uniqueCode);
+      // BUGFIX (QR/kode room "tidak ditemukan" padahal baru saja dibuat guru): dulu dokumen
+      // room di Firestore baru benar-benar ditulis lewat useEffect TERPISAH di bawah, yang baru
+      // React jadwalkan SETELAH re-render dengan stage="play" ini selesai — sedangkan tombol
+      // "🔗 QR Join" dan kode room sudah langsung tampil & bisa diklik SAAT ITU JUGA begitu
+      // stage berubah, tanpa menunggu effect itu selesai menulis ke server. Kalau ada siswa yang
+      // scan/ketik kode LEBIH CEPAT dari effect itu selesai (biasa terjadi di WiFi sekolah yang
+      // agak lambat, atau kalau guru buru-buru langsung pencet QR Join), dokumennya memang belum
+      // ada di Firestore sama sekali — siswa dapat "Room tidak ditemukan" walau baru saja dibuat.
+      // Sekarang dokumennya ditulis & DITUNGGU di sini dulu — pakai `uniqueCode` (bukan `roomCode`
+      // yang closure-nya masih nilai LAMA kalau tadi ternyata harus diganti karena tabrakan kode)
+      // — SEBELUM stage berpindah ke "play", supaya begitu layar Bermain & tombol QR Join
+      // tampil, room-nya sudah pasti ada di server dan siap di-scan kapan pun.
+      await db.collection("rooms").doc(uniqueCode).set({
+        mode: "cards", babakIdx: 0, groupCount, scores: {}, updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
       setScores({}); setBabakIdx(0); setStage("play");
+    } catch (e) {
+      alert("Gagal memulai sesi, coba lagi.");
     } finally {
       setStartingGame(false);
     }
@@ -5555,6 +5621,15 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
   }, [finishers, joinedGroups, cardsRoundId, scored, stage]);
 
   async function startRound() {
+    // BUGFIX (celah balapan antar tombol): tombol "Mulai Babak Ini" ini dulu cuma dijaga
+    // `disabled={publishing || totalGroups === 0}` — tidak ikut memeriksa `switchingBabak`.
+    // Dalam praktiknya tombol ini memang tidak akan TERLIHAT selagi goToBabak() masih berjalan
+    // (selama itu cardsRoundId lokal masih terisi babak lama, jadi yang tertampil masih panel
+    // hasil, bukan tombol ini) — tapi jaga-jaga tambahan ini langsung di dalam fungsinya sendiri
+    // (bukan cuma di `disabled` tombolnya) supaya SEKALIPUN ada celah waktu sangat singkat di
+    // mana keduanya sempat aktif bersamaan, cardPairs & cardsRoundId babak ini tidak sampai
+    // tertimpa/berebutan dengan tulisan goToBabak() untuk babak LAIN yang sedang berjalan.
+    if (switchingBabak) return;
     setPublishing(true);
     try {
       const col = db.collection("rooms").doc(roomCode).collection("cardPairs");
@@ -5648,7 +5723,13 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
   // nyangkut di tampilan yang membingungkan. `switchingBabak` menonaktifkan tombolnya sejenak
   // selagi menunggu, supaya tidak dobel-klik memicu dua perpindahan bersamaan.
   async function goToBabak(idx) {
-    if (idx === babakIdx || idx < 0 || idx >= babaks.length || switchingBabak) return;
+    // BUGFIX (celah balapan antar tombol): dulu cuma dijaga terhadap dobel-klik pil babak itu
+    // sendiri (`switchingBabak`). Kalau guru sempat klik "Mulai Babak Ini" (memicu startRound,
+    // `publishing=true`) LALU dengan sangat cepat klik pil babak lain sebelum startRound selesai,
+    // cardPairs yang baru saja ditulis startRound() untuk babak SEBELUMNYA bisa berebutan/tertimpa
+    // tidak konsisten dengan babakIdx/cardsRoundId yang ditulis goToBabak() untuk babak BARU —
+    // kartu yang tampil di HP siswa bisa jadi tidak cocok dengan babak yang sebenarnya aktif.
+    if (idx === babakIdx || idx < 0 || idx >= babaks.length || switchingBabak || publishing) return;
     if (cardsRoundId && !scored) {
       if (!window.confirm("Babak ini masih berjalan. Pindah babak sekarang akan menghentikannya tanpa menilai skor kelompok yang belum selesai. Lanjutkan?")) return;
     }
@@ -5921,11 +6002,11 @@ function CocokkanKartuGame({ onBack, theme, setTheme, teacher }) {
           {babaks.length > 1 && (
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
               {babaks.map((b, i) => (
-                <button key={b.id || i} onClick={() => goToBabak(i)} disabled={switchingBabak} title={`Pindah ke ${b.label || `Babak ${i + 1}`}`} style={{
+                <button key={b.id || i} onClick={() => goToBabak(i)} disabled={switchingBabak || publishing} title={`Pindah ke ${b.label || `Babak ${i + 1}`}`} style={{
                   background: i === babakIdx ? "#F4B740" : t.panel, color: i === babakIdx ? "#101B34" : t.dim,
                   border: i === babakIdx ? "none" : `1px solid ${t.border}`, borderRadius: 999, padding: "5px 13px",
-                  fontSize: 13, fontWeight: 700, cursor: (i === babakIdx || switchingBabak) ? "default" : "pointer",
-                  opacity: switchingBabak && i !== babakIdx ? 0.6 : 1,
+                  fontSize: 13, fontWeight: 700, cursor: (i === babakIdx || switchingBabak || publishing) ? "default" : "pointer",
+                  opacity: (switchingBabak || publishing) && i !== babakIdx ? 0.6 : 1,
                 }}>{b.label || `Babak ${i + 1}`}</button>
               ))}
             </div>
@@ -6408,14 +6489,20 @@ function SettingsModal({ open, onClose, t, teacher }) {
 }
 
 function App() {
-  const [activeGame, setActiveGame] = useState(() => {
-    try { return localStorage.getItem("app-active-game") || null; } catch (e) { return null; }
-  });
-  // Tema khusus halaman Pilih Game — terpisah dari tema masing-masing game (tiap game simpan
-  // preferensinya sendiri). Disimpan supaya pilihan guru diingat tiap kali buka halaman ini lagi.
-  const [pickerTheme, setPickerTheme] = useState(() => {
-    try { return localStorage.getItem("app-theme") || "light"; } catch (e) { return "light"; }
-  });
+  // BUGFIX (kebocoran preferensi antar-guru — luput dari perbaikan scopedKey() di atas): dulu
+  // "game terakhir dibuka" dan "tema halaman Pilih Game" ini TIDAK ikut memakai scopedKey(),
+  // padahal komentar di scopedKey()/migrateLegacyKey() di atas jelas-jelas menyebutkan semangat
+  // "satu komputer/laptop dipakai bergantian oleh beberapa guru (mis. komputer lab bahasa)".
+  // Akibatnya: Guru B yang login di komputer yang sama akan langsung "dilempar" masuk ke game
+  // yang terakhir dibuka Guru A (bukan ke halaman Pilih Game) dan memakai tema (gelap/terang)
+  // pilihan Guru A — bukan data yang bocor (kosakata dsb. tetap aman per akun berkat scopedKey),
+  // tapi preferensi tampilan & navigasi yang salah sasaran. Karena authUser belum diketahui saat
+  // komponen ini pertama kali dibuat (baru resolve async lewat onAuthStateChanged di bawah),
+  // kedua state ini SEKARANG mulai dari nilai aman default dulu (null / "light"), lalu baru
+  // dipulihkan ke pilihan MILIK guru yang sedang login lewat efek terpisah di bawah begitu
+  // authUser sudah pasti diketahui.
+  const [activeGame, setActiveGame] = useState(null);
+  const [pickerTheme, setPickerTheme] = useState("light");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [backupMsg, setBackupMsg] = useState(null);
   function handleExportAllGames() {
@@ -6440,21 +6527,48 @@ function App() {
       setTimeout(() => setBackupMsg(null), 6000);
     });
   }
-  useEffect(() => {
-    try { localStorage.setItem("app-theme", pickerTheme); } catch (e) {}
-  }, [pickerTheme]);
   // undefined = status login belum diketahui (baru buka web), null = sudah tahu tapi belum login
   const [authUser, setAuthUser] = useState(undefined);
   const [signingIn, setSigningIn] = useState(false);
   const [loginError, setLoginError] = useState("");
   const joinCode = getJoinCodeFromUrl();
-
+  // Begitu guru (bukan sesi anonim siswa) benar-benar diketahui, pulihkan tema & game terakhir
+  // MILIK guru itu sendiri — lihat BUGFIX di atas kenapa ini tidak bisa langsung dibaca saat
+  // useState() dibuat.
+  const [prefsLoaded, setPrefsLoaded] = useState(false);
   useEffect(() => {
+    // BUGFIX (residu dari perbaikan sebelumnya): kalau Guru A logout lalu Guru B langsung login
+    // di halaman yang SAMA (tanpa refresh), efek ini tadinya CUMA menerapkan nilai baru kalau ada
+    // yang tersimpan (`if (savedTheme) ...` / `if (savedGame) ...`) — kalau Guru B ternyata belum
+    // pernah punya preferensi tersimpan sama sekali, activeGame/pickerTheme di MEMORI React tetap
+    // membawa nilai peninggalan Guru A (localStorage-nya sendiri sudah benar terpisah, tapi state
+    // di memori belum ikut di-reset). Sekarang keduanya SELALU ditentukan ulang dari awal (default
+    // aman dulu, baru ditimpa kalau memang ada preferensi tersimpan MILIK guru yang baru itu) tiap
+    // kali authUser berganti — termasuk saat logout (authUser jadi null/anonim), supaya tidak ada
+    // sisa preferensi guru sebelumnya yang terbawa ke sesi berikutnya sama sekali.
+    setPrefsLoaded(false);
+    if (!authUser || authUser.isAnonymous) { setActiveGame(null); setPickerTheme("light"); return; }
+    let theme = "light";
+    let game = null;
     try {
-      if (activeGame) localStorage.setItem("app-active-game", activeGame);
-      else localStorage.removeItem("app-active-game");
+      theme = localStorage.getItem(migrateLegacyKey("app-theme", authUser.uid)) || "light";
+      game = localStorage.getItem(migrateLegacyKey("app-active-game", authUser.uid)) || null;
     } catch (e) {}
-  }, [activeGame]);
+    setPickerTheme(theme);
+    setActiveGame(game);
+    setPrefsLoaded(true);
+  }, [authUser]);
+  useEffect(() => {
+    if (!authUser || authUser.isAnonymous || !prefsLoaded) return;
+    try { localStorage.setItem(scopedKey("app-theme", authUser.uid), pickerTheme); } catch (e) {}
+  }, [pickerTheme, authUser, prefsLoaded]);
+  useEffect(() => {
+    if (!authUser || authUser.isAnonymous || !prefsLoaded) return;
+    try {
+      if (activeGame) localStorage.setItem(scopedKey("app-active-game", authUser.uid), activeGame);
+      else localStorage.removeItem(scopedKey("app-active-game", authUser.uid));
+    } catch (e) {}
+  }, [activeGame, authUser, prefsLoaded]);
 
   // Pantau status login. Untuk siswa (buka lewat ?join=...), sesi ANONIM dibuat otomatis di
   // background — tidak perlu tombol login. Untuk guru, sesi anonim TIDAK dianggap "sudah login":
