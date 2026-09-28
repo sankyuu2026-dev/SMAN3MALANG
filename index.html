@@ -6662,7 +6662,7 @@ function App() {
             <button onClick={() => { if (window.confirm("Keluar dari akun ini? Kamu perlu login lagi (mungkin dengan akun Google lain) untuk masuk kembali.")) signOutTeacher(); }} style={{ background: pt.panel, border: `1px solid ${pt.border}`, color: pt.dim, padding: "12px 16px", borderRadius: 10, cursor: "pointer", fontSize: 14.5, boxShadow: "0 2px 10px rgba(0,0,0,.06)" }}>Keluar</button>
           </div>
         </div>
-        <div style={{ fontSize: 15.5, color: pt.dim, marginBottom: 20, maxWidth: 680 }}>Web interaktif siswa SMA berisi 3 game & 14 tema Bahasa Jepang kelas XI &amp; XII — pilih salah satu permainan di bawah ini untuk mulai sesi.</div>
+        <div style={{ fontSize: 15.5, color: pt.dim, marginBottom: 20, maxWidth: 680 }}>SanKyuu berasal dari <b>san</b> (3) + <b>kyuu</b> (9) — 3 game &amp; 9 tema pembelajaran Bahasa Jepang untuk siswa SMA kelas XI. Pilih salah satu permainan di bawah ini untuk mulai sesi.</div>
         {backupMsg && (
           <div style={{ marginBottom: 24, maxWidth: 680, background: backupMsg.ok ? "rgba(63,191,173,.12)" : "rgba(239,91,91,.12)", border: `1px solid ${backupMsg.ok ? "#3FBFAD" : "#EF5B5B"}`, color: backupMsg.ok ? "#1B7A6E" : "#B33F3F", borderRadius: 10, padding: "12px 16px", fontSize: 14.5, fontWeight: 600 }}>
             {backupMsg.ok ? "✅" : "⚠️"} {backupMsg.text}
