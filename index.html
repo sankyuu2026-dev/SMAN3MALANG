@@ -1666,12 +1666,46 @@ function StudentJoinScreen({ roomCode }) {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
+    // BUGFIX (siswa terjebak di "Room tidak ditemukan" walau roomnya SEBENARNYA sudah ada): dulu
+    // listener ini dipasang SEKALI, dan kalau Firestore memanggil callback error-nya (mis. Security
+    // Rules menolak membaca dokumen room yang BELUM dibuat guru — yang gampang terjadi kalau siswa
+    // membuka link/QR sesaat sebelum roomnya selesai ditulis), Firestore MEMATIKAN listener itu
+    // selamanya. Kode lama cuma menampilkan "tidak ditemukan" dan tidak pernah memasangnya lagi,
+    // jadi walau guru beberapa detik kemudian selesai membuat room, layar siswa tetap macet sampai
+    // halaman di-refresh manual. Juga, snapshot "belum ada" langsung divonis "tidak ditemukan"
+    // padahal bisa jadi guru cuma belum selesai menulisnya. Sekarang: (1) listener dipasang ulang
+    // otomatis tiap 1,5 detik kalau mati karena error; (2) selama 8 detik pertama, "belum ada"
+    // ditampilkan sebagai "Menghubungkan…" (bukan vonis tidak ditemukan) — baru sesudah itu
+    // dinyatakan tidak ditemukan, tapi listener/percobaan ulang tetap jalan di belakang layar
+    // sehingga begitu roomnya benar-benar muncul, layar siswa langsung pulih sendiri.
     const ref = db.collection("rooms").doc(roomCode);
-    const unsub = ref.onSnapshot(
-      (snap) => setRoom(snap.exists ? snap.data() : null),
-      () => setRoom(null)
-    );
-    return () => unsub();
+    const GRACE_MS = 8000;
+    const startedAt = Date.now();
+    let unsub = null, retryTm = null, graceTm = null, cancelled = false, everLoaded = false;
+    const declareMissing = () => { if (!cancelled) setRoom((r) => (r === undefined || everLoaded ? null : r)); };
+    function subscribe() {
+      if (cancelled) return;
+      unsub = ref.onSnapshot(
+        (snap) => {
+          if (snap.exists) { everLoaded = true; clearTimeout(graceTm); setRoom(snap.data()); return; }
+          // Room yang SUDAH pernah terbuka lalu hilang = guru mengakhiri permainan → langsung tampilkan.
+          if (everLoaded) { setRoom(null); return; }
+          const left = GRACE_MS - (Date.now() - startedAt);
+          if (left <= 0) setRoom(null);
+          else { clearTimeout(graceTm); graceTm = setTimeout(declareMissing, left); }
+        },
+        () => {
+          try { if (unsub) unsub(); } catch (e) {}
+          const left = GRACE_MS - (Date.now() - startedAt);
+          if (left <= 0) setRoom((r) => (r === undefined || everLoaded ? null : r));
+          else { clearTimeout(graceTm); graceTm = setTimeout(declareMissing, left); }
+          clearTimeout(retryTm);
+          retryTm = setTimeout(subscribe, 1500); // listener yang error sudah mati — pasang yang baru
+        }
+      );
+    }
+    subscribe();
+    return () => { cancelled = true; clearTimeout(retryTm); clearTimeout(graceTm); try { if (unsub) unsub(); } catch (e) {} };
   }, [roomCode]);
 
   useEffect(() => {
@@ -1924,6 +1958,9 @@ function CardsPlayArea({ roomCode, room, myGroup }) {
   const [selected, setSelected] = useState(null); // { key, kind, pairId } atau null
   const [busy, setBusy] = useState(false);
   const [finishedSent, setFinishedSent] = useState(false);
+  // Dipakai efek pengiriman status "selesai" di bawah — lihat BUGFIX "transaksi gagal, status
+  // selesai tidak pernah terkirim" di sana.
+  const finishRetryRef = useRef(0);
   const [wrongKeys, setWrongKeys] = useState([]); // 2 key kartu yang baru saja terbukti tidak cocok, buat animasi shake
   const [confetti, setConfetti] = useState(null);
   const appliedRoundRef = useRef(null);
@@ -2006,6 +2043,7 @@ function CardsPlayArea({ roomCode, room, myGroup }) {
     setCards(deck);
     setSelected(null);
     setFinishedSent(false);
+    finishRetryRef.current = 0; // babak baru — reset jatah percobaan ulang pengiriman status selesai
     startAtRef.current = Date.now();
     saveCardsProgress(roomCode, myGroup, { roundId, cards: deck, finishedSent: false, startAt: startAtRef.current });
   }, [roundId, pairsLoaded, pairs, roomCode, myGroup]);
@@ -2117,7 +2155,26 @@ function CardsPlayArea({ roomCode, room, myGroup }) {
       // MENYARING entri yang beneran milik babak yang sedang aktif (lihat filter di onSnapshot
       // CocokkanKartuGame), tanpa pernah perlu mengosongkan array-nya sama sekali.
       tx.set(ref, { cardsFinishers: [...order, { group: myGroup, name, elapsedMs, roundId }] }, { merge: true });
-    })).catch(() => {});
+    })).catch((err) => {
+      // BUGFIX (kelompok terlihat "Selesai!" di HP-nya sendiri tapi tidak pernah muncul di layar
+      // guru — ditemukan lewat uji beberapa kelompok mengetuk kartu terakhir NYARIS bersamaan):
+      // `finishedSent` di atas sengaja diset true SEBELUM transaksi ini dimulai (supaya tidak
+      // terkirim dua kali kalau BERHASIL) — tapi transaksi Firestore sendiri punya batas percobaan
+      // ulang internal, dan kalau beberapa kelompok mengirim status selesai dalam waktu SANGAT
+      // berdekatan (gampang terjadi kalau semuanya mengejar jadi yang pertama), transaksinya bisa
+      // terus bertabrakan sampai melebihi batas itu dan GAGAL. Dulu kegagalan ini dibungkam total
+      // (`.catch(() => {})`) — karena `finishedSent` sudah kadung true, efek ini tidak akan pernah
+      // mencoba lagi SELAMANYA, padahal kelompoknya jelas-jelas sudah selesai. Karena penilaian
+      // otomatis di sisi guru menunggu SEMUA kelompok tercatat selesai (lihat CocokkanKartuGame),
+      // satu kelompok yang "hilang" begini bisa mengganjal skor SATU BABAK PENUH tidak pernah
+      // dihitung otomatis. Sekarang kalau gagal, dicoba ulang otomatis (jeda acak sebentar supaya
+      // tidak langsung bertabrakan lagi dengan kelompok lain), sampai maksimal 5 kali.
+      console.error("Gagal mengirim status selesai:", err);
+      if (finishRetryRef.current < 5) {
+        finishRetryRef.current += 1;
+        setTimeout(() => setFinishedSent(false), 300 + Math.random() * 500);
+      }
+    });
   }, [allMatched, finishedSent, roundId, roomCode, myGroup]);
 
   const wrap = { minHeight: "100vh", background: t.bg, color: t.text, fontFamily: "'Work Sans', system-ui, sans-serif", padding: 20, boxSizing: "border-box" };
@@ -2194,13 +2251,24 @@ function CardsPlayArea({ roomCode, room, myGroup }) {
   // buah yang dicontohkan) — bukan gambar kotak vs kata pil memanjang seperti sebelumnya.
   // State-nya dibedakan lewat cincin warna di tepi (kuning = dipilih, merah = baru terbukti
   // salah) dan efek redup + centang hijau begitu sudah cocok.
-  const CardTile = ({ c }) => {
+  // BUGFIX (kartu "dibongkar-pasang" tiap detik): dulu ini ditulis sebagai KOMPONEN yang
+  // didefinisikan DI DALAM CardsPlayArea (`const CardTile = ({ c }) => ...` lalu dipakai sebagai
+  // <CardTile />). Karena CardsPlayArea render ulang tiap detik (jam hitung mundur), tiap render
+  // menghasilkan "tipe komponen" CardTile yang BARU — React menganggapnya komponen berbeda lalu
+  // membuang seluruh tombol kartu & memasangnya ulang dari nol, sekali tiap detik. Efeknya
+  // animasi kartu (getar salah / kilau cocok) terus terulang dari awal, dan tombol yang sedang
+  // ditekan jari bisa terganti di tengah ketukan (di sebagian browser HP itu membuat ketukannya
+  // tidak tercatat). Sekarang ditulis sebagai fungsi biasa yang dipanggil langsung
+  // (`renderTile(c)`), jadi React memperlakukannya sebagai bagian biasa dari pohon induknya dan
+  // cuma memperbarui bagian yang benar-benar berubah — pola yang sama dengan renderGrid() di
+  // Word Search.
+  const renderTile = (c) => {
     const isSelected = selected && selected.key === c.key;
     const isWrong = wrongKeys.includes(c.key);
     const ring = isSelected ? "#F4B740" : isWrong ? "#EF5B5B" : "transparent";
     const isImage = c.kind === "image";
     return (
-      <button onClick={() => tapCard(c)} disabled={c.matched || busy} style={{
+      <button key={c.key} onClick={() => tapCard(c)} disabled={c.matched || busy} style={{
         position: "relative", width: "100%", height: "100%", padding: isImage ? 0 : 6, border: "none", cursor: c.matched || busy ? "default" : "pointer",
         borderRadius: 14, overflow: "hidden", boxSizing: "border-box",
         display: "flex", alignItems: "center", justifyContent: "center",
@@ -2270,7 +2338,7 @@ function CardsPlayArea({ roomCode, room, myGroup }) {
           gap: GAP, width: gridPixelW, height: gridPixelH, boxSizing: "border-box",
           opacity: timeUp ? 0.35 : 1, transition: "opacity .2s ease", pointerEvents: timeUp ? "none" : "auto",
         }}>
-          {cards.map((c) => <CardTile key={c.key} c={c} />)}
+          {cards.map((c) => renderTile(c))}
         </div>
         {timeUp && (
           <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
